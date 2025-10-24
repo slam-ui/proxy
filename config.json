@@ -1,0 +1,39 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "tun-in",
+      "type": "tun",
+      "settings": {
+        "name": "xray-tun",
+        "address": "10.0.0.1/24",
+        "mtu": 1500,
+        "autoRoute": true,
+        "strictRoute": true
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "type": "field",
+        "inboundTag": [
+          "tun-in"
+        ],
+        "outboundTag": "direct"
+      }
+    ]
+  },
+  "fakedns": {
+    "ipPool": "198.18.0.0/15",
+    "poolSize": 65535
+  }
+}
