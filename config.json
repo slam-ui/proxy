@@ -17,11 +17,11 @@
       "settings": {
         "vnext": [
           {
-            "address": "46.22.211.24",
-            "port": 29528,
+            "address": "YOUR_SERVER_ADDRESS",
+            "port": 0,
             "users": [
               {
-                "id": "5bbf74e6-38ce-46d6-9279-376320662d55",
+                "id": "YOUR_UUID",
                 "encryption": "none"
               }
             ]
@@ -33,9 +33,9 @@
         "security": "reality",
         "realitySettings": {
           "fingerprint": "chrome",
-          "serverName": "yahoo.com",
-          "publicKey": "o2O8x21jRV5jCayKz_9j1emxzZZRVQ4YaA64zPaVnQc",
-          "shortId": "cb",
+          "serverName": "YOUR_SNI",
+          "publicKey": "YOUR_PUBLIC_KEY",
+          "shortId": "YOUR_SHORT_ID",
           "spiderX": "/"
         }
       }
