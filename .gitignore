@@ -1,0 +1,114 @@
+# Go
+bin/
+obj/
+pkg/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go модули
+go.sum
+go.mod
+
+# Исходный код Go (оставляем, но игнорируем бинарники)
+# Не игнорируем .go файлы — они нужны!
+
+# XRay (скачиваем при сборке, не коммитим)
+xray
+xray.exe
+xray-linux*
+xray-macos*
+xray-windows*
+
+# Конфиги — коммитим только шаблоны, не рабочие
+config/*.json
+!config/template.json
+!config/example.json
+
+# Логи и временные файлы
+logs/
+tmp/
+*.log
+*.tmp
+*.pid
+
+# IDE / редакторы
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+out/
+release/
+
+# Tauri (если выберешь)
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/Cargo.toml
+src-tauri/tauri.conf.json
+src-tauri/tauri.macos.plist
+src-tauri/tauri.windows.conf
+src-tauri/tauri.linux.conf
+
+# Electron (если выберешь)
+node_modules/
+dist-electron/
+electron-builder.yml
+package-lock.json
+
+# Fyne (если выберешь)
+fyne-cross/
+fyne/
+.fyne/
+
+# Docker (если будешь использовать)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Git
+.gitignore
+.gitattributes
+.gitmodules
+
+# Тестовые данные
+test-data/
+testdata/
+
+# Системные файлы
+*.bak
+*.old
+*.orig
+*.rej
+*.patch
+
+# Windows
+*.lnk
+*.ico
+*.cur
+*.ani
+
+# macOS
+*.app
+*.dmg
+*.pkg
+*.mpkg
+
+# Linux
+*.deb
+*.rpm
+*.snap
+*.AppImage
+
+# Кэш и локальные настройки
+.cache/
+.local/
+.config/
