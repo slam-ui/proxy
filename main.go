@@ -6,57 +6,91 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
+
+	"golang.org/x/sys/windows/registry"
+)
+
+var (
+	wininet, _           = syscall.LoadLibrary("wininet.dll")
+	internetSetOption, _ = syscall.GetProcAddress(wininet, "InternetSetOptionW")
+	INTERNET_OPTION_SETTINGS_CHANGED = 39
+	INTERNET_OPTION_REFRESH          = 37
 )
 
 func main() {
-	fmt.Println("Запускаем приложение-обертку для Xray...")
+	fmt.Println("Включаем системный прокси...")
+	err := setSystemProxy("127.0.0.1:10807", "<local>")
+	if err != nil {
+		fmt.Println("Не удалось включить системный прокси:", err)
+	} else {
+		fmt.Println("Прокси-сервер системы включен: 127.0.0.1:10807")
+	}
 
-	// Указываем путь к исполняемому файлу Xray и файлу конфигурации.
-	// Они находятся в разных папках, как мы и настраивали.
+	defer disableSystemProxy()
+
+	fmt.Println("Запускаем приложение-обертку для Xray...")
 	xrayPath := "./xray_core/xray.exe"
 	configPath := "./config.json"
-
-	// Создаем команду для запуска Xray.
-	// Первый аргумент - это сама программа,
-	// второй - флаг "-c", который говорит Xray использовать файл конфигурации,
-	// третий - путь к этому файлу.
 	cmd := exec.Command(xrayPath, "-c", configPath)
-
-	// Перенаправляем стандартный вывод (логи) и ошибки из процесса Xray
-	// в консоль нашего Go-приложения. Так мы будем видеть все, что выводит Xray.
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Запускаем команду. Start() запускает процесс в фоне и не блокирует
-	// выполнение нашей программы.
-	err := cmd.Start()
+	err = cmd.Start()
 	if err != nil {
 		fmt.Println("Ошибка при запуске Xray:", err)
-		return // Если не удалось запустить, выходим из программы.
+		return
 	}
 
-	// Выводим информацию о запущенном процессе.
 	fmt.Printf("Xray запущен успешно с PID: %d\n", cmd.Process.Pid)
 	fmt.Println("Прокси работает. Нажмите Ctrl+C для остановки.")
 
-	// --- Блок для graceful shutdown (корректной остановки) ---
-	// Создаем канал, который будет ждать системных сигналов.
 	quit := make(chan os.Signal, 1)
-	// Мы будем "ловить" сигнал прерывания (Ctrl+C)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-
-	// Эта строка заблокирует выполнение программы до тех пор,
-	// пока в канал `quit` не придет сигнал.
 	<-quit
 
-	// Как только сигнал получен (нажали Ctrl+C), выполняем код ниже.
-	fmt.Println("\nПолучен сигнал остановки. Завершаем процесс Xray...")
+	fmt.Println("\nПолучен сигнал остановки. Отключаем системный прокси...")
+	disableSystemProxy()
 
-	// Отправляем сигнал завершения процессу Xray.
+	fmt.Println("Завершаем процесс Xray...")
 	err = cmd.Process.Kill()
 	if err != nil {
 		fmt.Println("Не удалось остановить процесс Xray:", err)
 	} else {
 		fmt.Println("Процесс Xray успешно остановлен.")
 	}
+}
+
+func setSystemProxy(proxyServer string, proxyOverride string) error {
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.WRITE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	key.SetStringValue("ProxyServer", proxyServer)
+	key.SetStringValue("ProxyOverride", proxyOverride)
+	key.SetDWordValue("ProxyEnable", 1)
+
+	notifyWindows()
+	return nil
+}
+
+func disableSystemProxy() error {
+	fmt.Println("Отключение прокси-сервера системы...")
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Internet Settings`, registry.WRITE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	key.SetDWordValue("ProxyEnable", 0)
+
+	notifyWindows()
+	fmt.Println("Системный прокси успешно отключен.")
+	return nil
+}
+
+func notifyWindows() {
+	syscall.SyscallN(internetSetOption, 0, uintptr(INTERNET_OPTION_SETTINGS_CHANGED), 0, 0)
+	syscall.SyscallN(internetSetOption, 0, uintptr(INTERNET_OPTION_REFRESH), 0, 0)
 }
