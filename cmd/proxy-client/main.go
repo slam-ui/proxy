@@ -5,12 +5,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
-
 	"proxyclient/internal/api"
 	"proxyclient/internal/config"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
+	"syscall"
 )
 
 const (
