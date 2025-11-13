@@ -20,7 +20,7 @@ config.runtime.json
 # Не игнорируем .go файлы — они нужны!
 
 # XRay (скачиваем при сборке, не коммитим)
-xray
+xray_core
 xray.exe
 xray-linux*
 xray-macos*
