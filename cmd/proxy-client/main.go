@@ -1,68 +1,133 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"syscall"
+	"time"
+
 	"proxyclient/internal/api"
 	"proxyclient/internal/config"
+	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
-	"syscall"
 )
 
 const (
-	templateFile = "config.template.json"
-	secretFile   = "secret.key"
-	runtimeFile  = "config.runtime.json"
+	templateFile     = "config.template.json"
+	secretFile       = "secret.key"
+	runtimeFile      = "config.runtime.json"
+	xrayExecutable   = "./xray_core/xray.exe"
+	apiListenAddress = ":8080"
+	shutdownTimeout  = 10 * time.Second
 )
 
 func main() {
-	// --- 1. Генерируем конфиг ---
-	fmt.Println("Генерируем конфигурацию...")
-	err := config.GenerateRuntimeConfig(templateFile, secretFile, runtimeFile)
-	if err != nil {
-		log.Fatalf("Ошибка при создании конфигурации: %v", err)
+	if err := run(); err != nil {
+		log.Fatalf("Приложение завершилось с ошибкой: %v", err)
 	}
-	fmt.Println("Конфигурация успешно сгенерирована.")
+}
 
-	// --- 2. Включаем системный прокси ---
-	fmt.Println("Включаем системный прокси...")
-	err = proxy.SetSystemProxy("127.0.0.1:10807", "<local>")
-	if err != nil {
-		fmt.Println("Не удалось включить системный прокси:", err)
+func run() error {
+	// Инициализируем логгер
+	appLogger := logger.New(logger.Config{
+		Level:  logger.InfoLevel,
+		Output: os.Stdout,
+	})
+
+	appLogger.Info("Запуск прокси-клиента...")
+
+	// 1. Генерируем конфигурацию
+	appLogger.Info("Генерация конфигурации...")
+	if err := config.GenerateRuntimeConfig(templateFile, secretFile, runtimeFile); err != nil {
+		return fmt.Errorf("не удалось сгенерировать конфигурацию: %w", err)
+	}
+	appLogger.Info("Конфигурация успешно сгенерирована")
+
+	// 2. Создаём прокси-менеджер
+	proxyManager := proxy.NewManager(appLogger)
+
+	// 3. Включаем системный прокси
+	appLogger.Info("Включение системного прокси...")
+	proxyConfig := proxy.Config{
+		Address:  "127.0.0.1:10807",
+		Override: "<local>",
+	}
+	if err := proxyManager.Enable(proxyConfig); err != nil {
+		appLogger.Warn("Не удалось включить системный прокси: %v", err)
 	} else {
-		fmt.Println("Прокси-сервер системы включен: 127.0.0.1:10807")
+		appLogger.Info("Системный прокси включён: %s", proxyConfig.Address)
 	}
 
-	// --- 3. Запускаем XRay ---
-	fmt.Println("Запускаем XRay...")
-	xrayManager, err := xray.NewManager("./xray_core/xray.exe", runtimeFile)
+	// 4. Запускаем XRay
+	appLogger.Info("Запуск XRay...")
+	xrayManager, err := xray.NewManager(xray.Config{
+		ExecutablePath: xrayExecutable,
+		ConfigPath:     runtimeFile,
+		Logger:         appLogger,
+	})
 	if err != nil {
-		log.Fatal(err)
+		_ = proxyManager.Disable()
+		return fmt.Errorf("не удалось запустить XRay: %w", err)
 	}
 
-	// --- 4. Запускаем HTTP API ---
-	apiServer := api.NewServer(xrayManager, runtimeFile)
+	// 5. Запускаем HTTP API
+	apiServer := api.NewServer(api.Config{
+		ListenAddress: apiListenAddress,
+		XRayManager:   xrayManager,
+		ProxyManager:  proxyManager,
+		ConfigPath:    runtimeFile,
+		Logger:        appLogger,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	apiErrChan := make(chan error, 1)
 	go func() {
-		if err := apiServer.Start(":8080"); err != nil {
-			log.Fatal("API сервер упал:", err)
+		appLogger.Info("Запуск API сервера на %s", apiListenAddress)
+		if startErr := apiServer.Start(ctx); startErr != nil {
+			apiErrChan <- fmt.Errorf("ошибка API сервера: %w", startErr)
 		}
 	}()
 
-	// --- 5. Ожидание сигнала завершения ---
+	// 6. Ожидание сигнала завершения
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
-	<-quit
 
-	fmt.Println("\nПолучен сигнал остановки. Отключаем системный прокси...")
-	proxy.DisableSystemProxy()
-
-	fmt.Println("Останавливаем XRay...")
-	if xrayManager != nil {
-		xrayManager.Stop()
+	select {
+	case <-quit:
+		appLogger.Info("Получен сигнал остановки")
+	case apiErr := <-apiErrChan:
+		appLogger.Error("API сервер упал: %v", apiErr)
 	}
 
-	fmt.Println("✅ Работа завершена.")
+	// 7. Graceful shutdown
+	appLogger.Info("Начало корректного завершения работы...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer shutdownCancel()
+
+	// Останавливаем API
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		appLogger.Error("Ошибка при остановке API сервера: %v", err)
+	}
+
+	// Останавливаем XRay
+	appLogger.Info("Остановка XRay...")
+	if err := xrayManager.Stop(); err != nil {
+		appLogger.Error("Ошибка при остановке XRay: %v", err)
+	}
+
+	// Отключаем системный прокси
+	appLogger.Info("Отключение системного прокси...")
+	if err := proxyManager.Disable(); err != nil {
+		appLogger.Error("Ошибка при отключении прокси: %v", err)
+	}
+
+	appLogger.Info("✅ Работа завершена")
+	return nil
 }
