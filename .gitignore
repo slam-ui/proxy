@@ -1,110 +1,73 @@
-# Go
-bin/
-obj/
-pkg/
+# Binaries
 *.exe
 *.dll
 *.so
 *.dylib
 *.test
+proxy-client
+proxy-client.exe
 
-# Go модули
-go.sum
-go.mod
-
-# Секретные данные и временные файлы конфигурации
-secret.key
-config.runtime.json
-
-# Исходный код Go (оставляем, но игнорируем бинарники)
-# Не игнорируем .go файлы — они нужны!
-
-# XRay (скачиваем при сборке, не коммитим)
-xray_core
-xray.exe
-xray-linux*
-xray-macos*
-xray-windows*
-
-# Конфиги — коммитим только шаблоны, не рабочие
-config/*.json
-!config/template.json
-!config/example.json
-
-# Логи и временные файлы
-logs/
-tmp/
-*.log
-*.tmp
-*.pid
-
-# IDE / редакторы
-.vscode/
-.idea/
-*.swp
-*.swo
-*.swn
-*.DS_Store
-Thumbs.db
-
-# Build artifacts
-dist/
+# Build directories
+bin/
 build/
+dist/
 out/
 release/
 
-# Tauri (если выберешь)
-src-tauri/target/
-src-tauri/Cargo.lock
-src-tauri/Cargo.toml
-src-tauri/tauri.conf.json
-src-tauri/tauri.macos.plist
-src-tauri/tauri.windows.conf
-src-tauri/tauri.linux.conf
+# Go workspace
+vendor/
 
-# Electron (если выберешь)
-node_modules/
-dist-electron/
-electron-builder.yml
-package-lock.json
+# Secrets and runtime configuration
+secret.key
+secret.key.example
+config.runtime.json
+*.log
+*.pid
 
-# Fyne (если выберешь)
-fyne-cross/
-fyne/
-.fyne/
+# XRay Core (download separately)
+xray_core/
+xray.exe
+xray-*
 
-# Docker (если будешь использовать)
-Dockerfile
-docker-compose.yml
-.dockerignore
-
-# Git
-.gitignore
-.gitattributes
-.gitmodules
-
-# Тестовые данные
-test-data/
-testdata/
-
-# Системные файлы
+# Temporary files
+tmp/
+logs/
+*.tmp
 *.bak
 *.old
 *.orig
 *.rej
 *.patch
 
+# IDE / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage.out
+coverage.html
+*.test
+testdata/
+
+# Documentation build
+docs/build/
+
+# Cache
+.cache/
+.local/
+
 # Windows
 *.lnk
-*.ico
-*.cur
-*.ani
+desktop.ini
 
 # macOS
 *.app
 *.dmg
-*.pkg
-*.mpkg
 
 # Linux
 *.deb
@@ -112,7 +75,6 @@ testdata/
 *.snap
 *.AppImage
 
-# Кэш и локальные настройки
-.cache/
-.local/
-.config/
+# Backup files
+*.backup
+*~

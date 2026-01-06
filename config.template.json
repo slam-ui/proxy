@@ -1,4 +1,3 @@
-
 {
   "log": {
     "loglevel": "warning"
@@ -46,10 +45,9 @@
     "rules": [
       {
         "type": "field",
-        "inboundTag": [ "http-in" ],
+        "inboundTag": ["http-in"],
         "outboundTag": "proxy-out"
       }
     ]
   }
 }
-
