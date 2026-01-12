@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"proxyclient/internal/logger"
@@ -93,7 +94,7 @@ func (m *manager) GetConfig() Config {
 
 // validateConfig проверяет конфигурацию
 func validateConfig(config Config) error {
-	if config.Address == "" {
+	if strings.TrimSpace(config.Address) == "" {
 		return fmt.Errorf("отсутствует адрес прокси")
 	}
 	return nil
