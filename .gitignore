@@ -21,6 +21,7 @@ vendor/
 secret.key
 secret.key.example
 config.runtime.json
+app_rules.json
 *.log
 *.pid
 

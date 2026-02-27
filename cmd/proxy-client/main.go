@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"proxyclient/internal/api"
+	"proxyclient/internal/apprules"
 	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
 )
@@ -20,6 +22,7 @@ const (
 	templateFile     = "config.template.json"
 	secretFile       = "secret.key"
 	runtimeFile      = "config.runtime.json"
+	appRulesFile     = "app_rules.json"
 	xrayExecutable   = "./xray_core/xray.exe"
 	apiListenAddress = ":8080"
 	shutdownTimeout  = 10 * time.Second
@@ -73,8 +76,43 @@ func run() error {
 		_ = proxyManager.Disable()
 		return fmt.Errorf("не удалось запустить XRay: %w", err)
 	}
+	appLogger.Info("XRay запущен успешно")
 
-	// 5. Запускаем HTTP API
+	// 5. Initialize per-app proxy components
+	appLogger.Info("Инициализация per-app proxy...")
+
+	// Create rules storage
+	storage := apprules.NewFileStorage(appRulesFile)
+
+	// Create persistent rules engine
+	rulesEngine, err := apprules.NewPersistentEngine(storage)
+	if err != nil {
+		appLogger.Warn("Failed to initialize rules engine: %v", err)
+		rulesEngine = nil // Continue without per-app proxy
+	} else {
+		rules := rulesEngine.ListRules()
+		appLogger.Info("Rules engine initialized with %d rules", len(rules))
+	}
+
+	var processMonitor process.Monitor
+	var processLauncher process.Launcher
+
+	if rulesEngine != nil {
+		// Create process monitor
+		processMonitor = process.NewMonitor(appLogger)
+		if err := processMonitor.Start(); err != nil {
+			appLogger.Warn("Failed to start process monitor: %v", err)
+		} else {
+			appLogger.Info("Process monitor started")
+		}
+
+		// Create process launcher
+		processLauncher = process.NewLauncher(appLogger, rulesEngine)
+
+		appLogger.Info("Per-app proxy initialized successfully")
+	}
+
+	// 6. Запускаем HTTP API
 	apiServer := api.NewServer(api.Config{
 		ListenAddress: apiListenAddress,
 		XRayManager:   xrayManager,
@@ -83,18 +121,31 @@ func run() error {
 		Logger:        appLogger,
 	})
 
+	// Setup per-app proxy routes if available
+	if rulesEngine != nil && processMonitor != nil && processLauncher != nil {
+		apiServer.SetupAppProxyRoutes(rulesEngine, processMonitor, processLauncher)
+		appLogger.Info("Per-app proxy API routes registered")
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	apiErrChan := make(chan error, 1)
 	go func() {
-		appLogger.Info("Запуск API сервера на %s", apiListenAddress)
+		appLogger.Info("API сервер запущен на %s", apiListenAddress)
 		if startErr := apiServer.Start(ctx); startErr != nil {
 			apiErrChan <- fmt.Errorf("ошибка API сервера: %w", startErr)
 		}
 	}()
 
-	// 6. Ожидание сигнала завершения
+	appLogger.Info("")
+	appLogger.Info("Прокси-клиент готов к работе")
+	appLogger.Info("API: http://localhost%s", apiListenAddress)
+	appLogger.Info("Status: http://localhost%s/api/status", apiListenAddress)
+	appLogger.Info("Per-App: http://localhost%s/api/apps/rules", apiListenAddress)
+	appLogger.Info("")
+
+	// 7. Ожидание сигнала завершения
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
@@ -105,7 +156,7 @@ func run() error {
 		appLogger.Error("API сервер упал: %v", apiErr)
 	}
 
-	// 7. Graceful shutdown
+	// 8. Graceful shutdown
 	appLogger.Info("Начало корректного завершения работы...")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -114,6 +165,13 @@ func run() error {
 	// Останавливаем API
 	if err := apiServer.Shutdown(shutdownCtx); err != nil {
 		appLogger.Error("Ошибка при остановке API сервера: %v", err)
+	}
+
+	// Останавливаем process monitor
+	if processMonitor != nil {
+		if err := processMonitor.Stop(); err != nil {
+			appLogger.Error("Ошибка при остановке process monitor: %v", err)
+		}
 	}
 
 	// Останавливаем XRay
@@ -128,6 +186,7 @@ func run() error {
 		appLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
 
-	appLogger.Info("✅ Работа завершена")
+	appLogger.Info("Работа завершена корректно")
+
 	return nil
 }

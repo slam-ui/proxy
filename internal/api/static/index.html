@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy Control</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg: #0c0c12;
+    --surface: #13131e;
+    --border: #1f1f30;
+    --on: #00e676;
+    --off: #ff3d57;
+    --pending: #ffb300;
+    --text: #dde0f0;
+    --muted: #4a4a6a;
+    --glow-on: 0 0 40px rgba(0,230,118,0.25), 0 0 80px rgba(0,230,118,0.1);
+    --glow-off: 0 0 40px rgba(255,61,87,0.2);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Syne', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Фоновая сетка */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+    background-size: 36px 36px;
+    pointer-events: none;
+  }
+
+  /* Фоновое свечение */
+  .bg-glow {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    transition: all 1s ease;
+  }
+  .bg-glow.state-on {
+    background:
+      radial-gradient(ellipse 50% 60% at 50% 50%, rgba(0,230,118,0.05) 0%, transparent 70%);
+  }
+  .bg-glow.state-off {
+    background:
+      radial-gradient(ellipse 50% 60% at 50% 50%, rgba(255,61,87,0.04) 0%, transparent 70%);
+  }
+
+  /* Карточка */
+  .card {
+    position: relative;
+    width: 380px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 44px 40px 40px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+  }
+
+  /* Верхний тег */
+  .tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 36px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .tag::before {
+    content: '';
+    display: block;
+    width: 16px;
+    height: 1px;
+    background: var(--border);
+  }
+  .tag::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Центральный блок статуса */
+  .status-block {
+    text-align: center;
+    margin-bottom: 40px;
+  }
+
+  /* Большая кнопка-переключатель */
+  .toggle-ring {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 28px;
+    cursor: pointer;
+  }
+
+  .toggle-ring svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+  }
+
+  .ring-bg {
+    fill: none;
+    stroke: var(--border);
+    stroke-width: 3;
+  }
+
+  .ring-fill {
+    fill: none;
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-dasharray: 307;
+    stroke-dashoffset: 307;
+    transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1),
+                stroke 0.4s ease;
+  }
+
+  .ring-fill.state-on {
+    stroke: var(--on);
+    stroke-dashoffset: 0;
+  }
+
+  .ring-fill.state-off {
+    stroke: var(--off);
+    stroke-dashoffset: 77; /* 25% пустого */
+  }
+
+  .ring-fill.state-pending {
+    stroke: var(--pending);
+    animation: spin-fill 1s linear infinite;
+  }
+
+  @keyframes spin-fill {
+    0% { stroke-dashoffset: 230; }
+    100% { stroke-dashoffset: -77; }
+  }
+
+  /* Кнопка внутри кольца */
+  .toggle-btn {
+    position: absolute;
+    inset: 12px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    outline: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .toggle-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.04);
+    transform: scale(1.04);
+  }
+
+  .toggle-btn:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  .toggle-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  /* Иконка питания */
+  .power-icon {
+    width: 32px;
+    height: 32px;
+    transition: all 0.4s ease;
+  }
+
+  .power-icon.state-on { color: var(--on); filter: drop-shadow(0 0 8px var(--on)); }
+  .power-icon.state-off { color: var(--off); filter: drop-shadow(0 0 6px var(--off)); }
+  .power-icon.state-pending { color: var(--pending); animation: spin 1s linear infinite; }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  /* Текст статуса */
+  .status-label {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    transition: color 0.4s ease;
+    margin-bottom: 6px;
+  }
+  .status-label.state-on { color: var(--on); }
+  .status-label.state-off { color: var(--off); }
+  .status-label.state-pending { color: var(--pending); }
+
+  .status-hint {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* Разделитель */
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin-bottom: 24px;
+  }
+
+  /* Мета-информация */
+  .meta-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+
+  .meta-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .meta-key {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .meta-val {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  .meta-val.highlight {
+    color: var(--on);
+  }
+
+  .meta-val .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  /* Кнопки действий */
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .btn {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    background: transparent;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    outline: none;
+  }
+
+  .btn:hover:not(:disabled) {
+    border-color: rgba(255,255,255,0.15);
+    color: var(--text);
+    background: rgba(255,255,255,0.03);
+  }
+
+  .btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .btn.btn-on:hover:not(:disabled) {
+    border-color: var(--on);
+    color: var(--on);
+  }
+
+  .btn.btn-off:hover:not(:disabled) {
+    border-color: var(--off);
+    color: var(--off);
+  }
+
+  /* Уведомление */
+  .toast {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 12px 20px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+    opacity: 0;
+    transition: all 0.3s ease;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 100;
+  }
+
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  .toast.error { border-color: var(--off); color: var(--off); }
+  .toast.success { border-color: var(--on); color: var(--on); }
+
+  /* Индикатор соединения */
+  .conn-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--muted), transparent);
+    background-size: 200% 100%;
+    animation: shimmer 2s infinite;
+  }
+
+  .conn-bar.connected { background: var(--on); animation: none; }
+  .conn-bar.disconnected { background: var(--off); animation: none; }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-glow" id="bgGlow"></div>
+
+<div class="card">
+  <div class="conn-bar" id="connBar"></div>
+
+  <div class="tag">proxy control panel</div>
+
+  <!-- Главная кнопка -->
+  <div class="status-block">
+    <div class="toggle-ring" id="toggleRing" onclick="toggleProxy()">
+      <svg viewBox="0 0 100 100">
+        <circle class="ring-bg" cx="50" cy="50" r="48.5"/>
+        <circle class="ring-fill" id="ringFill" cx="50" cy="50" r="48.5"/>
+      </svg>
+      <button class="toggle-btn" id="toggleBtn" aria-label="Переключить прокси">
+        <!-- Power icon -->
+        <svg class="power-icon state-off" id="powerIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+          <line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="status-label state-off" id="statusLabel">ОТКЛЮЧЁН</div>
+    <div class="status-hint" id="statusHint">нажмите для включения</div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Мета-данные -->
+  <div class="meta-list">
+    <div class="meta-row">
+      <span class="meta-key">адрес</span>
+      <span class="meta-val" id="metaAddress">—</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-key">xray</span>
+      <span class="meta-val" id="metaXray">—</span>
+    </div>
+    <div class="meta-row">
+      <span class="meta-key">pid</span>
+      <span class="meta-val" id="metaPid">—</span>
+    </div>
+  </div>
+
+  <!-- Кнопки -->
+  <div class="actions">
+    <button class="btn btn-on" id="btnEnable" onclick="enableProxy()">Включить</button>
+    <button class="btn btn-off" id="btnDisable" onclick="disableProxy()">Отключить</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // ─── Конфигурация ───────────────────────────────────────────────────
+  const API_BASE = 'http://localhost:8080/api';
+  const POLL_INTERVAL = 3000; // Опрос статуса каждые 3 сек
+
+  // ─── Состояние ──────────────────────────────────────────────────────
+  let state = {
+    proxyEnabled: false,
+    xrayRunning: false,
+    pid: 0,
+    address: '',
+    pending: false,
+    connected: false,
+  };
+
+  // ─── DOM элементы ───────────────────────────────────────────────────
+  const bgGlow    = document.getElementById('bgGlow');
+  const connBar   = document.getElementById('connBar');
+  const ringFill  = document.getElementById('ringFill');
+  const toggleBtn = document.getElementById('toggleBtn');
+  const powerIcon = document.getElementById('powerIcon');
+  const statusLabel = document.getElementById('statusLabel');
+  const statusHint  = document.getElementById('statusHint');
+  const metaAddress = document.getElementById('metaAddress');
+  const metaXray    = document.getElementById('metaXray');
+  const metaPid     = document.getElementById('metaPid');
+  const btnEnable   = document.getElementById('btnEnable');
+  const btnDisable  = document.getElementById('btnDisable');
+  const toast       = document.getElementById('toast');
+
+  // ─── Обновление UI ──────────────────────────────────────────────────
+  function render() {
+    const s = state.pending ? 'pending' : (state.proxyEnabled ? 'on' : 'off');
+
+    // Фон
+    bgGlow.className = `bg-glow state-${state.proxyEnabled ? 'on' : 'off'}`;
+
+    // Полоска соединения
+    if (!state.connected) {
+      connBar.className = 'conn-bar';
+    } else {
+      connBar.className = `conn-bar connected`;
+    }
+
+    // Кольцо и иконка
+    ringFill.className = `ring-fill state-${s}`;
+    powerIcon.className = `power-icon state-${s}`;
+
+    // Лейбл
+    statusLabel.className = `status-label state-${s}`;
+    if (state.pending) {
+      statusLabel.textContent = 'ОЖИДАНИЕ...';
+      statusHint.textContent = 'выполняется операция';
+    } else if (state.proxyEnabled) {
+      statusLabel.textContent = 'ВКЛЮЧЁН';
+      statusHint.textContent = 'нажмите для отключения';
+    } else {
+      statusLabel.textContent = 'ОТКЛЮЧЁН';
+      statusHint.textContent = 'нажмите для включения';
+    }
+
+    // Мета
+    metaAddress.textContent = state.address || '—';
+    metaAddress.className = state.proxyEnabled ? 'meta-val highlight' : 'meta-val';
+
+    metaXray.innerHTML = state.xrayRunning
+      ? '<span class="dot" style="color:var(--on)"></span>running'
+      : '<span class="dot" style="color:var(--off)"></span>stopped';
+
+    metaPid.textContent = state.pid > 0 ? state.pid : '—';
+
+    // Кнопки
+    const busy = state.pending;
+    toggleBtn.disabled = busy || !state.connected;
+    btnEnable.disabled  = busy || state.proxyEnabled || !state.connected;
+    btnDisable.disabled = busy || !state.proxyEnabled || !state.connected;
+  }
+
+  // ─── Toast уведомления ──────────────────────────────────────────────
+  let toastTimer = null;
+  function showToast(text, type = '') {
+    clearTimeout(toastTimer);
+    toast.textContent = text;
+    toast.className = `toast ${type} show`;
+    toastTimer = setTimeout(() => { toast.className = 'toast'; }, 2500);
+  }
+
+  // ─── API вызовы ─────────────────────────────────────────────────────
+  async function fetchStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/status`, { signal: AbortSignal.timeout(4000) });
+      const data = await res.json();
+
+      state.connected = true;
+      state.proxyEnabled = data.proxy?.enabled ?? false;
+      state.xrayRunning  = data.xray?.running ?? false;
+      state.pid          = data.xray?.pid ?? 0;
+      state.address      = data.proxy?.address ?? '';
+
+      connBar.className = 'conn-bar connected';
+    } catch {
+      state.connected = false;
+      connBar.className = 'conn-bar disconnected';
+    }
+    render();
+  }
+
+  async function apiPost(endpoint) {
+    state.pending = true;
+    render();
+    try {
+      const res = await fetch(`${API_BASE}${endpoint}`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(6000),
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showToast(data.error || 'Ошибка', 'error');
+      } else {
+        showToast(data.message || 'Готово', 'success');
+      }
+    } catch {
+      showToast('Нет соединения с сервером', 'error');
+    } finally {
+      state.pending = false;
+      await fetchStatus();
+    }
+  }
+
+  // ─── Действия ───────────────────────────────────────────────────────
+  function toggleProxy() {
+    if (state.pending || !state.connected) return;
+    apiPost('/proxy/toggle');
+  }
+
+  function enableProxy() {
+    if (state.pending || state.proxyEnabled || !state.connected) return;
+    apiPost('/proxy/enable');
+  }
+
+  function disableProxy() {
+    if (state.pending || !state.proxyEnabled || !state.connected) return;
+    apiPost('/proxy/disable');
+  }
+
+  // ─── Запуск ─────────────────────────────────────────────────────────
+  fetchStatus();
+  setInterval(fetchStatus, POLL_INTERVAL);
+</script>
+</body>
+</html>
