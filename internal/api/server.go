@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
@@ -17,11 +18,17 @@ import (
 
 // Config конфигурация API сервера
 type Config struct {
-	ListenAddress string
-	XRayManager   xray.Manager
-	ProxyManager  proxy.Manager
-	ConfigPath    string
-	Logger        logger.Logger
+	ListenAddress  string
+	XRayManager    xray.Manager
+	ProxyManager   proxy.Manager
+	ConfigPath     string
+	Logger         logger.Logger
+	TunConfig      *config.TunConfig
+	TunConfigPath  string
+	TemplatePath   string
+	SecretPath     string
+	RuntimePath    string
+	XRayExecutable string
 }
 
 // Server HTTP API сервер
@@ -83,6 +90,9 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/proxy/disable", s.handleProxyDisable).Methods("POST", "OPTIONS")
 	api.HandleFunc("/proxy/toggle", s.handleProxyToggle).Methods("POST", "OPTIONS")
 	api.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
+
+	// TUN process routing
+	s.setupTunRoutes()
 
 	// Встроенный фронтенд (embed) — всегда доступен на /
 	s.router.PathPrefix("/").Handler(staticHandler())

@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "process_rules": [
+    {
+      "process_name": "firefox.exe",
+      "action": "proxy"
+    },
+    {
+      "process_name": "chrome.exe",
+      "action": "direct"
+    }
+  ]
+}
