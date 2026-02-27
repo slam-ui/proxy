@@ -53,6 +53,7 @@ type ErrorResponse struct {
 // MessageResponse простой ответ с сообщением
 type MessageResponse struct {
 	Message string `json:"message"`
+	Success bool   `json:"success"`
 }
 
 // NewServer создаёт новый API сервер
@@ -70,16 +71,21 @@ func NewServer(cfg Config) *Server {
 
 // setupRoutes настраивает маршруты
 func (s *Server) setupRoutes() {
-	// Middleware для логирования
+	// Middleware
+	s.router.Use(s.corsMiddleware)
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.recoveryMiddleware)
 
 	// API endpoints
 	api := s.router.PathPrefix("/api").Subrouter()
-	api.HandleFunc("/status", s.handleStatus).Methods("GET")
-	api.HandleFunc("/proxy/enable", s.handleProxyEnable).Methods("POST")
-	api.HandleFunc("/proxy/disable", s.handleProxyDisable).Methods("POST")
-	api.HandleFunc("/health", s.handleHealth).Methods("GET")
+	api.HandleFunc("/status", s.handleStatus).Methods("GET", "OPTIONS")
+	api.HandleFunc("/proxy/enable", s.handleProxyEnable).Methods("POST", "OPTIONS")
+	api.HandleFunc("/proxy/disable", s.handleProxyDisable).Methods("POST", "OPTIONS")
+	api.HandleFunc("/proxy/toggle", s.handleProxyToggle).Methods("POST", "OPTIONS")
+	api.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
+
+	// Встроенный фронтенд (embed) — всегда доступен на /
+	s.router.PathPrefix("/").Handler(staticHandler())
 }
 
 // Start запускает HTTP сервер
@@ -160,6 +166,7 @@ func (s *Server) handleProxyEnable(w http.ResponseWriter, _ *http.Request) {
 
 	s.respondJSON(w, http.StatusOK, MessageResponse{
 		Message: "Прокси успешно включен",
+		Success: true,
 	})
 }
 
@@ -178,6 +185,38 @@ func (s *Server) handleProxyDisable(w http.ResponseWriter, _ *http.Request) {
 
 	s.respondJSON(w, http.StatusOK, MessageResponse{
 		Message: "Прокси успешно отключен",
+		Success: true,
+	})
+}
+
+// handleProxyToggle обрабатывает POST /api/proxy/toggle — включает/отключает одной кнопкой
+func (s *Server) handleProxyToggle(w http.ResponseWriter, _ *http.Request) {
+	if s.config.ProxyManager.IsEnabled() {
+		if err := s.config.ProxyManager.Disable(); err != nil {
+			s.logger.Error("Не удалось отключить прокси: %v", err)
+			s.respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.respondJSON(w, http.StatusOK, MessageResponse{
+			Message: "Прокси отключен",
+			Success: true,
+		})
+		return
+	}
+
+	proxyConfig := proxy.Config{
+		Address:  "127.0.0.1:10807",
+		Override: "<local>",
+	}
+	if err := s.config.ProxyManager.Enable(proxyConfig); err != nil {
+		s.logger.Error("Не удалось включить прокси: %v", err)
+		s.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.respondJSON(w, http.StatusOK, MessageResponse{
+		Message: "Прокси включен",
+		Success: true,
 	})
 }
 
@@ -203,14 +242,29 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 	s.respondJSON(w, status, ErrorResponse{Error: message})
 }
 
+// corsMiddleware добавляет CORS заголовки для работы с любым фронтендом
+func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		// Preflight OPTIONS запрос — сразу возвращаем 204
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // loggingMiddleware логирует HTTP запросы
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Создаём ResponseWriter для захвата статус кода
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
-
 		next.ServeHTTP(rw, r)
 
 		duration := time.Since(start)
