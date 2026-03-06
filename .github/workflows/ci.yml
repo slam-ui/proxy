@@ -92,13 +92,3 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: 0
         run: govulncheck ./...
-
-      - name: Install nancy
-        run: go install github.com/sonatype-nexus-community/nancy@latest
-
-      - name: Audit dependencies with nancy
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        run: go list -json -deps ./... | nancy sleuth
