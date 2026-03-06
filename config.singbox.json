@@ -33,7 +33,7 @@
       "tag": "tun-in",
       "sniff": true,
       "sniff_override_destination": true,
-      "interface_name": "tun3",
+      "interface_name": "tun1",
       "address": [
         "172.20.0.1/30"
       ],
@@ -89,11 +89,6 @@
       {
         "outbound": "proxy-out",
         "rule_set": [
-          "geosite-youtube",
-          "geosite-spotify",
-          "geosite-reddit",
-          "geosite-tiktok",
-          "geosite-instagram",
           "geosite-discord",
           "geosite-youtube",
           "geosite-spotify",
@@ -104,6 +99,12 @@
       }
     ],
     "rule_set": [
+      {
+        "type": "local",
+        "tag": "geosite-discord",
+        "format": "binary",
+        "path": "geosite-discord.bin"
+      },
       {
         "type": "local",
         "tag": "geosite-youtube",
@@ -133,12 +134,6 @@
         "tag": "geosite-instagram",
         "format": "binary",
         "path": "geosite-instagram.bin"
-      },
-      {
-        "type": "local",
-        "tag": "geosite-discord",
-        "format": "binary",
-        "path": "geosite-discord.bin"
       }
     ],
     "final": "direct",
