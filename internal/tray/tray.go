@@ -18,7 +18,6 @@ var (
 	mDisable *systray.MenuItem
 	mQuit    *systray.MenuItem
 	cb       Callbacks
-	isOn     bool
 )
 
 // Run запускает системный трей. Блокирует текущий поток (должен вызываться из main).
