@@ -28,7 +28,7 @@ func Run(callbacks Callbacks) {
 
 // SetEnabled меняет иконку и состояние пунктов меню
 func SetEnabled(enabled bool) {
-	isOn = enabled
+
 	if enabled {
 		systray.SetIcon(iconOn())
 		systray.SetTooltip("Proxy — включён")
