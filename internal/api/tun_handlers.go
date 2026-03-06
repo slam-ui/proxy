@@ -2,212 +2,252 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/xray"
-
-	"github.com/gorilla/mux"
 )
 
-// setupTunRoutes регистрирует маршруты для TUN правил
-func (s *Server) setupTunRoutes() {
-	s.router.HandleFunc("/api/tun/rules", s.handleTunListRules).Methods("GET", "OPTIONS")
-	s.router.HandleFunc("/api/tun/rules", s.handleTunAddRule).Methods("POST", "OPTIONS")
-	s.router.HandleFunc("/api/tun/rules/{index}", s.handleTunDeleteRule).Methods("DELETE", "OPTIONS")
-	s.router.HandleFunc("/api/tun/status", s.handleTunStatus).Methods("GET", "OPTIONS")
-	s.router.HandleFunc("/api/tun/enable", s.handleTunEnable).Methods("POST", "OPTIONS")
-	s.router.HandleFunc("/api/tun/disable", s.handleTunDisable).Methods("POST", "OPTIONS")
-	s.router.HandleFunc("/api/tun/apply", s.handleTunApply).Methods("POST", "OPTIONS")
+const routingConfigPath = "routing.json"
+const singboxConfigPath = "config.singbox.json"
+
+// TunHandlers обработчики маршрутизации
+type TunHandlers struct {
+	server     *Server
+	xrayConfig xray.Config
+	mu         sync.RWMutex
+	routing    *config.RoutingConfig
 }
 
-// TunStatusResponse статус TUN режима
-type TunStatusResponse struct {
-	Enabled      bool                 `json:"enabled"`
-	RulesCount   int                  `json:"rules_count"`
-	ProcessRules []config.ProcessRule `json:"process_rules"`
-}
-
-// AddProcessRuleRequest запрос на добавление правила
-type AddProcessRuleRequest struct {
-	ProcessName string               `json:"process_name"`
-	Action      config.ProcessAction `json:"action"`
-}
-
-// handleTunStatus GET /api/tun/status
-func (s *Server) handleTunStatus(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config.TunConfig
-	if cfg == nil {
-		cfg = &config.TunConfig{Enabled: false}
+// SetupTunRoutes регистрирует маршруты
+func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
+	routing, err := config.LoadRoutingConfig(routingConfigPath)
+	if err != nil {
+		s.logger.Warn("Не удалось загрузить routing config: %v", err)
+		routing = config.DefaultRoutingConfig()
 	}
-	s.respondJSON(w, http.StatusOK, TunStatusResponse{
-		Enabled:      cfg.Enabled,
-		RulesCount:   len(cfg.ProcessRules),
-		ProcessRules: cfg.ProcessRules,
-	})
+
+	h := &TunHandlers{
+		server:     s,
+		xrayConfig: xrayCfg,
+		routing:    routing,
+	}
+
+	s.router.HandleFunc("/api/tun/rules", h.handleListRules).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/tun/rules", h.handleAddRule).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/tun/rules/{value}", h.handleDeleteRule).Methods("DELETE", "OPTIONS")
+	s.router.HandleFunc("/api/tun/default", h.handleSetDefault).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/tun/apply", h.handleApply).Methods("POST", "OPTIONS")
+
+	return h
 }
 
-// handleTunListRules GET /api/tun/rules
-func (s *Server) handleTunListRules(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config.TunConfig
-	if cfg == nil {
-		s.respondJSON(w, http.StatusOK, map[string]interface{}{
-			"rules":   []config.ProcessRule{},
-			"enabled": false,
-		})
-		return
-	}
-	rules := cfg.ProcessRules
-	if rules == nil {
-		rules = []config.ProcessRule{}
-	}
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"rules":   rules,
-		"enabled": cfg.Enabled,
-	})
+// RulesResponse ответ GET /api/tun/rules
+type RulesResponse struct {
+	DefaultAction config.RuleAction    `json:"default_action"`
+	Rules         []config.RoutingRule `json:"rules"`
 }
 
-// handleTunAddRule POST /api/tun/rules
-func (s *Server) handleTunAddRule(w http.ResponseWriter, r *http.Request) {
-	var req AddProcessRuleRequest
+// handleListRules GET /api/tun/rules
+func (h *TunHandlers) handleListRules(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	resp := RulesResponse{
+		DefaultAction: h.routing.DefaultAction,
+		Rules:         h.routing.Rules,
+	}
+	if resp.Rules == nil {
+		resp.Rules = []config.RoutingRule{}
+	}
+	h.server.respondJSON(w, http.StatusOK, resp)
+}
+
+// AddRuleRequest тело POST /api/tun/rules
+type AddRuleRequest struct {
+	Value  string            `json:"value"`
+	Action config.RuleAction `json:"action"`
+	Note   string            `json:"note"`
+}
+
+// handleAddRule POST /api/tun/rules
+func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
+	var req AddRuleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.respondError(w, http.StatusBadRequest, "неверный формат запроса")
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
 		return
 	}
-	if req.ProcessName == "" {
-		s.respondError(w, http.StatusBadRequest, "process_name обязателен")
+
+	// Нормализация значения
+	val := strings.TrimSpace(req.Value)
+	val = strings.TrimPrefix(val, "https://")
+	val = strings.TrimPrefix(val, "http://")
+	if idx := strings.Index(val, "/"); idx != -1 {
+		val = val[:idx]
+	}
+	// Определяем тип ДО нормализации регистра
+	ruleType := config.DetectRuleType(strings.ToLower(val))
+
+	// Для процессов сохраняем оригинальный регистр, для доменов — нижний
+	if ruleType != config.RuleTypeProcess {
+		val = strings.ToLower(val)
+	}
+
+	if req.Action != config.ActionProxy && req.Action != config.ActionDirect && req.Action != config.ActionBlock {
+		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
 		return
 	}
-	if req.Action != config.ProcessProxy && req.Action != config.ProcessDirect && req.Action != config.ProcessBlock {
-		s.respondError(w, http.StatusBadRequest, "action должен быть: proxy, direct или block")
-		return
-	}
-	cfg := s.config.TunConfig
-	if cfg == nil {
-		cfg = &config.TunConfig{Enabled: false}
-		s.config.TunConfig = cfg
-	}
-	for _, rule := range cfg.ProcessRules {
-		if rule.ProcessName == req.ProcessName {
-			s.respondError(w, http.StatusBadRequest, "правило для этого процесса уже существует")
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	// Проверяем дубликат
+	for _, rule := range h.routing.Rules {
+		if rule.Value == val {
+			h.server.respondError(w, http.StatusConflict, "правило уже существует")
 			return
 		}
 	}
-	newRule := config.ProcessRule{
-		ProcessName: req.ProcessName,
-		Action:      req.Action,
+
+	newRule := config.RoutingRule{
+		Value:  val,
+		Type:   ruleType,
+		Action: req.Action,
+		Note:   req.Note,
 	}
-	cfg.ProcessRules = append(cfg.ProcessRules, newRule)
-	if err := config.SaveTunConfig(s.config.TunConfigPath, cfg); err != nil {
-		s.logger.Error("Не удалось сохранить tun config: %v", err)
-		s.respondError(w, http.StatusInternalServerError, "не удалось сохранить правило")
-		return
+	h.routing.Rules = append(h.routing.Rules, newRule)
+
+	if err := config.SaveRoutingConfig(routingConfigPath, h.routing); err != nil {
+		h.server.logger.Warn("Не удалось сохранить routing config: %v", err)
 	}
-	s.respondJSON(w, http.StatusCreated, map[string]interface{}{
+
+	h.server.respondJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "правило добавлено",
 		"rule":    newRule,
-		"note":    "нажмите Apply чтобы применить изменения",
 	})
 }
 
-// handleTunDeleteRule DELETE /api/tun/rules/{index}
-func (s *Server) handleTunDeleteRule(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	var index int
-	if _, err := fmt.Sscanf(vars["index"], "%d", &index); err != nil {
-		s.respondError(w, http.StatusBadRequest, "неверный индекс")
+// handleDeleteRule DELETE /api/tun/rules/{value}
+func (h *TunHandlers) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(r.URL.Path, "/")
+	value := strings.ToLower(parts[len(parts)-1])
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	newRules := h.routing.Rules[:0]
+	found := false
+	for _, rule := range h.routing.Rules {
+		if strings.ToLower(rule.Value) == value {
+			found = true
+			continue
+		}
+		newRules = append(newRules, rule)
+	}
+
+	if !found {
+		h.server.respondError(w, http.StatusNotFound, "правило не найдено")
 		return
 	}
-	cfg := s.config.TunConfig
-	if cfg == nil || index < 0 || index >= len(cfg.ProcessRules) {
-		s.respondError(w, http.StatusNotFound, "правило не найдено")
-		return
+
+	h.routing.Rules = newRules
+	if err := config.SaveRoutingConfig(routingConfigPath, h.routing); err != nil {
+		h.server.logger.Warn("Не удалось сохранить routing config: %v", err)
 	}
-	deleted := cfg.ProcessRules[index]
-	cfg.ProcessRules = append(cfg.ProcessRules[:index], cfg.ProcessRules[index+1:]...)
-	if err := config.SaveTunConfig(s.config.TunConfigPath, cfg); err != nil {
-		s.logger.Error("Не удалось сохранить tun config: %v", err)
-		s.respondError(w, http.StatusInternalServerError, "не удалось сохранить изменения")
-		return
-	}
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"message": "правило удалено",
-		"deleted": deleted,
-		"note":    "нажмите Apply чтобы применить изменения",
-	})
+
+	h.server.respondJSON(w, http.StatusOK, MessageResponse{Message: "правило удалено", Success: true})
 }
 
-// handleTunEnable POST /api/tun/enable
-func (s *Server) handleTunEnable(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config.TunConfig
-	if cfg == nil {
-		cfg = &config.TunConfig{}
-		s.config.TunConfig = cfg
+// handleSetDefault POST /api/tun/default
+func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Action config.RuleAction `json:"action"`
 	}
-	cfg.Enabled = true
-	if err := config.SaveTunConfig(s.config.TunConfigPath, cfg); err != nil {
-		s.respondError(w, http.StatusInternalServerError, "не удалось сохранить конфиг")
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
 		return
 	}
-	s.respondJSON(w, http.StatusOK, MessageResponse{
-		Message: "TUN режим включён. Нажмите Apply для применения.",
-		Success: true,
-	})
+	if req.Action != config.ActionProxy && req.Action != config.ActionDirect {
+		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct")
+		return
+	}
+
+	h.mu.Lock()
+	h.routing.DefaultAction = req.Action
+	if err := config.SaveRoutingConfig(routingConfigPath, h.routing); err != nil {
+		h.server.logger.Warn("Не удалось сохранить routing config: %v", err)
+	}
+	h.mu.Unlock()
+
+	h.server.respondJSON(w, http.StatusOK, MessageResponse{Message: "дефолтное действие обновлено", Success: true})
 }
 
-// handleTunDisable POST /api/tun/disable
-func (s *Server) handleTunDisable(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config.TunConfig
-	if cfg == nil {
-		cfg = &config.TunConfig{}
-		s.config.TunConfig = cfg
+// handleApply POST /api/tun/apply — генерирует sing-box конфиг и перезапускает
+func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	snapshot := &config.RoutingConfig{
+		DefaultAction: h.routing.DefaultAction,
+		Rules:         make([]config.RoutingRule, len(h.routing.Rules)),
 	}
-	cfg.Enabled = false
-	if err := config.SaveTunConfig(s.config.TunConfigPath, cfg); err != nil {
-		s.respondError(w, http.StatusInternalServerError, "не удалось сохранить конфиг")
-		return
-	}
-	s.respondJSON(w, http.StatusOK, MessageResponse{
-		Message: "TUN режим отключён. Нажмите Apply для применения.",
-		Success: true,
-	})
-}
+	copy(snapshot.Rules, h.routing.Rules)
+	h.mu.RUnlock()
 
-// handleTunApply POST /api/tun/apply
-func (s *Server) handleTunApply(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config.TunConfig
-	if err := config.GenerateRuntimeConfigWithTun(
-		s.config.TemplatePath,
-		s.config.SecretPath,
-		s.config.RuntimePath,
-		cfg,
-	); err != nil {
-		s.logger.Error("Не удалось перегенерировать конфиг: %v", err)
-		s.respondError(w, http.StatusInternalServerError, "не удалось применить правила: "+err.Error())
+	// Останавливаем текущий процесс
+	if h.server.config.XRayManager != nil {
+		if err := h.server.config.XRayManager.Stop(); err != nil {
+			h.server.logger.Warn("Ошибка при остановке: %v", err)
+		}
+	}
+	// Останавливаем текущий процесс
+	if h.server.config.XRayManager != nil {
+		if err := h.server.config.XRayManager.Stop(); err != nil {
+			h.server.logger.Warn("Ошибка при остановке: %v", err)
+		}
+	}
+
+	// Удаляем TUN интерфейс через netsh с полным путём
+	// Удаляем TUN интерфейс — читаем актуальное имя из конфига
+	time.Sleep(500 * time.Millisecond)
+	if data, err := os.ReadFile(h.xrayConfig.ConfigPath); err == nil {
+		var cfg config.SingBoxConfig
+		if json.Unmarshal(data, &cfg) == nil {
+			for _, inbound := range cfg.Inbounds {
+				if inbound.Type == "tun" && inbound.InterfaceName != "" {
+					exec.Command("C:\\Windows\\System32\\netsh.exe",
+						"interface", "delete", "interface", inbound.InterfaceName).Run()
+					break
+				}
+			}
+		}
+	}
+	time.Sleep(2 * time.Second)
+
+	// Генерируем sing-box конфиг
+	if err := config.GenerateSingBoxConfig("secret.key", h.xrayConfig.ConfigPath, snapshot); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError,
+			"не удалось сгенерировать конфиг: "+err.Error())
 		return
 	}
-	if err := s.config.XRayManager.Stop(); err != nil {
-		s.logger.Warn("Ошибка при остановке XRay: %v", err)
-	}
-	newXray, err := xray.NewManager(xray.Config{
-		ExecutablePath: s.config.XRayExecutable,
-		ConfigPath:     s.config.RuntimePath,
-		Logger:         s.logger,
-	})
+
+	// Запускаем sing-box
+	newManager, err := xray.NewManager(h.xrayConfig)
 	if err != nil {
-		s.respondError(w, http.StatusInternalServerError, "не удалось перезапустить XRay: "+err.Error())
+		h.server.respondError(w, http.StatusInternalServerError,
+			"не удалось запустить sing-box: "+err.Error())
 		return
 	}
-	s.config.XRayManager = newXray
-	s.logger.Info("XRay перезапущен с новыми правилами")
-	rulesCount := 0
-	if cfg != nil {
-		rulesCount = len(cfg.ProcessRules)
-	}
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"message":     "правила применены, XRay перезапущен",
-		"success":     true,
-		"rules_count": rulesCount,
+
+	h.server.config.XRayManager = newManager
+	h.server.logger.Info("Sing-box перезапущен (PID: %d), правил: %d", newManager.GetPID(), len(snapshot.Rules))
+
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"message": "правила применены, sing-box перезапущен",
+		"pid":     newManager.GetPID(),
+		"rules":   len(snapshot.Rules),
 	})
 }

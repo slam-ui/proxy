@@ -1,278 +1,190 @@
 # Proxy Client
 
-Клиент для управления XRay прокси-сервером с поддержкой VLESS/Reality протокола.
+Windows прокси-клиент с TUN-интерфейсом на базе **sing-box** и протоколом **VLESS/Reality**.
 
 ## Возможности
 
 - 🚀 Автоматическая генерация конфигурации из VLESS URL
-- 🔄 Управление процессом XRay
-- 🌐 Автоматическое включение/отключение системного прокси (Windows)
-- 📡 HTTP API для управления
-- 📝 Структурированное логирование
+- 🌐 TUN-интерфейс — перехват трафика на уровне сети (без настройки браузера)
+- 🔀 Гибкая маршрутизация — proxy / direct / block по доменам, IP, процессам, geosite
+- 🗺️ Поддержка **geosite** — маршрутизация по категориям доменов (discord, youtube, spotify и др.)
+- 🖥️ Web UI — панель управления на `localhost:8080`
+- 📡 HTTP API для управления прокси и правилами
+- 🔄 Горячее применение правил без перезапуска клиента
 - ✅ Graceful shutdown
-- 🔒 Потокобезопасность
+
+## Скриншот
+
+> Web UI доступен по адресу `http://localhost:8080`
 
 ## Структура проекта
 
 ```
-proxyclient/
+proxy/
 ├── cmd/
 │   └── proxy-client/
-│       └── main.go           # Точка входа
+│       └── main.go
 ├── internal/
 │   ├── api/
-│   │   └── server.go         # HTTP API сервер
+│   │   ├── static/
+│   │   │   └── index.html        # Web UI
+│   │   ├── server.go             # HTTP API сервер
+│   │   ├── tun_handlers.go       # Handlers для правил маршрутизации
+│   │   └── app_proxy_handlers.go
+│   ├── apprules/
+│   │   ├── engine.go             # Rules engine
+│   │   ├── matcher.go
+│   │   ├── storage.go            # Хранилище правил
+│   │   └── types.go
 │   ├── config/
-│   │   ├── generator.go      # Генератор конфигурации
-│   │   └── types.go          # Типы конфигурации
-│   ├── logger/
-│   │   └── logger.go         # Структурированный логгер
+│   │   ├── singbox.go            # Генератор конфига sing-box
+│   │   └── tun.go                # TUN конфигурация
 │   ├── proxy/
-│   │   ├── manager.go        # Менеджер системного прокси
-│   │   └── windows_proxy.go  # Реализация для Windows
+│   │   └── manager.go            # Управление системным прокси
 │   └── xray/
-│       └── manager.go        # Менеджер процесса XRay
-├── config.template.json      # Шаблон конфигурации
-├── secret.key               # VLESS URL (создается пользователем)
+│       └── manager.go            # Менеджер процесса sing-box
+├── geosite-discord.bin           # Скомпилированные geosite rule-sets
+├── geosite-youtube.bin
+├── geosite-spotify.bin
+├── geosite-reddit.bin
+├── geosite-tiktok.bin
+├── geosite-instagram.bin
+├── geosite-soundcloud.bin
+├── routing.json                  # Правила маршрутизации
+├── secret.key                    # VLESS URL (создаётся пользователем)
+├── sing-box.exe                  # sing-box binary
 └── go.mod
 ```
 
-## Установка
+## Требования
 
-### Требования
-
+- Windows 10/11
 - Go 1.21+
-- Windows (для управления системным прокси)
-- XRay Core
+- [sing-box](https://github.com/SagerNet/sing-box/releases) — положить `sing-box.exe` в корень проекта
+- Права администратора (для TUN-интерфейса)
 
-### Сборка
+## Установка и сборка
 
-```bash
+```powershell
 # Клонировать репозиторий
 git clone <repo-url>
-cd proxyclient
+cd proxy
 
 # Установить зависимости
 go mod download
 
 # Собрать
-go build -o proxy-client.exe ./cmd/proxy-client
+go build -o build/proxy-client.exe ./cmd/proxy-client
 ```
 
 ## Использование
 
-### 1. Подготовка
+### 1. Настройка
 
 Создайте файл `secret.key` с вашим VLESS URL:
 
 ```
-vless://uuid@server:port?sni=example.com&pbk=publickey&sid=shortid
+vless://uuid@server:port?security=reality&sni=example.com&pbk=publickey&sid=shortid&fp=chrome&flow=xtls-rprx-vision
 ```
 
 ### 2. Запуск
 
-```bash
-./proxy-client.exe
+```powershell
+.\build\proxy-client.exe
 ```
 
-Программа автоматически:
-1. Сгенерирует конфигурацию из `secret.key`
-2. Включит системный прокси
-3. Запустит XRay
-4. Запустит API сервер на порту 8080
+После запуска:
+- Web UI: `http://localhost:8080`
+- HTTP прокси: `127.0.0.1:10807`
+- TUN-интерфейс: `tun1` (172.20.0.1/30)
 
-### 3. API Endpoints
+### 3. Маршрутизация
 
-#### Получить статус
+Правила применяются **сверху вниз** — первое совпавшее правило выигрывает.
 
-```bash
-GET http://localhost:8080/api/status
-```
+| Тип | Пример | Описание |
+|-----|--------|----------|
+| `domain` | `google.com` | Точный домен |
+| `domain_suffix` | `.twitch.tv` | Домен и все поддомены |
+| `process` | `chrome.exe` | Весь трафик процесса (через TUN) |
+| `ip` | `8.8.8.8`, `10.0.0.0/8` | IP или CIDR |
+| `geosite` | `geosite:discord` | Категория доменов |
 
-Ответ:
+**Важно:** правила `direct` должны стоять **выше** правил `process`, иначе process-правило перехватит весь трафик раньше.
+
+Пример `routing.json`:
 ```json
 {
-  "xray": {
-    "running": true,
-    "pid": 12345
-  },
-  "proxy": {
-    "enabled": true,
-    "address": "127.0.0.1:10807"
-  },
-  "config_path": "config.runtime.json"
+  "default_action": "direct",
+  "rules": [
+    {"value": "twitch.tv",         "type": "domain",  "action": "direct"},
+    {"value": "geosite:discord",   "type": "geosite", "action": "proxy"},
+    {"value": "geosite:youtube",   "type": "geosite", "action": "proxy"},
+    {"value": "geosite:spotify",   "type": "geosite", "action": "proxy"},
+    {"value": "firefox.exe",       "type": "process", "action": "proxy"}
+  ]
 }
 ```
 
-#### Включить прокси
+### 4. Geosite rule-sets
 
-```bash
-POST http://localhost:8080/api/proxy/enable
+Файлы `geosite-*.bin` — скомпилированные rule-sets для sing-box. Для добавления новой категории:
+
+```powershell
+# 1. Скачать базу geosite (SagerNet/sing-geosite)
+# 2. Экспортировать нужную категорию
+.\sing-box.exe geosite export <category> --file geosite.db --output geosite-<category>.srs
+
+# 3. Скомпилировать в бинарный формат
+.\sing-box.exe rule-set compile --output geosite-<category>.bin geosite-<category>.srs
 ```
 
-#### Отключить прокси
+Доступные категории в базе: `youtube`, `google`, `telegram`, `twitter`, `facebook`, `netflix`, `spotify`, `discord`, `reddit`, `tiktok`, `instagram`, `github`, и [сотни других](https://github.com/SagerNet/sing-geosite).
 
-```bash
-POST http://localhost:8080/api/proxy/disable
+## API
+
+### Статус
+
 ```
-
-#### Проверка здоровья
-
-```bash
-GET http://localhost:8080/api/health
-```
-
-## Архитектура
-
-### Основные компоненты
-
-#### 1. Logger
-Структурированный логгер с уровнями логирования:
-- DEBUG
-- INFO
-- WARN
-- ERROR
-
-#### 2. Config Generator
-- Парсит VLESS URL
-- Валидирует параметры
-- Генерирует конфигурацию XRay
-
-#### 3. XRay Manager
-- Управление жизненным циклом процесса
-- Graceful shutdown (5 секунд на завершение, затем KILL)
-- Мониторинг состояния процесса
-- Потокобезопасный доступ
-
-#### 4. Proxy Manager
-- Управление системным прокси Windows
-- Включение/отключение через реестр
-- Уведомление системы об изменениях
-
-#### 5. API Server
-- RESTful API
-- Middleware для логирования
-- Middleware для обработки паник
-- Graceful shutdown
-
-## Улучшения по сравнению с оригиналом
-
-### 1. Обработка ошибок
-- ❌ Было: Ошибки игнорировались с пустыми `defer`
-- ✅ Стало: Все ошибки обрабатываются и логируются
-
-### 2. Архитектура
-- ❌ Было: Жёсткая связанность, прямой доступ к полям
-- ✅ Стало: Интерфейсы, инверсия зависимостей, инкапсуляция
-
-### 3. Graceful Shutdown
-- ❌ Было: Прямой Kill процесса
-- ✅ Стало: Мягкое завершение с таймаутом, затем Kill
-
-### 4. Потокобезопасность
-- ❌ Было: Нет защиты от гонок
-- ✅ Стало: RWMutex для всех shared state
-
-### 5. Логирование
-- ❌ Было: `fmt.Println` и `log.Fatal`
-- ✅ Стало: Структурированный логгер с уровнями
-
-### 6. Валидация
-- ❌ Было: Минимальная проверка входных данных
-- ✅ Стало: Полная валидация конфигурации и параметров
-
-### 7. API
-- ❌ Было: Ошибки в логике, проблемы с nil
-- ✅ Стало: Правильная обработка состояний, middleware
-
-### 8. Тестируемость
-- ❌ Было: Невозможно протестировать
-- ✅ Стало: Интерфейсы, dependency injection
-
-## Конфигурация
-
-### config.template.json
-
-Шаблон конфигурации XRay. Поля с `YOUR_*` будут автоматически заменены на значения из VLESS URL.
-
-### Переменные окружения (опционально)
-
-```bash
-# Порт API сервера (по умолчанию :8080)
-API_PORT=:8080
-
-# Уровень логирования (debug, info, warn, error)
-LOG_LEVEL=info
-```
-
-## Примеры использования
-
-### Проверка статуса через curl
-
-```bash
-curl http://localhost:8080/api/status | jq
+GET /api/status
 ```
 
 ### Управление прокси
 
-```bash
-# Отключить
-curl -X POST http://localhost:8080/api/proxy/disable
+```
+POST /api/proxy/enable
+POST /api/proxy/disable
+POST /api/proxy/toggle
+```
 
-# Включить
-curl -X POST http://localhost:8080/api/proxy/enable
+### Правила маршрутизации
+
+```
+GET    /api/tun/rules              # Список правил
+POST   /api/tun/rules              # Добавить правило
+DELETE /api/tun/rules/:value       # Удалить правило
+POST   /api/tun/default            # Изменить действие по умолчанию
+POST   /api/tun/apply              # Применить правила (перезапуск sing-box)
+```
+
+Пример добавления правила:
+```bash
+curl -X POST http://localhost:8080/api/tun/rules \
+  -H "Content-Type: application/json" \
+  -d '{"value":"geosite:discord","type":"geosite","action":"proxy"}'
 ```
 
 ## Устранение неполадок
 
-### XRay не запускается
+**TUN не создаётся (`Cannot create a file when that file already exists`)**
+— Интерфейс `tun1` остался от предыдущего запуска. Перезагрузите ПК или удалите адаптер вручную через `ncpa.cpl`.
 
-1. Проверьте путь к исполняемому файлу
-2. Проверьте корректность `secret.key`
-3. Проверьте логи
+**Процесс-правило перехватывает весь трафик**
+— Поставьте `direct`-правила для нужных доменов **выше** `process`-правила в списке.
 
-### Системный прокси не включается
-
-1. Запустите с правами администратора
-2. Проверьте, не блокирует ли антивирус
-3. Проверьте логи Windows Event Viewer
-
-### API недоступен
-
-1. Проверьте, не занят ли порт 8080
-2. Проверьте firewall
-3. Попробуйте изменить порт
-
-## Разработка
-
-### Запуск в режиме разработки
-
-```bash
-go run ./cmd/proxy-client/main.go
-```
-
-### Тесты
-
-```bash
-go test ./...
-```
-
-### Линтер
-
-```bash
-golangci-lint run
-```
+**Geosite не работает**
+— Убедитесь что файл `geosite-<category>.bin` существует рядом с `proxy-client.exe`.
 
 ## Лицензия
 
 MIT
-
-## TODO
-
-- [ ] Поддержка Linux/macOS
-- [ ] Конфигурация через YAML
-- [ ] Метрики (Prometheus)
-- [ ] Web UI
-- [ ] Автоматическое обновление XRay
-- [ ] Поддержка множественных профилей
-- [ ] Системный трей интеграция

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -23,7 +24,6 @@ const (
 	secretFile       = "secret.key"
 	runtimeFile      = "config.runtime.json"
 	appRulesFile     = "app_rules.json"
-	tunConfigFile    = "tun_rules.json"
 	xrayExecutable   = "./xray_core/xray.exe"
 	apiListenAddress = ":8080"
 	shutdownTimeout  = 10 * time.Second
@@ -43,28 +43,15 @@ func run() error {
 
 	appLogger.Info("Запуск прокси-клиента...")
 
-	// 1. Загружаем TUN правила (если есть)
-	tunCfg, err := config.LoadTunConfig(tunConfigFile)
-	if err != nil {
-		appLogger.Warn("Не удалось загрузить tun_rules.json, используем базовый режим: %v", err)
-		tunCfg = &config.TunConfig{Enabled: false}
-	}
-
-	if tunCfg.Enabled {
-		appLogger.Info("TUN режим включён, правил процессов: %d", len(tunCfg.ProcessRules))
-	}
-
-	// 2. Генерируем конфигурацию XRay (с TUN правилами если включены)
+	// 1. Генерируем конфигурацию
 	appLogger.Info("Генерация конфигурации...")
-	if err := config.GenerateRuntimeConfigWithTun(templateFile, secretFile, runtimeFile, tunCfg); err != nil {
-		return fmt.Errorf("не удалось сгенерировать конфигурацию: %w", err)
-	}
+
 	appLogger.Info("Конфигурация успешно сгенерирована")
 
-	// 3. Создаём прокси-менеджер
+	// 2. Прокси-менеджер
 	proxyManager := proxy.NewManager(appLogger)
 
-	// 4. Включаем системный прокси
+	// 3. Включаем системный прокси
 	appLogger.Info("Включение системного прокси...")
 	proxyConfig := proxy.Config{
 		Address:  "127.0.0.1:10807",
@@ -75,31 +62,39 @@ func run() error {
 	} else {
 		appLogger.Info("Системный прокси включён: %s", proxyConfig.Address)
 	}
+	// Очистка старого TUN перед запуском
+	exec.Command("netsh", "interface", "delete", "interface", "tun0").Run()
 
-	// 5. Запускаем XRay
+	// 4. Запускаем XRay
 	appLogger.Info("Запуск XRay...")
-	xrayManager, err := xray.NewManager(xray.Config{
-		ExecutablePath: xrayExecutable,
-		ConfigPath:     runtimeFile,
+	// Генерируем начальный sing-box конфиг
+	routingCfg, _ := config.LoadRoutingConfig("routing.json")
+	if err := config.GenerateSingBoxConfig(secretFile, "config.singbox.json", routingCfg); err != nil {
+		appLogger.Warn("Не удалось сгенерировать sing-box конфиг: %v", err)
+	}
+
+	xrayCfg := xray.Config{
+		ExecutablePath: "./sing-box.exe",
+		ConfigPath:     "config.singbox.json",
+		Args:           []string{"run"}, // ← добавить это
 		Logger:         appLogger,
-	})
+	}
+	xrayManager, err := xray.NewManager(xrayCfg)
 	if err != nil {
 		_ = proxyManager.Disable()
 		return fmt.Errorf("не удалось запустить XRay: %w", err)
 	}
-	appLogger.Info("XRay запущен успешно")
+	appLogger.Info("XRay запущен (PID: %d)", xrayManager.GetPID())
 
-	// 6. Initialize per-app proxy components
+	// 5. Per-app proxy
 	appLogger.Info("Инициализация per-app proxy...")
-
 	storage := apprules.NewFileStorage(appRulesFile)
 	rulesEngine, err := apprules.NewPersistentEngine(storage)
 	if err != nil {
 		appLogger.Warn("Failed to initialize rules engine: %v", err)
 		rulesEngine = nil
 	} else {
-		rules := rulesEngine.ListRules()
-		appLogger.Info("Rules engine initialized with %d rules", len(rules))
+		appLogger.Info("Rules engine инициализирован (%d правил)", len(rulesEngine.ListRules()))
 	}
 
 	var processMonitor process.Monitor
@@ -110,38 +105,38 @@ func run() error {
 		if err := processMonitor.Start(); err != nil {
 			appLogger.Warn("Failed to start process monitor: %v", err)
 		} else {
-			appLogger.Info("Process monitor started")
+			appLogger.Info("Process monitor запущен")
 		}
-
 		processLauncher = process.NewLauncher(appLogger, rulesEngine)
-		appLogger.Info("Per-app proxy initialized successfully")
+		appLogger.Info("Per-app proxy инициализирован")
 	}
 
-	// 7. Запускаем HTTP API
+	// 6. API сервер
 	apiServer := api.NewServer(api.Config{
 		ListenAddress: apiListenAddress,
 		XRayManager:   xrayManager,
 		ProxyManager:  proxyManager,
 		ConfigPath:    runtimeFile,
 		Logger:        appLogger,
-		TunConfig:     tunCfg,
-		TunConfigPath: tunConfigFile,
-		TemplatePath:  templateFile,
-		SecretPath:    secretFile,
-		RuntimePath:   runtimeFile,
 	})
+
+	// Регистрируем маршруты — порядок важен, статика всегда последняя
+	apiServer.SetupTunRoutes(xrayCfg)
+	appLogger.Info("TUN routes зарегистрированы")
 
 	if rulesEngine != nil && processMonitor != nil && processLauncher != nil {
 		apiServer.SetupAppProxyRoutes(rulesEngine, processMonitor, processLauncher)
-		appLogger.Info("Per-app proxy API routes registered")
+		appLogger.Info("Per-app proxy routes зарегистрированы")
 	}
 
+	apiServer.FinalizeRoutes() // статика — последней
+
+	// 7. Запускаем сервер
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	apiErrChan := make(chan error, 1)
 	go func() {
-		appLogger.Info("API сервер запущен на %s", apiListenAddress)
 		if startErr := apiServer.Start(ctx); startErr != nil {
 			apiErrChan <- fmt.Errorf("ошибка API сервера: %w", startErr)
 		}
@@ -154,6 +149,7 @@ func run() error {
 	appLogger.Info("Rules:  http://localhost%s/api/tun/rules", apiListenAddress)
 	appLogger.Info("")
 
+	// 8. Ждём сигнал
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
@@ -164,9 +160,8 @@ func run() error {
 		appLogger.Error("API сервер упал: %v", apiErr)
 	}
 
-	// Graceful shutdown
+	// 9. Graceful shutdown
 	appLogger.Info("Завершение работы...")
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 

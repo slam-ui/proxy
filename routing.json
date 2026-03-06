@@ -1,0 +1,13 @@
+{
+  "default_action": "direct",
+  "rules": [
+    {"value": "twitch.tv",        "type": "domain",  "action": "direct"},
+    {"value": "geosite:discord",  "type": "geosite", "action": "proxy"},
+    {"value": "geosite:youtube",  "type": "geosite", "action": "proxy"},
+    {"value": "geosite:spotify",  "type": "geosite", "action": "proxy"},
+    {"value": "geosite:reddit",   "type": "geosite", "action": "proxy"},
+    {"value": "geosite:tiktok",   "type": "geosite", "action": "proxy"},
+    {"value": "geosite:instagram","type": "geosite", "action": "proxy"},
+    {"value": "firefox.exe",      "type": "process", "action": "proxy"}
+  ]
+}
