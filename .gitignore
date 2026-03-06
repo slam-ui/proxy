@@ -79,3 +79,7 @@ desktop.ini
 # Backup files
 *.backup
 *~
+secret.key
+config.singbox.json
+config.runtime.json
+*.bin
