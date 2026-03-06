@@ -94,10 +94,7 @@ jobs:
         run: govulncheck ./...
 
       - name: Install nancy
-        run: |
-          curl -L https://github.com/sonatype-nexus-community/nancy/releases/latest/download/nancy-linux.amd64-musl \
-            -o /usr/local/bin/nancy
-          chmod +x /usr/local/bin/nancy
+        run: go install github.com/sonatype-nexus-community/nancy@latest
 
       - name: Audit dependencies with nancy
         env:
