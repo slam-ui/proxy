@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
@@ -18,17 +17,11 @@ import (
 
 // Config конфигурация API сервера
 type Config struct {
-	ListenAddress  string
-	XRayManager    xray.Manager
-	ProxyManager   proxy.Manager
-	ConfigPath     string
-	Logger         logger.Logger
-	TunConfig      *config.TunConfig
-	TunConfigPath  string
-	TemplatePath   string
-	SecretPath     string
-	RuntimePath    string
-	XRayExecutable string
+	ListenAddress string
+	XRayManager   xray.Manager
+	ProxyManager  proxy.Manager
+	ConfigPath    string
+	Logger        logger.Logger
 }
 
 // Server HTTP API сервер
@@ -70,31 +63,26 @@ func NewServer(cfg Config) *Server {
 		logger: cfg.Logger,
 		router: mux.NewRouter(),
 	}
-
 	s.setupRoutes()
-
 	return s
 }
 
-// setupRoutes настраивает маршруты
+// setupRoutes регистрирует базовые API маршруты (без статики)
 func (s *Server) setupRoutes() {
-	// Middleware
 	s.router.Use(s.corsMiddleware)
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.recoveryMiddleware)
 
-	// API endpoints
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/status", s.handleStatus).Methods("GET", "OPTIONS")
 	api.HandleFunc("/proxy/enable", s.handleProxyEnable).Methods("POST", "OPTIONS")
 	api.HandleFunc("/proxy/disable", s.handleProxyDisable).Methods("POST", "OPTIONS")
 	api.HandleFunc("/proxy/toggle", s.handleProxyToggle).Methods("POST", "OPTIONS")
 	api.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
+}
 
-	// TUN process routing
-	s.setupTunRoutes()
-
-	// Встроенный фронтенд (embed) — всегда доступен на /
+// FinalizeRoutes регистрирует статику — вызывать после всех других маршрутов
+func (s *Server) FinalizeRoutes() {
 	s.router.PathPrefix("/").Handler(staticHandler())
 }
 
@@ -129,77 +117,61 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer == nil {
 		return nil
 	}
-
 	s.logger.Info("Остановка API сервера...")
 	if err := s.httpServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("ошибка при остановке API сервера: %w", err)
 	}
-
 	s.logger.Info("API сервер остановлен")
 	return nil
 }
 
-// handleStatus обрабатывает GET /api/status
+// handleStatus GET /api/status
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	proxyConfig := s.config.ProxyManager.GetConfig()
 
 	response := StatusResponse{
 		ConfigPath: s.config.ConfigPath,
 	}
-
 	response.XRay.Running = s.config.XRayManager.IsRunning()
 	response.XRay.PID = s.config.XRayManager.GetPID()
-
 	response.Proxy.Enabled = s.config.ProxyManager.IsEnabled()
 	response.Proxy.Address = proxyConfig.Address
 
 	s.respondJSON(w, http.StatusOK, response)
 }
 
-// handleProxyEnable обрабатывает POST /api/proxy/enable
+// handleProxyEnable POST /api/proxy/enable
 func (s *Server) handleProxyEnable(w http.ResponseWriter, _ *http.Request) {
 	if s.config.ProxyManager.IsEnabled() {
 		s.respondError(w, http.StatusBadRequest, "прокси уже включен")
 		return
 	}
-
-	proxyConfig := proxy.Config{
+	if err := s.config.ProxyManager.Enable(proxy.Config{
 		Address:  "127.0.0.1:10807",
 		Override: "<local>",
-	}
-
-	if err := s.config.ProxyManager.Enable(proxyConfig); err != nil {
+	}); err != nil {
 		s.logger.Error("Не удалось включить прокси: %v", err)
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	s.respondJSON(w, http.StatusOK, MessageResponse{
-		Message: "Прокси успешно включен",
-		Success: true,
-	})
+	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси успешно включен", Success: true})
 }
 
-// handleProxyDisable обрабатывает POST /api/proxy/disable
+// handleProxyDisable POST /api/proxy/disable
 func (s *Server) handleProxyDisable(w http.ResponseWriter, _ *http.Request) {
 	if !s.config.ProxyManager.IsEnabled() {
 		s.respondError(w, http.StatusBadRequest, "прокси уже отключен")
 		return
 	}
-
 	if err := s.config.ProxyManager.Disable(); err != nil {
 		s.logger.Error("Не удалось отключить прокси: %v", err)
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	s.respondJSON(w, http.StatusOK, MessageResponse{
-		Message: "Прокси успешно отключен",
-		Success: true,
-	})
+	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси успешно отключен", Success: true})
 }
 
-// handleProxyToggle обрабатывает POST /api/proxy/toggle — включает/отключает одной кнопкой
+// handleProxyToggle POST /api/proxy/toggle
 func (s *Server) handleProxyToggle(w http.ResponseWriter, _ *http.Request) {
 	if s.config.ProxyManager.IsEnabled() {
 		if err := s.config.ProxyManager.Disable(); err != nil {
@@ -207,41 +179,29 @@ func (s *Server) handleProxyToggle(w http.ResponseWriter, _ *http.Request) {
 			s.respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		s.respondJSON(w, http.StatusOK, MessageResponse{
-			Message: "Прокси отключен",
-			Success: true,
-		})
+		s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси отключен", Success: true})
 		return
 	}
-
-	proxyConfig := proxy.Config{
+	if err := s.config.ProxyManager.Enable(proxy.Config{
 		Address:  "127.0.0.1:10807",
 		Override: "<local>",
-	}
-	if err := s.config.ProxyManager.Enable(proxyConfig); err != nil {
+	}); err != nil {
 		s.logger.Error("Не удалось включить прокси: %v", err)
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	s.respondJSON(w, http.StatusOK, MessageResponse{
-		Message: "Прокси включен",
-		Success: true,
-	})
+	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси включен", Success: true})
 }
 
-// handleHealth обрабатывает GET /api/health
+// handleHealth GET /api/health
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	s.respondJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-	})
+	s.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // respondJSON отправляет JSON ответ
 func (s *Server) respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		s.logger.Error("Ошибка при кодировании JSON: %v", err)
 	}
@@ -252,19 +212,16 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 	s.respondJSON(w, status, ErrorResponse{Error: message})
 }
 
-// corsMiddleware добавляет CORS заголовки для работы с любым фронтендом
+// corsMiddleware добавляет CORS заголовки
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		// Preflight OPTIONS запрос — сразу возвращаем 204
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
 }
@@ -273,18 +230,9 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
-
-		duration := time.Since(start)
-		s.logger.Info(
-			"%s %s - %d (%v)",
-			r.Method,
-			r.URL.Path,
-			rw.statusCode,
-			duration,
-		)
+		s.logger.Info("%s %s - %d (%v)", r.Method, r.URL.Path, rw.statusCode, time.Since(start))
 	})
 }
 

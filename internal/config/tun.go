@@ -4,159 +4,159 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
-// ProcessAction действие для процесса
-type ProcessAction string
+// RuleType тип правила маршрутизации
+type RuleType string
 
 const (
-	ProcessProxy  ProcessAction = "proxy"
-	ProcessDirect ProcessAction = "direct"
-	ProcessBlock  ProcessAction = "block"
+	RuleTypeProcess RuleType = "process" // chrome.exe
+	RuleTypeDomain  RuleType = "domain"  // google.com, .google.com
+	RuleTypeIP      RuleType = "ip"      // 8.8.8.8, 192.168.0.0/24
+	RuleTypeGeosite RuleType = "geosite" // geosite:discord
 )
 
-// ProcessRule правило для конкретного процесса
-type ProcessRule struct {
-	ProcessName string        `json:"process_name"` // "firefox.exe"
-	Action      ProcessAction `json:"action"`       // proxy / direct / block
+// RuleAction действие
+type RuleAction string
+
+const (
+	ActionProxy  RuleAction = "proxy"
+	ActionDirect RuleAction = "direct"
+	ActionBlock  RuleAction = "block"
+)
+
+// RoutingRule одно правило маршрутизации
+type RoutingRule struct {
+	Value  string     `json:"value"`
+	Type   RuleType   `json:"type"`   // process / domain / ip
+	Action RuleAction `json:"action"` // proxy / direct / block
+	Note   string     `json:"note,omitempty"`
 }
 
-// TunConfig настройки TUN режима
+// RoutingConfig конфиг маршрутизации
+type RoutingConfig struct {
+	DefaultAction RuleAction    `json:"default_action"`
+	Rules         []RoutingRule `json:"rules"`
+}
+
+func DefaultRoutingConfig() *RoutingConfig {
+	return &RoutingConfig{
+		DefaultAction: ActionProxy,
+		Rules:         []RoutingRule{},
+	}
+}
+
+func LoadRoutingConfig(path string) (*RoutingConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return DefaultRoutingConfig(), nil
+		}
+		return nil, fmt.Errorf("не удалось прочитать routing config: %w", err)
+	}
+	var cfg RoutingConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("неверный формат routing config: %w", err)
+	}
+	return &cfg, nil
+}
+
+func SaveRoutingConfig(path string, cfg *RoutingConfig) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+// DetectRuleType автоматически определяет тип правила по значению
+func DetectRuleType(value string) RuleType {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if strings.HasSuffix(v, ".exe") {
+		return RuleTypeProcess
+	}
+	if isIPOrCIDR(v) {
+		return RuleTypeIP
+	}
+	if strings.HasPrefix(v, "geosite:") {
+		return RuleTypeGeosite
+	}
+	return RuleTypeDomain
+}
+
+func isIPOrCIDR(s string) bool {
+	if strings.Contains(s, "/") {
+		return true
+	}
+	if strings.Contains(s, ":") {
+		return true // IPv6
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for _, p := range parts {
+		if len(p) == 0 || len(p) > 3 {
+			return false
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// ── Обратная совместимость со старым кодом ────────────────
+
+type ProcessAction = RuleAction
+
+const (
+	ProcessProxy  = ActionProxy
+	ProcessDirect = ActionDirect
+	ProcessBlock  = ActionBlock
+)
+
+type ProcessRule struct {
+	ProcessName string        `json:"process_name"`
+	Action      ProcessAction `json:"action"`
+}
+
 type TunConfig struct {
 	Enabled      bool          `json:"enabled"`
 	ProcessRules []ProcessRule `json:"process_rules"`
 }
 
-// xrayRoutingRule внутренняя структура правила роутинга XRay
-type xrayRoutingRule struct {
-	Type        string   `json:"type"`
-	ProcessName []string `json:"process_name,omitempty"`
-	InboundTag  []string `json:"inboundTag,omitempty"`
-	OutboundTag string   `json:"outboundTag"`
-	Domain      []string `json:"domain,omitempty"`
-	IP          []string `json:"ip,omitempty"`
-}
-
-// LoadTunConfig загружает TUN конфиг из файла
 func LoadTunConfig(path string) (*TunConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &TunConfig{Enabled: false}, nil
 		}
-		return nil, fmt.Errorf("не удалось прочитать tun config: %w", err)
+		return nil, err
 	}
-
 	var cfg TunConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("неверный формат tun config: %w", err)
+		return nil, err
 	}
-
 	return &cfg, nil
 }
 
-// SaveTunConfig сохраняет TUN конфиг в файл
 func SaveTunConfig(path string, cfg *TunConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("ошибка сериализации tun config: %w", err)
+		return err
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("не удалось сохранить tun config: %w", err)
-	}
-	return nil
+	return os.WriteFile(path, data, 0644)
 }
 
-// GenerateRuntimeConfigWithTun генерирует конфиг XRay с TUN правилами по процессам
 func GenerateRuntimeConfigWithTun(templatePath, secretPath, outputPath string, tunCfg *TunConfig) error {
-	// 1. Парсим VLESS ключ
-	vlessParams, err := parseVLESSKey(secretPath)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга VLESS ключа: %w", err)
-	}
-
-	if err := validateVLESSParams(vlessParams); err != nil {
-		return fmt.Errorf("невалидные параметры VLESS: %w", err)
-	}
-
-	// 2. Загружаем шаблон
-	cfg, err := loadTemplate(templatePath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки шаблона: %w", err)
-	}
-
-	// 3. Подставляем VLESS параметры
-	if err := updateConfig(cfg, vlessParams); err != nil {
-		return fmt.Errorf("ошибка обновления конфигурации: %w", err)
-	}
-
-	// 4. Применяем TUN правила если включены
-	if tunCfg != nil && tunCfg.Enabled {
-		if err := applyProcessRules(cfg, tunCfg.ProcessRules); err != nil {
-			return fmt.Errorf("ошибка применения process rules: %w", err)
-		}
-	}
-
-	// 5. Сохраняем
-	return saveConfig(cfg, outputPath)
+	return GenerateRuntimeConfig(templatePath, secretPath, outputPath)
 }
 
-// applyProcessRules добавляет правила роутинга по процессам в конфиг XRay
-func applyProcessRules(cfg map[string]interface{}, rules []ProcessRule) error {
-	routing, ok := cfg["routing"].(map[string]interface{})
-	if !ok {
-		routing = map[string]interface{}{"domainStrategy": "IPIfNonMatch"}
-		cfg["routing"] = routing
-	}
-
-	existingRules, _ := routing["rules"].([]interface{})
-
-	// Группируем процессы по действию
-	proxyProcesses := []string{}
-	directProcesses := []string{}
-	blockProcesses := []string{}
-
-	for _, r := range rules {
-		switch r.Action {
-		case ProcessProxy:
-			proxyProcesses = append(proxyProcesses, r.ProcessName)
-		case ProcessDirect:
-			directProcesses = append(directProcesses, r.ProcessName)
-		case ProcessBlock:
-			blockProcesses = append(blockProcesses, r.ProcessName)
-		}
-	}
-
-	// Строим новые правила (process rules идут ПЕРВЫМИ — выше приоритет)
-	newRules := []interface{}{}
-
-	if len(blockProcesses) > 0 {
-		newRules = append(newRules, map[string]interface{}{
-			"type":         "field",
-			"process_name": blockProcesses,
-			"outboundTag":  "block",
-		})
-	}
-
-	if len(directProcesses) > 0 {
-		newRules = append(newRules, map[string]interface{}{
-			"type":         "field",
-			"process_name": directProcesses,
-			"outboundTag":  "direct",
-		})
-	}
-
-	if len(proxyProcesses) > 0 {
-		newRules = append(newRules, map[string]interface{}{
-			"type":         "field",
-			"process_name": proxyProcesses,
-			"outboundTag":  "proxy-out",
-		})
-	}
-
-	// Добавляем старые правила после process rules
-	newRules = append(newRules, existingRules...)
-	routing["rules"] = newRules
-
-	return nil
+// GenerateRuntimeConfigWithRouting — старый XRay генератор, оставлен для совместимости
+func GenerateRuntimeConfigWithRouting(templatePath, secretPath, outputPath string, routingCfg *RoutingConfig) error {
+	return GenerateRuntimeConfig(templatePath, secretPath, outputPath)
 }

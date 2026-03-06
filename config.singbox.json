@@ -1,0 +1,148 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "remote",
+        "type": "tls",
+        "server": "8.8.8.8",
+        "server_port": 853
+      },
+      {
+        "tag": "local",
+        "type": "udp",
+        "server": "1.1.1.1",
+        "server_port": 53
+      }
+    ],
+    "final": "remote"
+  },
+  "inbounds": [
+    {
+      "type": "http",
+      "tag": "http-in",
+      "listen": "127.0.0.1",
+      "listen_port": 10807,
+      "sniff": true,
+      "sniff_override_destination": true
+    },
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "sniff": true,
+      "sniff_override_destination": true,
+      "interface_name": "tun3",
+      "address": [
+        "172.20.0.1/30"
+      ],
+      "mtu": 9000,
+      "auto_route": true,
+      "stack": "mixed"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy-out",
+      "server": "46.22.211.24",
+      "server_port": 29528,
+      "uuid": "5bbf74e6-38ce-46d6-9279-376320662d55",
+      "tls": {
+        "enabled": true,
+        "server_name": "yahoo.com",
+        "reality": {
+          "enabled": true,
+          "public_key": "o2O8x21jRV5jCayKz_9j1emxzZZRVQ4YaA64zPaVnQc",
+          "short_id": "cb"
+        },
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "domain": [
+          "twitch.tv"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "process_name": [
+          "firefox.exe"
+        ],
+        "outbound": "proxy-out"
+      },
+      {
+        "outbound": "proxy-out",
+        "rule_set": [
+          "geosite-youtube",
+          "geosite-spotify",
+          "geosite-reddit",
+          "geosite-tiktok",
+          "geosite-instagram",
+          "geosite-discord",
+          "geosite-youtube",
+          "geosite-spotify",
+          "geosite-reddit",
+          "geosite-tiktok",
+          "geosite-instagram"
+        ]
+      }
+    ],
+    "rule_set": [
+      {
+        "type": "local",
+        "tag": "geosite-youtube",
+        "format": "binary",
+        "path": "geosite-youtube.bin"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-spotify",
+        "format": "binary",
+        "path": "geosite-spotify.bin"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-reddit",
+        "format": "binary",
+        "path": "geosite-reddit.bin"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-tiktok",
+        "format": "binary",
+        "path": "geosite-tiktok.bin"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-instagram",
+        "format": "binary",
+        "path": "geosite-instagram.bin"
+      },
+      {
+        "type": "local",
+        "tag": "geosite-discord",
+        "format": "binary",
+        "path": "geosite-discord.bin"
+      }
+    ],
+    "final": "direct",
+    "auto_detect_interface": true,
+    "default_domain_resolver": "local"
+  }
+}

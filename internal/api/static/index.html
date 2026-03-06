@@ -1,574 +1,636 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Proxy Control</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;700;800&display=swap');
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proxy Control</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap');
+        :root {
+            --bg:#0c0c12; --surface:#13131e; --surface2:#0f0f1a;
+            --border:#1f1f30; --border2:#2a2a40;
+            --on:#00e676; --off:#ff3d57; --pending:#ffb300;
+            --accent:#7c6cff; --block:#ff6b35;
+            --text:#dde0f0; --muted:#4a4a6a; --muted2:#6a6a8a;
+        }
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);
+            min-height:100vh;display:flex;align-items:flex-start;justify-content:center;
+            padding:36px 16px;overflow-x:hidden}
+        body::before{content:'';position:fixed;inset:0;pointer-events:none;
+            background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
+            linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
+            background-size:36px 36px}
+        .bg-glow{position:fixed;inset:0;pointer-events:none;transition:all 1s ease}
+        .bg-glow.on{background:radial-gradient(ellipse 60% 50% at 25% 40%,rgba(0,230,118,.05) 0%,transparent 70%)}
+        .bg-glow.off{background:radial-gradient(ellipse 60% 50% at 25% 40%,rgba(255,61,87,.04) 0%,transparent 70%)}
 
-  :root {
-    --bg: #0c0c12;
-    --surface: #13131e;
-    --border: #1f1f30;
-    --on: #00e676;
-    --off: #ff3d57;
-    --pending: #ffb300;
-    --text: #dde0f0;
-    --muted: #4a4a6a;
-    --glow-on: 0 0 40px rgba(0,230,118,0.25), 0 0 80px rgba(0,230,118,0.1);
-    --glow-off: 0 0 40px rgba(255,61,87,0.2);
-  }
+        .layout{position:relative;z-index:1;width:100%;max-width:920px;
+            display:grid;grid-template-columns:320px 1fr;grid-template-rows:auto 1fr;gap:14px;align-items:start}
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* Proxy card */
+        .proxy-card{grid-row:1/3;position:relative;background:var(--surface);
+            border:1px solid var(--border);border-radius:2px;padding:36px 32px 32px;
+            box-shadow:0 24px 80px rgba(0,0,0,.7)}
+        .conn-bar{position:absolute;top:0;left:0;right:0;height:2px;
+            background:linear-gradient(90deg,transparent,var(--muted),transparent);
+            background-size:200% 100%;animation:shimmer 2s infinite}
+        .conn-bar.ok{background:var(--on);animation:none}
+        .conn-bar.err{background:var(--off);animation:none}
+        @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+        .tag{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.22em;
+            color:var(--muted);text-transform:uppercase;margin-bottom:28px;
+            display:flex;align-items:center;gap:10px}
+        .tag::before{content:'';width:16px;height:1px;background:var(--border)}
+        .tag::after{content:'';flex:1;height:1px;background:var(--border)}
+        .status-block{text-align:center;margin-bottom:32px}
+        .ring-wrap{position:relative;width:108px;height:108px;margin:0 auto 22px;cursor:pointer}
+        .ring-wrap svg{position:absolute;inset:0;width:100%;height:100%;transform:rotate(-90deg)}
+        .ring-bg{fill:none;stroke:var(--border);stroke-width:3}
+        .ring-fill{fill:none;stroke-width:3;stroke-linecap:round;stroke-dasharray:276;stroke-dashoffset:276;
+            transition:stroke-dashoffset .8s cubic-bezier(.4,0,.2,1),stroke .4s ease}
+        .ring-fill.on{stroke:var(--on);stroke-dashoffset:0}
+        .ring-fill.off{stroke:var(--off);stroke-dashoffset:69}
+        .ring-fill.pend{stroke:var(--pending);animation:spin-fill 1s linear infinite}
+        @keyframes spin-fill{0%{stroke-dashoffset:207}100%{stroke-dashoffset:-69}}
+        .ring-btn{position:absolute;inset:12px;border-radius:50%;background:var(--bg);
+            border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;
+            justify-content:center;transition:all .3s;outline:none;user-select:none}
+        .ring-btn:hover:not(:disabled){background:rgba(255,255,255,.04);transform:scale(1.04)}
+        .ring-btn:active:not(:disabled){transform:scale(.97)}
+        .ring-btn:disabled{cursor:not-allowed;opacity:.6}
+        .pwr{width:26px;height:26px;transition:all .4s}
+        .pwr.on{color:var(--on);filter:drop-shadow(0 0 8px var(--on))}
+        .pwr.off{color:var(--off);filter:drop-shadow(0 0 6px var(--off))}
+        .pwr.pend{color:var(--pending);animation:spin 1s linear infinite}
+        @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+        .slabel{font-size:24px;font-weight:800;letter-spacing:-.02em;transition:color .4s;margin-bottom:4px}
+        .slabel.on{color:var(--on)}.slabel.off{color:var(--off)}.slabel.pend{color:var(--pending)}
+        .shint{font-family:'Space Mono',monospace;font-size:10px;color:var(--muted)}
+        .divider{height:1px;background:var(--border);margin-bottom:18px}
+        .meta{display:flex;flex-direction:column;gap:8px;margin-bottom:22px}
+        .mrow{display:flex;justify-content:space-between;align-items:center}
+        .mkey{font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase}
+        .mval{font-family:'Space Mono',monospace;font-size:11px;color:var(--text)}
+        .mval.hi{color:var(--on)}
+        .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:5px;vertical-align:middle}
+        .acts{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .btn{padding:10px;border:1px solid var(--border);border-radius:2px;background:transparent;
+            font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+            color:var(--muted);cursor:pointer;transition:all .2s;outline:none}
+        .btn:hover:not(:disabled){border-color:rgba(255,255,255,.15);color:var(--text);background:rgba(255,255,255,.03)}
+        .btn:disabled{opacity:.3;cursor:not-allowed}
+        .btn.bon:hover:not(:disabled){border-color:var(--on);color:var(--on)}
+        .btn.boff:hover:not(:disabled){border-color:var(--off);color:var(--off)}
+        .engine-badge{margin-top:18px;padding:8px 12px;background:var(--surface2);
+            border:1px solid var(--border);border-radius:2px;
+            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.1em;
+            color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:8px}
+        .engine-badge::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--accent)}
 
-  body {
-    font-family: 'Syne', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-    overflow: hidden;
-  }
+        /* Default panel */
+        .def-panel{background:var(--surface);border:1px solid var(--border);border-radius:2px;
+            padding:14px 18px;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+        .def-label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
+            color:var(--muted);text-transform:uppercase;margin-bottom:10px;
+            display:flex;align-items:center;gap:8px}
+        .def-label::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--muted2)}
+        .def-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+        .def-btn{padding:8px;border-radius:2px;border:1px solid var(--border);
+            background:transparent;font-family:'Space Mono',monospace;
+            font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+            color:var(--muted);cursor:pointer;transition:all .2s;outline:none}
+        .def-btn.ap{border-color:var(--on);color:var(--on);background:rgba(0,230,118,.08)}
+        .def-btn.ad{border-color:var(--muted2);color:var(--text);background:rgba(255,255,255,.04)}
+        .def-btn:hover:not(.ap):not(.ad){border-color:rgba(255,255,255,.15);color:var(--text)}
 
-  /* Фоновая сетка */
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
-    background-size: 36px 36px;
-    pointer-events: none;
-  }
+        /* Rules panel */
+        .rules-panel{background:var(--surface);border:1px solid var(--border);border-radius:2px;
+            display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.5);overflow:hidden;position:relative}
+        .rtop{position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent);opacity:.5}
+        .rhead{padding:14px 18px 12px;border-bottom:1px solid var(--border);
+            display:flex;align-items:center;justify-content:space-between}
+        .rtitle{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
+            color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:8px}
+        .rtitle::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.7}
+        .stats{display:flex;gap:6px}
+        .pill{font-family:'Space Mono',monospace;font-size:9px;padding:2px 7px;
+            border-radius:10px;border:1px solid var(--border);color:var(--muted);background:var(--surface2)}
+        .pill.pp{border-color:rgba(0,230,118,.3);color:var(--on);background:rgba(0,230,118,.05)}
+        .pill.pd{border-color:rgba(106,106,138,.4);color:var(--muted2)}
+        .pill.pb{border-color:rgba(255,107,53,.3);color:var(--block);background:rgba(255,107,53,.05)}
 
-  /* Фоновое свечение */
-  .bg-glow {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    transition: all 1s ease;
-  }
-  .bg-glow.state-on {
-    background:
-      radial-gradient(ellipse 50% 60% at 50% 50%, rgba(0,230,118,0.05) 0%, transparent 70%);
-  }
-  .bg-glow.state-off {
-    background:
-      radial-gradient(ellipse 50% 60% at 50% 50%, rgba(255,61,87,0.04) 0%, transparent 70%);
-  }
+        /* Add form */
+        .add-form{padding:12px 18px;border-bottom:1px solid var(--border)}
+        .type-row{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+        .tbtn{padding:3px 9px;border-radius:2px;border:1px solid var(--border);
+            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
+            text-transform:uppercase;color:var(--muted);cursor:pointer;background:transparent;
+            transition:all .15s;outline:none}
+        .tbtn:hover{border-color:var(--border2);color:var(--text)}
+        .tbtn.tsel{border-color:var(--accent);color:var(--accent);background:rgba(124,108,255,.1)}
+        .tbtn.tsel.tdom {border-color:var(--on);  color:var(--on);  background:rgba(0,230,118,.08)}
+        .tbtn.tsel.tproc{border-color:#b06cff;    color:#b06cff;    background:rgba(176,108,255,.08)}
+        .tbtn.tsel.tip  {border-color:#6cbfff;    color:#6cbfff;    background:rgba(108,191,255,.08)}
+        .tbtn.tsel.tgeo {border-color:#ffb300;    color:#ffb300;    background:rgba(255,179,0,.08)}
+        .inp-row{display:flex;gap:6px}
+        .inp-wrap{position:relative;flex:1}
+        .inp{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:2px;
+            padding:9px 10px 9px 28px;font-family:'Space Mono',monospace;font-size:11px;
+            color:var(--text);outline:none;transition:border-color .2s}
+        .inp::placeholder{color:var(--muted)}
+        .inp:focus{border-color:var(--accent)}
+        .inp-ico{position:absolute;left:8px;top:50%;transform:translateY(-50%);
+            color:var(--muted);pointer-events:none}
+        .inp-ico svg{width:13px;height:13px}
+        .sel{background:var(--surface2);border:1px solid var(--border);border-radius:2px;
+            padding:9px 7px;font-family:'Space Mono',monospace;font-size:10px;
+            color:var(--muted2);outline:none;cursor:pointer;min-width:72px;
+            appearance:none;text-align:center;transition:border-color .2s}
+        .sel:focus{border-color:var(--accent)}
+        .add-btn{background:rgba(124,108,255,.08);border:1px solid rgba(124,108,255,.3);
+            border-radius:2px;padding:9px 12px;font-family:'Space Mono',monospace;
+            font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
+            cursor:pointer;transition:all .2s;outline:none;white-space:nowrap}
+        .add-btn:hover{background:rgba(124,108,255,.16);border-color:var(--accent)}
+        .add-btn:active{transform:scale(.97)}
 
-  /* Карточка */
-  .card {
-    position: relative;
-    width: 380px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    padding: 44px 40px 40px;
-    box-shadow: 0 24px 80px rgba(0,0,0,0.7);
-  }
+        /* Filter bar */
+        .fbar{padding:7px 18px;border-bottom:1px solid var(--border);display:flex;gap:4px;flex-wrap:wrap}
+        .fbtn{padding:3px 9px;border-radius:2px;border:1px solid transparent;
+            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
+            text-transform:uppercase;color:var(--muted);cursor:pointer;background:transparent;
+            transition:all .15s;outline:none}
+        .fbtn:hover{color:var(--text)}
+        .fbtn.fa   {border-color:var(--border2);color:var(--text);background:rgba(255,255,255,.03)}
+        .fbtn.fp   {border-color:rgba(0,230,118,.4);  color:var(--on);   background:rgba(0,230,118,.06)}
+        .fbtn.fd   {border-color:rgba(106,106,138,.5);color:var(--muted2);background:rgba(255,255,255,.03)}
+        .fbtn.fb   {border-color:rgba(255,107,53,.4); color:var(--block);background:rgba(255,107,53,.06)}
+        .fbtn.fproc{border-color:rgba(176,108,255,.4);color:#b06cff;     background:rgba(176,108,255,.06)}
+        .fbtn.fdom {border-color:rgba(0,230,118,.4);  color:var(--on);   background:rgba(0,230,118,.06)}
+        .fbtn.fip  {border-color:rgba(108,191,255,.4);color:#6cbfff;     background:rgba(108,191,255,.06)}
+        .fbtn.fgeo {border-color:rgba(255,179,0,.4);  color:#ffb300;     background:rgba(255,179,0,.06)}
 
-  /* Верхний тег */
-  .tag {
-    font-family: 'Space Mono', monospace;
-    font-size: 9px;
-    letter-spacing: 0.22em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 36px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .tag::before {
-    content: '';
-    display: block;
-    width: 16px;
-    height: 1px;
-    background: var(--border);
-  }
-  .tag::after {
-    content: '';
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
+        /* Rules list */
+        .rlist{flex:1;overflow-y:auto;max-height:320px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .rlist::-webkit-scrollbar{width:3px}
+        .rlist::-webkit-scrollbar-thumb{background:var(--border2)}
+        .ritem{display:flex;align-items:center;padding:9px 18px;border-bottom:1px solid var(--border);
+            gap:9px;transition:background .15s;animation:fi .18s ease}
+        .ritem:last-child{border-bottom:none}
+        .ritem:hover{background:rgba(255,255,255,.02)}
+        @keyframes fi{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+        .rdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+        .rdot.proxy {background:var(--on);   box-shadow:0 0 4px var(--on)}
+        .rdot.direct{background:var(--muted2)}
+        .rdot.block {background:var(--block);box-shadow:0 0 4px var(--block)}
+        .rval{flex:1;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
+            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+        .rtype-icon{color:var(--muted);flex-shrink:0}
+        .rtype-icon svg{width:11px;height:11px}
+        .rtype-icon.tgeo {color:#ffb300}
+        .rtype-icon.tproc{color:#b06cff}
+        .rtype-icon.tip  {color:#6cbfff}
+        .rbadge{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;
+            text-transform:uppercase;padding:1px 6px;border-radius:2px;flex-shrink:0}
+        .rbadge.proxy {background:rgba(0,230,118,.1); color:var(--on);   border:1px solid rgba(0,230,118,.2)}
+        .rbadge.direct{background:rgba(255,255,255,.04);color:var(--muted2);border:1px solid rgba(106,106,138,.3)}
+        .rbadge.block {background:rgba(255,107,53,.1); color:var(--block);border:1px solid rgba(255,107,53,.2)}
+        .rdel{width:20px;height:20px;background:transparent;border:1px solid transparent;
+            border-radius:2px;color:var(--muted);cursor:pointer;display:flex;align-items:center;
+            justify-content:center;transition:all .2s;flex-shrink:0;outline:none;padding:0}
+        .rdel:hover{border-color:var(--off);color:var(--off);background:rgba(255,61,87,.08)}
+        .rdel svg{width:10px;height:10px}
 
-  /* Центральный блок статуса */
-  .status-block {
-    text-align: center;
-    margin-bottom: 40px;
-  }
+        /* Empty */
+        .rempty{padding:36px 18px;text-align:center}
+        .rempty-ico{width:34px;height:34px;margin:0 auto 12px;color:var(--border2)}
+        .rempty-ico svg{width:100%;height:100%}
+        .rempty-t{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:5px}
+        .rempty-h{font-family:'Space Mono',monospace;font-size:10px;color:var(--border2);line-height:1.7}
 
-  /* Большая кнопка-переключатель */
-  .toggle-ring {
-    position: relative;
-    width: 120px;
-    height: 120px;
-    margin: 0 auto 28px;
-    cursor: pointer;
-  }
+        /* Footer */
+        .rfoot{padding:9px 18px;border-top:1px solid var(--border);
+            display:flex;justify-content:space-between;align-items:center}
+        .fhint{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted)}
+        .apply-btn{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.25);
+            border-radius:2px;padding:7px 13px;font-family:'Space Mono',monospace;font-size:10px;
+            letter-spacing:.1em;text-transform:uppercase;color:var(--on);cursor:pointer;
+            transition:all .2s;outline:none;display:flex;align-items:center;gap:5px}
+        .apply-btn:hover:not(:disabled){background:rgba(0,230,118,.16);border-color:var(--on)}
+        .apply-btn:disabled{opacity:.3;cursor:not-allowed}
+        .adot{width:5px;height:5px;border-radius:50%;background:var(--on)}
+        .apply-btn.dirty .adot{animation:blink 1s infinite}
+        .apply-btn.applying{animation:pg 1s infinite}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+        @keyframes pg{0%,100%{box-shadow:none}50%{box-shadow:0 0 8px 2px rgba(0,230,118,.2)}}
 
-  .toggle-ring svg {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    transform: rotate(-90deg);
-  }
+        .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(14px);
+            background:var(--surface);border:1px solid var(--border);border-radius:2px;
+            padding:9px 16px;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
+            opacity:0;transition:all .3s;pointer-events:none;white-space:nowrap;z-index:100}
+        .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+        .toast.err{border-color:var(--off);color:var(--off)}
+        .toast.ok{border-color:var(--on);color:var(--on)}
+        .toast.inf{border-color:var(--accent);color:var(--accent)}
 
-  .ring-bg {
-    fill: none;
-    stroke: var(--border);
-    stroke-width: 3;
-  }
-
-  .ring-fill {
-    fill: none;
-    stroke-width: 3;
-    stroke-linecap: round;
-    stroke-dasharray: 307;
-    stroke-dashoffset: 307;
-    transition: stroke-dashoffset 0.8s cubic-bezier(0.4, 0, 0.2, 1),
-                stroke 0.4s ease;
-  }
-
-  .ring-fill.state-on {
-    stroke: var(--on);
-    stroke-dashoffset: 0;
-  }
-
-  .ring-fill.state-off {
-    stroke: var(--off);
-    stroke-dashoffset: 77; /* 25% пустого */
-  }
-
-  .ring-fill.state-pending {
-    stroke: var(--pending);
-    animation: spin-fill 1s linear infinite;
-  }
-
-  @keyframes spin-fill {
-    0% { stroke-dashoffset: 230; }
-    100% { stroke-dashoffset: -77; }
-  }
-
-  /* Кнопка внутри кольца */
-  .toggle-btn {
-    position: absolute;
-    inset: 12px;
-    border-radius: 50%;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.3s ease;
-    outline: none;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .toggle-btn:hover:not(:disabled) {
-    background: rgba(255,255,255,0.04);
-    transform: scale(1.04);
-  }
-
-  .toggle-btn:active:not(:disabled) {
-    transform: scale(0.97);
-  }
-
-  .toggle-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-
-  /* Иконка питания */
-  .power-icon {
-    width: 32px;
-    height: 32px;
-    transition: all 0.4s ease;
-  }
-
-  .power-icon.state-on { color: var(--on); filter: drop-shadow(0 0 8px var(--on)); }
-  .power-icon.state-off { color: var(--off); filter: drop-shadow(0 0 6px var(--off)); }
-  .power-icon.state-pending { color: var(--pending); animation: spin 1s linear infinite; }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-
-  /* Текст статуса */
-  .status-label {
-    font-size: 28px;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    transition: color 0.4s ease;
-    margin-bottom: 6px;
-  }
-  .status-label.state-on { color: var(--on); }
-  .status-label.state-off { color: var(--off); }
-  .status-label.state-pending { color: var(--pending); }
-
-  .status-hint {
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  /* Разделитель */
-  .divider {
-    height: 1px;
-    background: var(--border);
-    margin-bottom: 24px;
-  }
-
-  /* Мета-информация */
-  .meta-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-bottom: 28px;
-  }
-
-  .meta-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .meta-key {
-    font-family: 'Space Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    text-transform: uppercase;
-  }
-
-  .meta-val {
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
-    color: var(--text);
-  }
-
-  .meta-val.highlight {
-    color: var(--on);
-  }
-
-  .meta-val .dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
-    margin-right: 6px;
-    vertical-align: middle;
-  }
-
-  /* Кнопки действий */
-  .actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-  .btn {
-    padding: 12px;
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    background: transparent;
-    font-family: 'Space Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--muted);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    outline: none;
-  }
-
-  .btn:hover:not(:disabled) {
-    border-color: rgba(255,255,255,0.15);
-    color: var(--text);
-    background: rgba(255,255,255,0.03);
-  }
-
-  .btn:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-
-  .btn.btn-on:hover:not(:disabled) {
-    border-color: var(--on);
-    color: var(--on);
-  }
-
-  .btn.btn-off:hover:not(:disabled) {
-    border-color: var(--off);
-    color: var(--off);
-  }
-
-  /* Уведомление */
-  .toast {
-    position: fixed;
-    bottom: 32px;
-    left: 50%;
-    transform: translateX(-50%) translateY(20px);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    padding: 12px 20px;
-    font-family: 'Space Mono', monospace;
-    font-size: 11px;
-    color: var(--text);
-    opacity: 0;
-    transition: all 0.3s ease;
-    pointer-events: none;
-    white-space: nowrap;
-    z-index: 100;
-  }
-
-  .toast.show {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-
-  .toast.error { border-color: var(--off); color: var(--off); }
-  .toast.success { border-color: var(--on); color: var(--on); }
-
-  /* Индикатор соединения */
-  .conn-bar {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--muted), transparent);
-    background-size: 200% 100%;
-    animation: shimmer 2s infinite;
-  }
-
-  .conn-bar.connected { background: var(--on); animation: none; }
-  .conn-bar.disconnected { background: var(--off); animation: none; }
-
-  @keyframes shimmer {
-    0% { background-position: -200% 0; }
-    100% { background-position: 200% 0; }
-  }
-</style>
+        @media(max-width:700px){
+            .layout{grid-template-columns:1fr;grid-template-rows:auto;max-width:420px}
+            .proxy-card{grid-row:auto}
+        }
+    </style>
 </head>
 <body>
+<div class="bg-glow off" id="bg"></div>
+<div class="layout">
 
-<div class="bg-glow" id="bgGlow"></div>
-
-<div class="card">
-  <div class="conn-bar" id="connBar"></div>
-
-  <div class="tag">proxy control panel</div>
-
-  <!-- Главная кнопка -->
-  <div class="status-block">
-    <div class="toggle-ring" id="toggleRing" onclick="toggleProxy()">
-      <svg viewBox="0 0 100 100">
-        <circle class="ring-bg" cx="50" cy="50" r="48.5"/>
-        <circle class="ring-fill" id="ringFill" cx="50" cy="50" r="48.5"/>
-      </svg>
-      <button class="toggle-btn" id="toggleBtn" aria-label="Переключить прокси">
-        <!-- Power icon -->
-        <svg class="power-icon state-off" id="powerIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
-          <line x1="12" y1="2" x2="12" y2="12"/>
-        </svg>
-      </button>
+    <!-- Proxy card -->
+    <div class="proxy-card">
+        <div class="conn-bar" id="cb"></div>
+        <div class="tag">proxy control panel</div>
+        <div class="status-block">
+            <div class="ring-wrap" onclick="toggleProxy()">
+                <svg viewBox="0 0 100 100">
+                    <circle class="ring-bg" cx="50" cy="50" r="44"/>
+                    <circle class="ring-fill off" id="rf" cx="50" cy="50" r="44"/>
+                </svg>
+                <button class="ring-btn" id="rb">
+                    <svg class="pwr off" id="pi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="slabel off" id="sl">ОТКЛЮЧЁН</div>
+            <div class="shint" id="sh">нажмите для включения</div>
+        </div>
+        <div class="divider"></div>
+        <div class="meta">
+            <div class="mrow"><span class="mkey">адрес</span><span class="mval" id="ma">—</span></div>
+            <div class="mrow"><span class="mkey">движок</span><span class="mval" id="me">—</span></div>
+            <div class="mrow"><span class="mkey">pid</span><span class="mval" id="mp">—</span></div>
+        </div>
+        <div class="acts">
+            <button class="btn bon" id="be" onclick="enableProxy()">Включить</button>
+            <button class="btn boff" id="bd" onclick="disableProxy()">Отключить</button>
+        </div>
+        <div class="engine-badge">sing-box · vless · reality</div>
     </div>
 
-    <div class="status-label state-off" id="statusLabel">ОТКЛЮЧЁН</div>
-    <div class="status-hint" id="statusHint">нажмите для включения</div>
-  </div>
-
-  <div class="divider"></div>
-
-  <!-- Мета-данные -->
-  <div class="meta-list">
-    <div class="meta-row">
-      <span class="meta-key">адрес</span>
-      <span class="meta-val" id="metaAddress">—</span>
+    <!-- Default panel -->
+    <div class="def-panel">
+        <div class="def-label">трафик по умолчанию</div>
+        <div class="def-row">
+            <button class="def-btn ap" id="dp" onclick="setDefault('proxy')">● через прокси</button>
+            <button class="def-btn"    id="dd" onclick="setDefault('direct')">○ напрямую</button>
+        </div>
     </div>
-    <div class="meta-row">
-      <span class="meta-key">xray</span>
-      <span class="meta-val" id="metaXray">—</span>
-    </div>
-    <div class="meta-row">
-      <span class="meta-key">pid</span>
-      <span class="meta-val" id="metaPid">—</span>
-    </div>
-  </div>
 
-  <!-- Кнопки -->
-  <div class="actions">
-    <button class="btn btn-on" id="btnEnable" onclick="enableProxy()">Включить</button>
-    <button class="btn btn-off" id="btnDisable" onclick="disableProxy()">Отключить</button>
-  </div>
+    <!-- Rules panel -->
+    <div class="rules-panel">
+        <div class="rtop"></div>
+        <div class="rhead">
+            <span class="rtitle">правила маршрутизации</span>
+            <div class="stats">
+                <span class="pill pp" id="sp">0 proxy</span>
+                <span class="pill pd" id="sd">0 direct</span>
+                <span class="pill pb" id="sb">0 block</span>
+            </div>
+        </div>
+
+        <!-- Add form -->
+        <div class="add-form">
+            <div class="type-row">
+                <button class="tbtn tsel" id="tAuto"  onclick="setType('auto')">auto</button>
+                <button class="tbtn"      id="tDom"   onclick="setType('domain')">домен</button>
+                <button class="tbtn"      id="tProc"  onclick="setType('process')">.exe</button>
+                <button class="tbtn"      id="tIP"    onclick="setType('ip')">ip/cidr</button>
+                <button class="tbtn"      id="tGeo"   onclick="setType('geosite')">geosite</button>
+            </div>
+            <div class="inp-row">
+                <div class="inp-wrap">
+                    <input class="inp" id="ai" type="text"
+                           placeholder="chrome.exe · google.com · 8.8.8.8 · geosite:discord"
+                           autocomplete="off" spellcheck="false"
+                           onkeydown="if(event.key==='Enter')addRule()"/>
+                    <span class="inp-ico">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </span>
+                </div>
+                <select class="sel" id="as">
+                    <option value="proxy">proxy</option>
+                    <option value="direct">direct</option>
+                    <option value="block">block</option>
+                </select>
+                <button class="add-btn" onclick="addRule()">+ add</button>
+            </div>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="fbar">
+            <button class="fbtn fa" id="fAll"   onclick="setFilter('all')">все</button>
+            <button class="fbtn"    id="fProxy" onclick="setFilter('proxy')">proxy</button>
+            <button class="fbtn"    id="fDirect"onclick="setFilter('direct')">direct</button>
+            <button class="fbtn"    id="fBlock" onclick="setFilter('block')">block</button>
+            <button class="fbtn"    id="fProc"  onclick="setFilter('process')">.exe</button>
+            <button class="fbtn"    id="fDom"   onclick="setFilter('domain')">домены</button>
+            <button class="fbtn"    id="fIP"    onclick="setFilter('ip')">ip</button>
+            <button class="fbtn"    id="fGeo"   onclick="setFilter('geosite')">geosite</button>
+        </div>
+
+        <div class="rlist" id="rl">
+            <div class="rempty" id="re">
+                <div class="rempty-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg>
+                </div>
+                <div class="rempty-t">нет правил</div>
+                <div class="rempty-h">
+                    <b>chrome.exe</b> — процесс через TUN<br>
+                    <b>google.com</b> — домен<br>
+                    <b>8.8.8.8</b> или <b>10.0.0.0/8</b> — IP/CIDR<br>
+                    <b>geosite:discord</b> — категория доменов
+                </div>
+            </div>
+        </div>
+
+        <div class="rfoot">
+            <span class="fhint" id="fh">—</span>
+            <button class="apply-btn" id="ab" onclick="applyRules()" disabled>
+                <span class="adot"></span>apply
+            </button>
+        </div>
+    </div>
 </div>
-
 <div class="toast" id="toast"></div>
 
 <script>
-  // ─── Конфигурация ───────────────────────────────────────────────────
-  const API_BASE = 'http://localhost:8080/api';
-  const POLL_INTERVAL = 3000; // Опрос статуса каждые 3 сек
+    const API='http://localhost:8080/api', POLL=3000;
+    let ps={enabled:false,xray:false,pid:0,addr:'',pending:false,conn:false};
+    let rules=[], defAction='proxy', dirty=false, filter='all';
+    let selectedType='auto';
+    const $=id=>document.getElementById(id);
 
-  // ─── Состояние ──────────────────────────────────────────────────────
-  let state = {
-    proxyEnabled: false,
-    xrayRunning: false,
-    pid: 0,
-    address: '',
-    pending: false,
-    connected: false,
-  };
+    // ── Type selector ─────────────────────────────────────────
+    const TYPE_CFG={
+        auto:   {id:'tAuto', cls:'',      ph:'chrome.exe · google.com · 8.8.8.8 · geosite:discord'},
+        domain: {id:'tDom',  cls:'tdom',  ph:'google.com · .discord.com · example.org'},
+        process:{id:'tProc', cls:'tproc', ph:'chrome.exe · discord.exe · spotify.exe'},
+        ip:     {id:'tIP',   cls:'tip',   ph:'8.8.8.8 · 10.0.0.0/8 · 192.168.1.0/24'},
+        geosite:{id:'tGeo',  cls:'tgeo',  ph:'discord · youtube · spotify · reddit · tiktok'},
+    };
 
-  // ─── DOM элементы ───────────────────────────────────────────────────
-  const bgGlow    = document.getElementById('bgGlow');
-  const connBar   = document.getElementById('connBar');
-  const ringFill  = document.getElementById('ringFill');
-  const toggleBtn = document.getElementById('toggleBtn');
-  const powerIcon = document.getElementById('powerIcon');
-  const statusLabel = document.getElementById('statusLabel');
-  const statusHint  = document.getElementById('statusHint');
-  const metaAddress = document.getElementById('metaAddress');
-  const metaXray    = document.getElementById('metaXray');
-  const metaPid     = document.getElementById('metaPid');
-  const btnEnable   = document.getElementById('btnEnable');
-  const btnDisable  = document.getElementById('btnDisable');
-  const toast       = document.getElementById('toast');
-
-  // ─── Обновление UI ──────────────────────────────────────────────────
-  function render() {
-    const s = state.pending ? 'pending' : (state.proxyEnabled ? 'on' : 'off');
-
-    // Фон
-    bgGlow.className = `bg-glow state-${state.proxyEnabled ? 'on' : 'off'}`;
-
-    // Полоска соединения
-    if (!state.connected) {
-      connBar.className = 'conn-bar';
-    } else {
-      connBar.className = `conn-bar connected`;
+    function setType(t){
+        selectedType=t;
+        Object.entries(TYPE_CFG).forEach(([k,c])=>{
+            const el=$(c.id);
+            el.className='tbtn'+(k===t?' tsel '+(c.cls||''):'');
+        });
+        $('ai').placeholder=TYPE_CFG[t]?.ph||'';
+        $('ai').focus();
     }
 
-    // Кольцо и иконка
-    ringFill.className = `ring-fill state-${s}`;
-    powerIcon.className = `power-icon state-${s}`;
-
-    // Лейбл
-    statusLabel.className = `status-label state-${s}`;
-    if (state.pending) {
-      statusLabel.textContent = 'ОЖИДАНИЕ...';
-      statusHint.textContent = 'выполняется операция';
-    } else if (state.proxyEnabled) {
-      statusLabel.textContent = 'ВКЛЮЧЁН';
-      statusHint.textContent = 'нажмите для отключения';
-    } else {
-      statusLabel.textContent = 'ОТКЛЮЧЁН';
-      statusHint.textContent = 'нажмите для включения';
+    // ── Proxy render ──────────────────────────────────────────
+    function renderProxy(){
+        const s=ps.pending?'pend':(ps.enabled?'on':'off');
+        $('bg').className='bg-glow '+(ps.enabled?'on':'off');
+        $('cb').className='conn-bar '+(ps.conn?'ok':'err');
+        $('rf').className='ring-fill '+s;
+        $('pi').className='pwr '+s;
+        $('sl').className='slabel '+s;
+        if(ps.pending){$('sl').textContent='ОЖИДАНИЕ...';$('sh').textContent='выполняется операция'}
+        else if(ps.enabled){$('sl').textContent='ВКЛЮЧЁН';$('sh').textContent='нажмите для отключения'}
+        else{$('sl').textContent='ОТКЛЮЧЁН';$('sh').textContent='нажмите для включения'}
+        $('ma').textContent=ps.addr||'—';$('ma').className='mval'+(ps.enabled?' hi':'');
+        $('me').innerHTML=ps.xray?'<span class="dot" style="color:var(--on)"></span>running':'<span class="dot" style="color:var(--off)"></span>stopped';
+        $('mp').textContent=ps.pid||'—';
+        const b=ps.pending;
+        $('rb').disabled=b||!ps.conn;$('be').disabled=b||ps.enabled||!ps.conn;$('bd').disabled=b||!ps.enabled||!ps.conn;
     }
 
-    // Мета
-    metaAddress.textContent = state.address || '—';
-    metaAddress.className = state.proxyEnabled ? 'meta-val highlight' : 'meta-val';
-
-    metaXray.innerHTML = state.xrayRunning
-      ? '<span class="dot" style="color:var(--on)"></span>running'
-      : '<span class="dot" style="color:var(--off)"></span>stopped';
-
-    metaPid.textContent = state.pid > 0 ? state.pid : '—';
-
-    // Кнопки
-    const busy = state.pending;
-    toggleBtn.disabled = busy || !state.connected;
-    btnEnable.disabled  = busy || state.proxyEnabled || !state.connected;
-    btnDisable.disabled = busy || !state.proxyEnabled || !state.connected;
-  }
-
-  // ─── Toast уведомления ──────────────────────────────────────────────
-  let toastTimer = null;
-  function showToast(text, type = '') {
-    clearTimeout(toastTimer);
-    toast.textContent = text;
-    toast.className = `toast ${type} show`;
-    toastTimer = setTimeout(() => { toast.className = 'toast'; }, 2500);
-  }
-
-  // ─── API вызовы ─────────────────────────────────────────────────────
-  async function fetchStatus() {
-    try {
-      const res = await fetch(`${API_BASE}/status`, { signal: AbortSignal.timeout(4000) });
-      const data = await res.json();
-
-      state.connected = true;
-      state.proxyEnabled = data.proxy?.enabled ?? false;
-      state.xrayRunning  = data.xray?.running ?? false;
-      state.pid          = data.xray?.pid ?? 0;
-      state.address      = data.proxy?.address ?? '';
-
-      connBar.className = 'conn-bar connected';
-    } catch {
-      state.connected = false;
-      connBar.className = 'conn-bar disconnected';
+    // ── Default render ────────────────────────────────────────
+    function renderDef(){
+        $('dp').className='def-btn'+(defAction==='proxy'?' ap':'');
+        $('dd').className='def-btn'+(defAction==='direct'?' ad':'');
     }
-    render();
-  }
 
-  async function apiPost(endpoint) {
-    state.pending = true;
-    render();
-    try {
-      const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST',
-        signal: AbortSignal.timeout(6000),
-      });
-      const data = await res.json();
-
-      if (!res.ok) {
-        showToast(data.error || 'Ошибка', 'error');
-      } else {
-        showToast(data.message || 'Готово', 'success');
-      }
-    } catch {
-      showToast('Нет соединения с сервером', 'error');
-    } finally {
-      state.pending = false;
-      await fetchStatus();
+    // ── Type icon ─────────────────────────────────────────────
+    function typeIcon(type){
+        if(type==='process')return{cls:'tproc',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`};
+        if(type==='ip')     return{cls:'tip',  svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>`};
+        if(type==='geosite')return{cls:'tgeo', svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>`};
+        return{cls:'',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`};
     }
-  }
 
-  // ─── Действия ───────────────────────────────────────────────────────
-  function toggleProxy() {
-    if (state.pending || !state.connected) return;
-    apiPost('/proxy/toggle');
-  }
+    // ── Rules render ──────────────────────────────────────────
+    function renderRules(){
+        $('rl').querySelectorAll('.ritem').forEach(e=>e.remove());
+        const cnt={proxy:0,direct:0,block:0};
+        rules.forEach(r=>{if(cnt[r.action]!==undefined)cnt[r.action]++});
+        $('sp').textContent=cnt.proxy+' proxy';
+        $('sd').textContent=cnt.direct+' direct';
+        $('sb').textContent=cnt.block+' block';
 
-  function enableProxy() {
-    if (state.pending || state.proxyEnabled || !state.connected) return;
-    apiPost('/proxy/enable');
-  }
+        let vis=rules;
+        if(filter==='proxy')   vis=rules.filter(r=>r.action==='proxy');
+        else if(filter==='direct')  vis=rules.filter(r=>r.action==='direct');
+        else if(filter==='block')   vis=rules.filter(r=>r.action==='block');
+        else if(filter==='process') vis=rules.filter(r=>r.type==='process');
+        else if(filter==='domain')  vis=rules.filter(r=>r.type==='domain');
+        else if(filter==='ip')      vis=rules.filter(r=>r.type==='ip');
+        else if(filter==='geosite') vis=rules.filter(r=>r.type==='geosite');
 
-  function disableProxy() {
-    if (state.pending || !state.proxyEnabled || !state.connected) return;
-    apiPost('/proxy/disable');
-  }
+        $('re').style.display=vis.length===0?'':'none';
+        vis.forEach(r=>{
+            const ico=typeIcon(r.type);
+            const el=document.createElement('div');
+            el.className='ritem';
+            el.innerHTML=`
+      <div class="rdot ${r.action}"></div>
+      <span class="rtype-icon ${ico.cls}">${ico.svg}</span>
+      <div class="rval">${esc(r.value)}</div>
+      <span class="rbadge ${r.action}">${r.action}</span>
+      <button class="rdel" onclick="removeRule('${esc(r.value)}')" title="Удалить">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>`;
+            $('rl').appendChild(el);
+        });
 
-  // ─── Запуск ─────────────────────────────────────────────────────────
-  fetchStatus();
-  setInterval(fetchStatus, POLL_INTERVAL);
+        $('ab').disabled=!dirty||!ps.conn;
+        $('ab').className='apply-btn'+(dirty?' dirty':'');
+        $('fh').textContent=dirty?'есть несохранённые изменения':'всё применено';
+
+        const fmap={
+            all:    ['fAll','fa'],    proxy:  ['fProxy','fp'],
+            direct: ['fDirect','fd'], block:  ['fBlock','fb'],
+            process:['fProc','fproc'],domain: ['fDom','fdom'],
+            ip:     ['fIP','fip'],    geosite:['fGeo','fgeo'],
+        };
+        Object.entries(fmap).forEach(([f,[id,cls]])=>{
+            $(id).className='fbtn'+(filter===f?' '+cls:'');
+        });
+    }
+
+    function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+    // ── Toast ─────────────────────────────────────────────────
+    let tt;
+    function toast(text,type=''){
+        clearTimeout(tt);const t=$('toast');
+        t.textContent=text;t.className='toast '+type+' show';
+        tt=setTimeout(()=>t.className='toast',2500);
+    }
+
+    // ── Fetch status ──────────────────────────────────────────
+    async function fetchStatus(){
+        try{
+            const r=await fetch(`${API}/status`,{signal:AbortSignal.timeout(4000)});
+            const d=await r.json();
+            ps.conn=true;ps.enabled=d.proxy?.enabled??false;
+            ps.xray=d.xray?.running??false;ps.pid=d.xray?.pid??0;ps.addr=d.proxy?.address??'';
+        }catch{ps.conn=false}
+        renderProxy();
+    }
+
+    // ── Fetch rules ───────────────────────────────────────────
+    async function fetchRules(){
+        try{
+            const r=await fetch(`${API}/tun/rules`,{signal:AbortSignal.timeout(4000)});
+            if(!r.ok)return;
+            const d=await r.json();
+            rules=Array.isArray(d.rules)?d.rules:[];
+            defAction=d.default_action||'proxy';
+            dirty=false;
+        }catch{}
+        renderDef();renderRules();
+    }
+
+    // ── Proxy actions ─────────────────────────────────────────
+    async function apiPost(ep){
+        ps.pending=true;renderProxy();
+        try{
+            const r=await fetch(`${API}${ep}`,{method:'POST',signal:AbortSignal.timeout(6000)});
+            const d=await r.json();
+            toast(r.ok?(d.message||'Готово'):(d.error||'Ошибка'),r.ok?'ok':'err');
+        }catch{toast('Нет соединения','err')}
+        finally{ps.pending=false;await fetchStatus()}
+    }
+    function toggleProxy(){if(!ps.pending&&ps.conn)apiPost('/proxy/toggle')}
+    function enableProxy(){if(!ps.pending&&!ps.enabled&&ps.conn)apiPost('/proxy/enable')}
+    function disableProxy(){if(!ps.pending&&ps.enabled&&ps.conn)apiPost('/proxy/disable')}
+
+    // ── Default ───────────────────────────────────────────────
+    async function setDefault(action){
+        if(defAction===action)return;
+        const prev=defAction;defAction=action;dirty=true;renderDef();renderRules();
+        try{
+            const r=await fetch(`${API}/tun/default`,{method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({action}),signal:AbortSignal.timeout(4000)});
+            if(!r.ok){defAction=prev;renderDef();toast('Ошибка сохранения','err')}
+        }catch{defAction=prev;renderDef();toast('Нет соединения','err')}
+    }
+
+    // ── Filter ────────────────────────────────────────────────
+    function setFilter(f){filter=f;renderRules()}
+
+    // ── Detect type ───────────────────────────────────────────
+    function detectType(v){
+        if(selectedType!=='auto')return selectedType;
+        if(v.endsWith('.exe'))return'process';
+        if(v.startsWith('geosite:'))return'geosite';
+        if(/^[\d.]+\/\d+$/.test(v)||/^[\d.]+$/.test(v))return'ip';
+        return'domain';
+    }
+
+    // ── Add rule ──────────────────────────────────────────────
+    function addRule(){
+        let v=$('ai').value.trim();
+        if(!v){$('ai').focus();return}
+
+        const t=detectType(v);
+
+        if(t==='geosite'){
+            v=v.replace(/^geosite:/i,'').toLowerCase().trim();
+            if(!v){toast('Введите название категории','err');return}
+            v='geosite:'+v;
+        } else if(t==='process'){
+            v=v.toLowerCase().trim();
+            if(!v.endsWith('.exe'))v+='.exe';
+        } else {
+            v=v.replace(/^https?:\/\//i,'').replace(/\/.*$/,'').toLowerCase().trim();
+        }
+
+        if(!v){toast('Введите значение','err');return}
+        const action=$('as').value;
+        if(rules.some(r=>r.value===v)){toast(`${v} уже в списке`,'err');return}
+        rules.push({value:v,type:t,action,note:''});
+        dirty=true;$('ai').value='';$('ai').focus();renderRules();
+        toast(`+ ${v}`,'inf');
+    }
+
+    // ── Remove rule ───────────────────────────────────────────
+    function removeRule(v){
+        rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();
+    }
+
+    // ── Apply ─────────────────────────────────────────────────
+    async function applyRules(){
+        if(!dirty||!ps.conn)return;
+        const btn=$('ab');
+        btn.disabled=true;btn.className='apply-btn applying';
+        btn.innerHTML='<span class="adot"></span>applying...';
+
+        try{
+            const cr=await fetch(`${API}/tun/rules`,{signal:AbortSignal.timeout(4000)});
+            const cd=await cr.json();
+            const srv=Array.isArray(cd.rules)?cd.rules:[];
+
+            for(const sr of srv){
+                const local=rules.find(r=>r.value===sr.value);
+                if(!local||local.action!==sr.action){
+                    await fetch(`${API}/tun/rules/${encodeURIComponent(sr.value)}`,
+                        {method:'DELETE',signal:AbortSignal.timeout(5000)});
+                }
+            }
+            for(const r of rules){
+                const srv_r=srv.find(sr=>sr.value===r.value);
+                if(!srv_r||srv_r.action!==r.action){
+                    const res=await fetch(`${API}/tun/rules`,{method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body:JSON.stringify({value:r.value,type:r.type,action:r.action,note:r.note||''}),
+                        signal:AbortSignal.timeout(5000)});
+                    if(!res.ok){
+                        const d=await res.json().catch(()=>({}));
+                        toast(d.error||`Ошибка: ${r.value}`,'err');
+                        btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
+                        await fetchRules();return;
+                    }
+                }
+            }
+            const ar=await fetch(`${API}/tun/apply`,{method:'POST',signal:AbortSignal.timeout(20000)});
+            if(!ar.ok){
+                const d=await ar.json().catch(()=>({}));
+                toast(d.error||'Ошибка применения','err');
+            }else{
+                toast('Применено ✓','ok');dirty=false;
+            }
+        }catch(e){toast('Ошибка: '+e.message,'err')}
+
+        btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
+        await fetchRules();
+    }
+
+    // ── Init ──────────────────────────────────────────────────
+    async function init(){await fetchStatus();await fetchRules()}
+    init();
+    setInterval(async()=>{await fetchStatus();if(!dirty)await fetchRules()},POLL);
 </script>
 </body>
 </html>
