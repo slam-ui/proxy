@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"proxyclient/internal/api"
@@ -16,16 +14,17 @@ import (
 	"proxyclient/internal/logger"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/tray"
+	"proxyclient/internal/window"
 	"proxyclient/internal/xray"
 )
 
 const (
-	templateFile     = "config.template.json"
 	secretFile       = "secret.key"
 	runtimeFile      = "config.runtime.json"
 	appRulesFile     = "app_rules.json"
-	xrayExecutable   = "./xray_core/xray.exe"
 	apiListenAddress = ":8080"
+	webUIURL         = "http://localhost:8080"
 	shutdownTimeout  = 10 * time.Second
 )
 
@@ -43,16 +42,10 @@ func run() error {
 
 	appLogger.Info("Запуск прокси-клиента...")
 
-	// 1. Генерируем конфигурацию
-	appLogger.Info("Генерация конфигурации...")
-
-	appLogger.Info("Конфигурация успешно сгенерирована")
-
-	// 2. Прокси-менеджер
+	// 1. Прокси-менеджер
 	proxyManager := proxy.NewManager(appLogger)
 
-	// 3. Включаем системный прокси
-	appLogger.Info("Включение системного прокси...")
+	// 2. Включаем системный прокси
 	proxyConfig := proxy.Config{
 		Address:  "127.0.0.1:10807",
 		Override: "<local>",
@@ -62,12 +55,12 @@ func run() error {
 	} else {
 		appLogger.Info("Системный прокси включён: %s", proxyConfig.Address)
 	}
+
 	// Очистка старого TUN перед запуском
 	exec.Command("netsh", "interface", "delete", "interface", "tun0").Run()
 
-	// 4. Запускаем XRay
+	// 3. Запускаем sing-box
 	appLogger.Info("Запуск XRay...")
-	// Генерируем начальный sing-box конфиг
 	routingCfg, _ := config.LoadRoutingConfig("routing.json")
 	if err := config.GenerateSingBoxConfig(secretFile, "config.singbox.json", routingCfg); err != nil {
 		appLogger.Warn("Не удалось сгенерировать sing-box конфиг: %v", err)
@@ -76,7 +69,7 @@ func run() error {
 	xrayCfg := xray.Config{
 		ExecutablePath: "./sing-box.exe",
 		ConfigPath:     "config.singbox.json",
-		Args:           []string{"run"}, // ← добавить это
+		Args:           []string{"run"},
 		Logger:         appLogger,
 	}
 	xrayManager, err := xray.NewManager(xrayCfg)
@@ -86,8 +79,7 @@ func run() error {
 	}
 	appLogger.Info("XRay запущен (PID: %d)", xrayManager.GetPID())
 
-	// 5. Per-app proxy
-	appLogger.Info("Инициализация per-app proxy...")
+	// 4. Per-app proxy
 	storage := apprules.NewFileStorage(appRulesFile)
 	rulesEngine, err := apprules.NewPersistentEngine(storage)
 	if err != nil {
@@ -108,10 +100,9 @@ func run() error {
 			appLogger.Info("Process monitor запущен")
 		}
 		processLauncher = process.NewLauncher(appLogger, rulesEngine)
-		appLogger.Info("Per-app proxy инициализирован")
 	}
 
-	// 6. API сервер
+	// 5. API сервер
 	apiServer := api.NewServer(api.Config{
 		ListenAddress: apiListenAddress,
 		XRayManager:   xrayManager,
@@ -120,67 +111,80 @@ func run() error {
 		Logger:        appLogger,
 	})
 
-	// Регистрируем маршруты — порядок важен, статика всегда последняя
 	apiServer.SetupTunRoutes(xrayCfg)
-	appLogger.Info("TUN routes зарегистрированы")
-
 	if rulesEngine != nil && processMonitor != nil && processLauncher != nil {
 		apiServer.SetupAppProxyRoutes(rulesEngine, processMonitor, processLauncher)
-		appLogger.Info("Per-app proxy routes зарегистрированы")
 	}
+	apiServer.FinalizeRoutes()
 
-	apiServer.FinalizeRoutes() // статика — последней
-
-	// 7. Запускаем сервер
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	apiErrChan := make(chan error, 1)
 	go func() {
 		if startErr := apiServer.Start(ctx); startErr != nil {
-			apiErrChan <- fmt.Errorf("ошибка API сервера: %w", startErr)
+			appLogger.Error("Ошибка API сервера: %v", startErr)
 		}
 	}()
 
-	appLogger.Info("")
-	appLogger.Info("Прокси-клиент готов к работе")
-	appLogger.Info("UI:     http://localhost%s", apiListenAddress)
-	appLogger.Info("API:    http://localhost%s/api/status", apiListenAddress)
-	appLogger.Info("Rules:  http://localhost%s/api/tun/rules", apiListenAddress)
-	appLogger.Info("")
+	appLogger.Info("Прокси-клиент готов к работе — иконка в трее")
 
-	// 8. Ждём сигнал
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	// 6. Канал завершения
+	quit := make(chan struct{})
 
-	select {
-	case <-quit:
-		appLogger.Info("Получен сигнал остановки")
-	case apiErr := <-apiErrChan:
-		appLogger.Error("API сервер упал: %v", apiErr)
-	}
+	// 7. Трей — блокирует текущий поток (требование Windows)
+	// SetEnabled вызываем внутри onReady через отдельную горутину
+	go func() {
+		// Небольшая задержка чтобы трей успел инициализироваться
+		time.Sleep(200 * time.Millisecond)
+		tray.SetEnabled(true)
+		// Автоматически открываем окно при старте
+		window.Open(webUIURL)
+	}()
 
-	// 9. Graceful shutdown
+	tray.Run(tray.Callbacks{
+		OnOpen: func() {
+			window.Open(webUIURL)
+		},
+		OnEnable: func() {
+			if err := proxyManager.Enable(proxyConfig); err != nil {
+				appLogger.Error("Ошибка включения прокси: %v", err)
+			} else {
+				tray.SetEnabled(true)
+				appLogger.Info("Прокси включён через трей")
+			}
+		},
+		OnDisable: func() {
+			if err := proxyManager.Disable(); err != nil {
+				appLogger.Error("Ошибка отключения прокси: %v", err)
+			} else {
+				tray.SetEnabled(false)
+				appLogger.Info("Прокси отключён через трей")
+			}
+		},
+		OnQuit: func() {
+			close(quit)
+		},
+	})
+
+	// Ждём сигнал завершения от трея
+	<-quit
+
+	// 8. Graceful shutdown
 	appLogger.Info("Завершение работы...")
+	window.Close()
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
 	if err := apiServer.Shutdown(shutdownCtx); err != nil {
 		appLogger.Error("Ошибка при остановке API сервера: %v", err)
 	}
-
 	if processMonitor != nil {
-		if err := processMonitor.Stop(); err != nil {
-			appLogger.Error("Ошибка при остановке process monitor: %v", err)
-		}
+		processMonitor.Stop()
 	}
-
-	appLogger.Info("Остановка XRay...")
 	if err := xrayManager.Stop(); err != nil {
 		appLogger.Error("Ошибка при остановке XRay: %v", err)
 	}
-
-	appLogger.Info("Отключение системного прокси...")
 	if err := proxyManager.Disable(); err != nil {
 		appLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
