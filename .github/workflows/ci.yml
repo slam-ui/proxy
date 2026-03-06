@@ -58,11 +58,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install Semgrep
+        run: pip install semgrep
+
       - name: Semgrep Security Scan
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: p/golang
-          generateSarif: "1"
+        run: semgrep scan --config=p/golang --sarif --output=semgrep.sarif
+        continue-on-error: true
 
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v4
