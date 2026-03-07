@@ -14,7 +14,6 @@ import (
 )
 
 const routingConfigPath = "routing.json"
-const singboxConfigPath = "config.singbox.json"
 
 // TunHandlers обработчики маршрутизации
 type TunHandlers struct {
