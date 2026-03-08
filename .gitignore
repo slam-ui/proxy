@@ -4,7 +4,7 @@
 *.so
 *.dylib
 *.test
-proxy-client
+/proxy-client
 proxy-client.exe
 
 # Build directories
