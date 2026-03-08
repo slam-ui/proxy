@@ -37,14 +37,14 @@ jobs:
         run: |
           go build \
             -ldflags "-H windowsgui -s -w" \
-            -o build/proxy-client.exe \
+            -o proxy-client.exe \
             ./cmd/proxy-client
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: proxy-client-windows
-          path: build/proxy-client.exe
+          path: proxy-client.exe
           retention-days: 5
 
   sast:

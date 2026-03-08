@@ -18,6 +18,7 @@ var (
 	mDisable *systray.MenuItem
 	mQuit    *systray.MenuItem
 	cb       Callbacks
+	readyCh  = make(chan struct{}) // закрывается когда onReady завершил инициализацию
 )
 
 // Run запускает системный трей. Блокирует текущий поток (должен вызываться из main).
@@ -26,8 +27,19 @@ func Run(callbacks Callbacks) {
 	systray.Run(onReady, onExit)
 }
 
-// SetEnabled меняет иконку и состояние пунктов меню
+// WaitReady блокируется до тех пор, пока onReady не инициализирует пункты меню.
+// Вызывать перед первым SetEnabled — иначе вызов будет тихо проигнорирован.
+func WaitReady() {
+	<-readyCh
+}
+
+// SetEnabled меняет иконку и состояние пунктов меню.
+// Вызывать только после WaitReady() или внутри onReady.
 func SetEnabled(enabled bool) {
+	// Защита на случай вызова до onReady (не должна срабатывать если используется WaitReady).
+	if mEnable == nil || mDisable == nil {
+		return
+	}
 
 	if enabled {
 		systray.SetIcon(iconOn())
@@ -54,6 +66,9 @@ func onReady() {
 	mDisable.Disable()
 	systray.AddSeparator()
 	mQuit = systray.AddMenuItem("Выход", "Завершить приложение")
+
+	// Сигнализируем WaitReady: все пункты меню инициализированы
+	close(readyCh)
 
 	// Обработка кликов
 	go func() {

@@ -1,13 +1,150 @@
 {
   "default_action": "direct",
   "rules": [
-    {"value": "twitch.tv",        "type": "domain",  "action": "direct"},
-    {"value": "geosite:discord",  "type": "geosite", "action": "proxy"},
-    {"value": "geosite:youtube",  "type": "geosite", "action": "proxy"},
-    {"value": "geosite:spotify",  "type": "geosite", "action": "proxy"},
-    {"value": "geosite:reddit",   "type": "geosite", "action": "proxy"},
-    {"value": "geosite:tiktok",   "type": "geosite", "action": "proxy"},
-    {"value": "geosite:instagram","type": "geosite", "action": "proxy"},
-    {"value": "firefox.exe",      "type": "process", "action": "proxy"}
+    {
+      "value": "geosite:youtube",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:discord",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:soundcloud",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:tiktok",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:instagram",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:spotify",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "geosite:reddit",
+      "type": "geosite",
+      "action": "proxy"
+    },
+    {
+      "value": "discord.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "discord.gg",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "discordapp.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "discordapp.net",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "discordstatus.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "dis.gd",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "claude.ai",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "claude.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "anthropic.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "openai.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "rutracker.org",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "speedtest.net",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "forum.image-line.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "support.image-line.com",
+      "type": "domain",
+      "action": "proxy"
+    },
+    {
+      "value": "discord.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "claude.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "spotify.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "AyuGram.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "telegram.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "firefox.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "cline64.exe",
+      "type": "process",
+      "action": "proxy"
+    },
+    {
+      "value": "appcenter.ms",
+      "type": "domain",
+      "action": "block"
+    }
   ]
 }

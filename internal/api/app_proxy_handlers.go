@@ -2,8 +2,8 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
+	"strconv"
 
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/process"
@@ -39,7 +39,10 @@ func (s *Server) SetupAppProxyRoutes(engine apprules.Engine, monitor process.Mon
 
 	// Process management
 	s.router.HandleFunc("/api/apps/processes", handlers.handleListProcesses).Methods("GET")
-	s.router.HandleFunc("/api/apps/processes/{pid}", handlers.handleGetProcess).Methods("GET")
+	// {pid:[0-9]+} ограничивает паттерн только числами.
+	// Без этого GET /api/apps/processes/refresh попадал бы в этот хендлер
+	// вместо 405 Method Not Allowed, и возвращал 400 "Invalid PID".
+	s.router.HandleFunc("/api/apps/processes/{pid:[0-9]+}", handlers.handleGetProcess).Methods("GET")
 	s.router.HandleFunc("/api/apps/processes/refresh", handlers.handleRefreshProcesses).Methods("POST")
 
 	// Launch process
@@ -222,8 +225,10 @@ func (h *AppProxyHandlers) handleListProcesses(w http.ResponseWriter, r *http.Re
 
 func (h *AppProxyHandlers) handleGetProcess(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	var pid int
-	if _, err := fmt.Sscanf(vars["pid"], "%d", &pid); err != nil {
+	// strconv.Atoi в отличие от fmt.Sscanf возвращает ошибку при любом
+	// нечисловом символе: "123abc" у Sscanf вернул бы pid=123 без ошибки.
+	pid, err := strconv.Atoi(vars["pid"])
+	if err != nil {
 		h.server.respondError(w, http.StatusBadRequest, "Invalid PID")
 		return
 	}

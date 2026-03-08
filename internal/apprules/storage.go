@@ -31,15 +31,19 @@ func (s *fileStorage) Save(rules []Rule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Сериализуем в JSON
 	data, err := json.MarshalIndent(rules, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal rules: %w", err)
 	}
 
-	// Сохраняем в файл
-	if err := os.WriteFile(s.filePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
+	// Атомарная запись через временный файл
+	tmp := s.filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := os.Rename(tmp, s.filePath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
 	return nil
@@ -50,23 +54,19 @@ func (s *fileStorage) Load() ([]Rule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Проверяем существование файла
 	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
-		return []Rule{}, nil // Файл не существует - возвращаем пустой список
+		return []Rule{}, nil
 	}
 
-	// Читаем файл
 	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Если файл пустой, возвращаем пустой список
 	if len(data) == 0 {
 		return []Rule{}, nil
 	}
 
-	// Десериализуем
 	var rules []Rule
 	if err := json.Unmarshal(data, &rules); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal rules: %w", err)
@@ -75,22 +75,28 @@ func (s *fileStorage) Load() ([]Rule, error) {
 	return rules, nil
 }
 
-// PersistentEngine engine с автоматическим сохранением
+// PersistentEngine — engine с автоматическим сохранением.
+// opMu сериализует операции "изменение + сохранение": без него две горутины
+// могут одновременно пройти AddRule, после чего Save у одной падает и она
+// откатывает только своё правило, но ListRules() уже включал правило конкурента —
+// оно молча исчезало из файла без возврата ошибки вызывающей стороне.
 type PersistentEngine struct {
-	Engine
+	*engine
 	storage Storage
-	mu      sync.Mutex
+	opMu    sync.Mutex // сериализует операции чтение-изменение-сохранение
 }
 
 // NewPersistentEngine создает engine с persistence
 func NewPersistentEngine(storage Storage) (*PersistentEngine, error) {
-	engine := NewEngine()
+	e := &engine{
+		rules:   make(map[string]*Rule),
+		matcher: NewMatcher(),
+	}
 	pe := &PersistentEngine{
-		Engine:  engine,
+		engine:  e,
 		storage: storage,
 	}
 
-	// Загружаем существующие правила
 	if err := pe.loadRules(); err != nil {
 		return nil, fmt.Errorf("failed to load rules: %w", err)
 	}
@@ -100,17 +106,16 @@ func NewPersistentEngine(storage Storage) (*PersistentEngine, error) {
 
 // AddRule добавляет правило с сохранением
 func (pe *PersistentEngine) AddRule(rule Rule) (*Rule, error) {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
 
-	created, err := pe.Engine.AddRule(rule)
+	created, err := pe.engine.AddRule(rule)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := pe.saveRules(); err != nil {
-		// Откатываем добавление
-		_ = pe.Engine.DeleteRule(created.ID)
+	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+		_ = pe.engine.DeleteRule(created.ID)
 		return nil, fmt.Errorf("failed to save rules: %w", err)
 	}
 
@@ -119,23 +124,21 @@ func (pe *PersistentEngine) AddRule(rule Rule) (*Rule, error) {
 
 // UpdateRule обновляет правило с сохранением
 func (pe *PersistentEngine) UpdateRule(id string, rule Rule) (*Rule, error) {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
 
-	// Сохраняем старое правило для отката
-	oldRule, err := pe.Engine.GetRule(id)
+	oldRule, err := pe.engine.GetRule(id)
 	if err != nil {
 		return nil, err
 	}
 
-	updated, err := pe.Engine.UpdateRule(id, rule)
+	updated, err := pe.engine.UpdateRule(id, rule)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := pe.saveRules(); err != nil {
-		// Откатываем изменение
-		_, _ = pe.Engine.UpdateRule(id, *oldRule)
+	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+		_, _ = pe.engine.UpdateRule(id, *oldRule)
 		return nil, fmt.Errorf("failed to save rules: %w", err)
 	}
 
@@ -144,22 +147,20 @@ func (pe *PersistentEngine) UpdateRule(id string, rule Rule) (*Rule, error) {
 
 // DeleteRule удаляет правило с сохранением
 func (pe *PersistentEngine) DeleteRule(id string) error {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
 
-	// Сохраняем правило для отката
-	rule, err := pe.Engine.GetRule(id)
+	rule, err := pe.engine.GetRule(id)
 	if err != nil {
 		return err
 	}
 
-	if err := pe.Engine.DeleteRule(id); err != nil {
+	if err := pe.engine.DeleteRule(id); err != nil {
 		return err
 	}
 
-	if err := pe.saveRules(); err != nil {
-		// Откатываем удаление
-		_, _ = pe.Engine.AddRule(*rule)
+	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+		_ = pe.engine.restoreRule(*rule)
 		return fmt.Errorf("failed to save rules: %w", err)
 	}
 
@@ -168,35 +169,27 @@ func (pe *PersistentEngine) DeleteRule(id string) error {
 
 // EnableRule включает правило с сохранением
 func (pe *PersistentEngine) EnableRule(id string) error {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
 
-	if err := pe.Engine.EnableRule(id); err != nil {
+	if err := pe.engine.EnableRule(id); err != nil {
 		return err
 	}
-
-	return pe.saveRules()
+	return pe.storage.Save(pe.engine.ListRules())
 }
 
 // DisableRule отключает правило с сохранением
 func (pe *PersistentEngine) DisableRule(id string) error {
-	pe.mu.Lock()
-	defer pe.mu.Unlock()
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
 
-	if err := pe.Engine.DisableRule(id); err != nil {
+	if err := pe.engine.DisableRule(id); err != nil {
 		return err
 	}
-
-	return pe.saveRules()
+	return pe.storage.Save(pe.engine.ListRules())
 }
 
-// saveRules сохраняет все правила
-func (pe *PersistentEngine) saveRules() error {
-	rules := pe.Engine.ListRules()
-	return pe.storage.Save(rules)
-}
-
-// loadRules загружает правила из storage
+// loadRules загружает правила из storage, сохраняя оригинальные ID
 func (pe *PersistentEngine) loadRules() error {
 	rules, err := pe.storage.Load()
 	if err != nil {
@@ -204,8 +197,7 @@ func (pe *PersistentEngine) loadRules() error {
 	}
 
 	for _, rule := range rules {
-		if _, err := pe.Engine.AddRule(rule); err != nil {
-			// Логируем ошибку, но продолжаем загрузку
+		if err := pe.engine.restoreRule(rule); err != nil {
 			continue
 		}
 	}

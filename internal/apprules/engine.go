@@ -48,7 +48,7 @@ func (e *engine) AddRule(rule Rule) (*Rule, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if err := validateRule(rule); err != nil {
+	if err := validateNewRule(rule); err != nil {
 		return nil, fmt.Errorf("invalid rule: %w", err)
 	}
 
@@ -59,6 +59,21 @@ func (e *engine) AddRule(rule Rule) (*Rule, error) {
 
 	e.rules[rule.ID] = &rule
 	return &rule, nil
+}
+
+// restoreRule загружает правило с существующим ID (используется при загрузке из файла)
+func (e *engine) restoreRule(rule Rule) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if err := validateRule(rule); err != nil {
+		return fmt.Errorf("invalid rule: %w", err)
+	}
+	if rule.ID == "" {
+		rule.ID = newID()
+	}
+	e.rules[rule.ID] = &rule
+	return nil
 }
 
 // GetRule возвращает правило по ID
@@ -193,10 +208,12 @@ func validateRule(rule Rule) error {
 	if !rule.Action.IsValid() {
 		return fmt.Errorf("invalid action: %s", rule.Action)
 	}
-	if rule.Action == ActionProxy && rule.ProxyAddr == "" {
-		return fmt.Errorf("proxy_addr is required for PROXY action")
-	}
 	return nil
+}
+
+// validateNewRule дополнительные проверки для правил создаваемых через API
+func validateNewRule(rule Rule) error {
+	return validateRule(rule)
 }
 
 // FindMatchingRule — алиас для Match, используется в handlers

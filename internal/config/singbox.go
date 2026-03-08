@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 )
 
-var tunCounter uint64
+const TunInterfaceName = "tun0"
 
 type SingBoxConfig struct {
 	Log       SBLog        `json:"log"`
@@ -61,6 +60,7 @@ type SBOutbound struct {
 	Server     string `json:"server,omitempty"`
 	ServerPort int    `json:"server_port,omitempty"`
 	UUID       string `json:"uuid,omitempty"`
+	Flow       string `json:"flow,omitempty"`
 	TLS        *SBTLS `json:"tls,omitempty"`
 }
 
@@ -126,7 +126,14 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		DNS: SBDNS{
 			Servers: []SBDNSServer{
 				{Tag: "remote", Type: "tls", Server: "8.8.8.8", ServerPort: 853},
-				{Tag: "local", Type: "udp", Server: "1.1.1.1", ServerPort: 53},
+				// "direct-dns" — быстрый UDP-резолвер для direct-трафика.
+				// Намеренно НЕ называется "local": он идёт на 1.1.1.1:53, а не на системный DNS.
+				{Tag: "direct-dns", Type: "udp", Server: "1.1.1.1", ServerPort: 53},
+			},
+			// DNS для HTTP-inbound резолвится через direct-dns, чтобы direct-трафик
+			// не утекал через удалённый DoT-сервер.
+			Rules: []SBDNSRule{
+				{Inbound: []string{"http-in"}, Server: "direct-dns"},
 			},
 			Final: "remote",
 		},
@@ -139,7 +146,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				Sniff:                    true,
 				SniffOverrideDestination: true,
 			},
-			buildTUN(routingCfg),
+			buildTUN(),
 		},
 		Outbounds: []SBOutbound{
 			{
@@ -148,6 +155,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				Server:     params.Address,
 				ServerPort: params.Port,
 				UUID:       params.UUID,
+				Flow:       params.Flow,
 				TLS: &SBTLS{
 					Enabled:    true,
 					ServerName: params.SNI,
@@ -156,6 +164,10 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				},
 			},
 			{Type: "direct", Tag: "direct"},
+			// "block" outbound нужен для случая DefaultAction == ActionBlock,
+			// а также для блокирующих правил route (action: "reject" — альтернатива,
+			// но явный outbound обязателен когда final = "block").
+			{Type: "block", Tag: "block"},
 		},
 		Route: buildRoute(routingCfg),
 	}
@@ -164,15 +176,24 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации: %w", err)
 	}
-	return os.WriteFile(outputPath, data, 0644)
+
+	// Атомарная запись: tmp + rename, как в SaveRoutingConfig и fileStorage.Save.
+	tmp := outputPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("не удалось записать временный конфиг: %w", err)
+	}
+	if err := os.Rename(tmp, outputPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("не удалось применить конфиг sing-box: %w", err)
+	}
+	return nil
 }
 
-func buildTUN(routingCfg *RoutingConfig) SBInbound {
-	name := fmt.Sprintf("tun%d", atomic.AddUint64(&tunCounter, 1))
+func buildTUN() SBInbound {
 	return SBInbound{
 		Type:                     "tun",
 		Tag:                      "tun-in",
-		InterfaceName:            name,
+		InterfaceName:            TunInterfaceName,
 		Address:                  []string{"172.20.0.1/30"},
 		MTU:                      9000,
 		AutoRoute:                true,
@@ -250,7 +271,13 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 	}
 
 	var ruleSets []SBRuleSet
-	allTags := append(append(proxyGeosite, directGeosite...), blockGeosite...)
+	// BUG FIX: append(proxyGeosite, directGeosite...) мутирует proxyGeosite
+	// если у слайса есть свободная ёмкость (cap > len) — данные для addRule портятся.
+	// Собираем allTags в отдельный слайс с явным cap чтобы избежать алиасинга.
+	allTags := make([]string, 0, len(proxyGeosite)+len(directGeosite)+len(blockGeosite))
+	allTags = append(allTags, proxyGeosite...)
+	allTags = append(allTags, directGeosite...)
+	allTags = append(allTags, blockGeosite...)
 	seen := map[string]bool{}
 	for _, tag := range allTags {
 		if !seen[tag] {
@@ -321,6 +348,6 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 		RuleSet:               ruleSets,
 		Final:                 final,
 		AutoDetectInterface:   true,
-		DefaultDomainResolver: "local",
+		DefaultDomainResolver: "direct-dns",
 	}
 }

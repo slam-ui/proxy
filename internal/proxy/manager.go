@@ -47,6 +47,14 @@ func (m *manager) Enable(config Config) error {
 		return fmt.Errorf("невалидная конфигурация прокси: %w", err)
 	}
 
+	// BUG FIX: если прокси уже включён с теми же параметрами — не пишем в реестр повторно.
+	// Без этой проверки параллельные вызовы из трея и API вызывали двойную запись.
+	// (Disable аналогично проверяет m.enabled перед действием.)
+	if m.enabled && m.config == config {
+		m.logger.Debug("Системный прокси уже включён с теми же параметрами")
+		return nil
+	}
+
 	if err := setSystemProxy(config.Address, config.Override); err != nil {
 		return fmt.Errorf("не удалось включить системный прокси: %w", err)
 	}

@@ -54,6 +54,10 @@ func (m *monitor) Start() error {
 		return fmt.Errorf("initial scan failed: %w", err)
 	}
 
+	// BUG FIX: stopChan после Stop() закрыт навсегда — пересоздаём перед запуском,
+	// иначе повторный Start() приведёт к панике при чтении закрытого канала.
+	m.stopChan = make(chan struct{})
+
 	// Запускаем периодическое сканирование
 	m.ticker = time.NewTicker(5 * time.Second)
 	m.running = true
@@ -127,21 +131,17 @@ func (m *monitor) refresh() error {
 
 	newProcesses := make(map[int]*apprules.ProcessInfo)
 
-	// Получаем список процессов
-	pids, err := enumProcesses(snapshot)
+	snaps, err := enumProcesses(snapshot)
 	if err != nil {
 		return fmt.Errorf("failed to enumerate processes: %w", err)
 	}
 
-	// Собираем информацию о каждом процессе
-	for _, pid := range pids {
-		info, err := getProcessInfo(pid)
+	for _, snap := range snaps {
+		info, err := getProcessInfo(snap)
 		if err != nil {
-			// Пропускаем процессы, к которым нет доступа
 			continue
 		}
-
-		newProcesses[pid] = info
+		newProcesses[snap.PID] = info
 	}
 
 	// Обновляем кэш
@@ -176,13 +176,14 @@ var (
 	procProcess32Next    = kernel32.NewProc("Process32NextW")
 	procOpenProcess      = kernel32.NewProc("OpenProcess")
 	procQueryFullPath    = kernel32.NewProc("QueryFullProcessImageNameW")
+	procGetProcessTimes  = kernel32.NewProc("GetProcessTimes")
 )
 
 const (
-	TH32CS_SNAPPROCESS = 0x00000002
-	PROCESS_QUERY_INFO = 0x0400
-	PROCESS_VM_READ    = 0x0010
-	MAX_PATH           = 260
+	TH32CS_SNAPPROCESS              = 0x00000002
+	PROCESS_QUERY_INFO              = 0x0400
+	PROCESS_QUERY_LIMITED_INFO      = 0x1000
+	MAX_PATH                        = 260
 )
 
 type processEntry32 struct {
@@ -212,14 +213,19 @@ func createToolhelp32Snapshot() (syscall.Handle, error) {
 	return syscall.Handle(ret), nil
 }
 
-// enumProcesses перечисляет все процессы
-func enumProcesses(snapshot syscall.Handle) ([]int, error) {
+// processSnapshot хранит данные из снапшота
+type processSnapshot struct {
+	PID       int
+	ParentPID int
+}
+
+// enumProcesses перечисляет все процессы, возвращает PID + ParentPID
+func enumProcesses(snapshot syscall.Handle) ([]processSnapshot, error) {
 	var pe processEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
 
-	var pids []int
+	var result []processSnapshot
 
-	// Первый процесс
 	ret, _, _ := procProcess32First.Call(
 		uintptr(snapshot),
 		uintptr(unsafe.Pointer(&pe)),
@@ -229,9 +235,11 @@ func enumProcesses(snapshot syscall.Handle) ([]int, error) {
 		return nil, fmt.Errorf("Process32First failed")
 	}
 
-	pids = append(pids, int(pe.ProcessID))
+	result = append(result, processSnapshot{
+		PID:       int(pe.ProcessID),
+		ParentPID: int(pe.ParentProcessID),
+	})
 
-	// Остальные процессы
 	for {
 		ret, _, _ := procProcess32Next.Call(
 			uintptr(snapshot),
@@ -242,23 +250,39 @@ func enumProcesses(snapshot syscall.Handle) ([]int, error) {
 			break
 		}
 
-		pids = append(pids, int(pe.ProcessID))
+		result = append(result, processSnapshot{
+			PID:       int(pe.ProcessID),
+			ParentPID: int(pe.ParentProcessID),
+		})
 	}
 
-	return pids, nil
+	return result, nil
 }
 
 // getProcessInfo получает информацию о процессе
-func getProcessInfo(pid int) (*apprules.ProcessInfo, error) {
-	// Открываем процесс
-	handle, _, err := procOpenProcess.Call(
-		uintptr(PROCESS_QUERY_INFO|PROCESS_VM_READ),
+func getProcessInfo(snap processSnapshot) (*apprules.ProcessInfo, error) {
+	pid := snap.PID
+
+	// Открываем процесс — запрашиваем минимально необходимые права.
+	// PROCESS_VM_READ не нужен: мы не читаем память процесса.
+	// Используем PROCESS_QUERY_LIMITED_INFO как fallback, если PROCESS_QUERY_INFO
+	// заблокирован (защищённые процессы, антивирус и т.д.).
+	handle, _, _ := procOpenProcess.Call(
+		uintptr(PROCESS_QUERY_LIMITED_INFO),
 		0,
 		uintptr(pid),
 	)
-
 	if handle == 0 {
-		return nil, fmt.Errorf("failed to open process %d: %v", pid, err)
+		// Пробуем с полными правами на чтение информации
+		var err error
+		handle, _, err = procOpenProcess.Call(
+			uintptr(PROCESS_QUERY_INFO),
+			0,
+			uintptr(pid),
+		)
+		if handle == 0 {
+			return nil, fmt.Errorf("failed to open process %d: %v", pid, err)
+		}
 	}
 	defer syscall.CloseHandle(syscall.Handle(handle))
 
@@ -268,7 +292,7 @@ func getProcessInfo(pid int) (*apprules.ProcessInfo, error) {
 
 	ret, _, _ := procQueryFullPath.Call(
 		handle,
-		0, // Flags
+		0,
 		uintptr(unsafe.Pointer(&pathBuf[0])),
 		uintptr(unsafe.Pointer(&size)),
 	)
@@ -278,17 +302,37 @@ func getProcessInfo(pid int) (*apprules.ProcessInfo, error) {
 		exePath = syscall.UTF16ToString(pathBuf[:size])
 	}
 
-	// Получаем имя файла
 	name := filepath.Base(exePath)
 	if name == "." || name == "" {
 		name = fmt.Sprintf("process_%d", pid)
 	}
 
+	// Получаем реальное время старта процесса через GetProcessTimes
+	startTime := getProcessStartTime(syscall.Handle(handle))
+
 	return &apprules.ProcessInfo{
 		PID:         pid,
+		ParentPID:   snap.ParentPID,
 		Name:        name,
 		Executable:  exePath,
-		StartTime:   time.Now(), // Приблизительно
+		StartTime:   startTime,
 		ProxyStatus: "UNKNOWN",
 	}, nil
+}
+
+// getProcessStartTime возвращает реальное время старта процесса через GetProcessTimes.
+// При ошибке возвращает нулевое время.
+func getProcessStartTime(handle syscall.Handle) time.Time {
+	var creationTime, exitTime, kernelTime, userTime syscall.Filetime
+	ret, _, _ := procGetProcessTimes.Call(
+		uintptr(handle),
+		uintptr(unsafe.Pointer(&creationTime)),
+		uintptr(unsafe.Pointer(&exitTime)),
+		uintptr(unsafe.Pointer(&kernelTime)),
+		uintptr(unsafe.Pointer(&userTime)),
+	)
+	if ret == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, creationTime.Nanoseconds())
 }

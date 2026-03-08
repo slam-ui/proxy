@@ -1,8 +1,8 @@
 package xray
 
 import (
-	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -14,10 +14,14 @@ import (
 
 // Config конфигурация менеджера процесса
 type Config struct {
-	ExecutablePath string
-	ConfigPath     string
-	Args           []string // дополнительные аргументы перед -c (например: "run")
-	Logger         logger.Logger
+	ExecutablePath  string
+	ConfigPath      string
+	SecretKeyPath   string    // путь к файлу с VLESS-ключом (secret.key)
+	Args            []string  // дополнительные аргументы перед -c (например: "run")
+	Logger          logger.Logger
+	// SingBoxWriter если задан — stdout и stderr sing-box дополнительно пишутся в этот Writer.
+	// Используется для захвата вывода в event log. Если nil — пишется только в os.Stdout/Stderr.
+	SingBoxWriter   io.Writer
 }
 
 // Manager интерфейс для управления процессом
@@ -33,8 +37,7 @@ type manager struct {
 	config Config
 	logger logger.Logger
 	mu     sync.RWMutex
-	ctx    context.Context
-	cancel context.CancelFunc
+	done   chan struct{} // закрывается когда процесс завершился
 }
 
 func NewManager(cfg Config) (Manager, error) {
@@ -42,11 +45,13 @@ func NewManager(cfg Config) (Manager, error) {
 		return nil, fmt.Errorf("невалидная конфигурация: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m := &manager{config: cfg, logger: cfg.Logger, ctx: ctx, cancel: cancel}
+	m := &manager{
+		config: cfg,
+		logger: cfg.Logger,
+		done:   make(chan struct{}),
+	}
 
 	if err := m.start(); err != nil {
-		cancel()
 		return nil, err
 	}
 
@@ -76,14 +81,21 @@ func (m *manager) start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Строим аргументы: [дополнительные args...] + "-c" + configPath
-	// Для sing-box: ["run", "-c", "config.singbox.json"]
-	// Для xray:     ["-c", "config.runtime.json"]
-	args := append(m.config.Args, "-c", m.config.ConfigPath)
+	// BUG FIX: append(m.config.Args, ...) мутирует исходный слайс если cap > len.
+	// Копируем в новый слайс чтобы гарантировать изоляцию.
+	args := make([]string, 0, len(m.config.Args)+2)
+	args = append(args, m.config.Args...)
+	args = append(args, "-c", m.config.ConfigPath)
 
-	cmd := exec.CommandContext(m.ctx, m.config.ExecutablePath, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := exec.Command(m.config.ExecutablePath, args...)
+	if m.config.SingBoxWriter != nil {
+		// Дублируем вывод: os.Stdout/Stderr (для консоли) + SingBoxWriter (для event log)
+		cmd.Stdout = io.MultiWriter(os.Stdout, m.config.SingBoxWriter)
+		cmd.Stderr = io.MultiWriter(os.Stderr, m.config.SingBoxWriter)
+	} else {
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("не удалось запустить процесс: %w", err)
@@ -92,12 +104,15 @@ func (m *manager) start() error {
 	m.cmd = cmd
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
+	// Единственный вызов Wait — здесь в горутине-мониторе
 	go m.monitor()
 	return nil
 }
 
+// monitor — единственное место где вызывается cmd.Wait()
 func (m *manager) monitor() {
 	err := m.cmd.Wait()
+	close(m.done) // сигнализируем всем ждущим
 	if err != nil {
 		m.logger.Warn("XRay завершился с ошибкой: %v", err)
 	} else {
@@ -107,35 +122,36 @@ func (m *manager) monitor() {
 
 func (m *manager) Stop() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.cmd == nil || m.cmd.Process == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("процесс не запущен")
 	}
+	pid := m.cmd.Process.Pid
+	proc := m.cmd.Process
+	m.mu.Unlock()
 
-	m.logger.Info("Остановка процесса XRay (PID: %d)...", m.cmd.Process.Pid)
-	m.cancel()
+	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
 
-	done := make(chan error, 1)
-	go func() { done <- m.cmd.Wait() }()
-
+	// На Windows os.Interrupt (SIGINT) не поддерживается для дочерних процессов —
+	// Process.Signal всегда возвращает ошибку. Вместо ложного мягкого стопа
+	// ждём завершения через короткий таймаут и затем выполняем Kill.
 	select {
-	case <-time.After(5 * time.Second):
-		m.logger.Warn("XRay не завершился за 5 секунд, принудительная остановка...")
-		if err := m.cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("не удалось остановить процесс: %w", err)
-		}
-		<-done
-	case err := <-done:
-		if err != nil && err.Error() != "signal: killed" {
-			m.logger.Warn("XRay завершился с ошибкой: %v", err)
-		}
+	case <-m.done:
+		m.logger.Info("Процесс XRay завершился самостоятельно")
+		return nil
+	case <-time.After(500 * time.Millisecond):
 	}
 
-	m.logger.Info("Процесс XRay успешно остановлен")
+	m.logger.Info("Принудительная остановка XRay (PID: %d)...", pid)
+	if err := proc.Kill(); err != nil {
+		return fmt.Errorf("не удалось остановить процесс: %w", err)
+	}
+	<-m.done
+	m.logger.Info("Процесс XRay принудительно остановлен")
 	return nil
 }
 
+// IsRunning проверяет что процесс реально ещё работает
 func (m *manager) IsRunning() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -143,12 +159,29 @@ func (m *manager) IsRunning() bool {
 	if m.cmd == nil || m.cmd.Process == nil {
 		return false
 	}
-	handle, err := syscall.OpenProcess(syscall.PROCESS_QUERY_INFORMATION, false, uint32(m.cmd.Process.Pid))
-	if err != nil {
+
+	// Если канал закрыт — процесс точно завершился
+	select {
+	case <-m.done:
 		return false
+	default:
 	}
-	syscall.CloseHandle(handle)
-	return true
+
+	// Уточняем через Windows API: GetExitCodeProcess.
+	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) работает без полных прав админа.
+	// Если OpenProcess упал — доверяем каналу done: раз не закрыт, процесс жив.
+	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+	handle, err := syscall.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(m.cmd.Process.Pid))
+	if err != nil {
+		return true // нет прав на хэндл, но done открыт → считаем живым
+	}
+	defer syscall.CloseHandle(handle)
+
+	var exitCode uint32
+	if err := syscall.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return true
+	}
+	return exitCode == 259 // STILL_ACTIVE
 }
 
 func (m *manager) GetPID() int {
@@ -160,12 +193,14 @@ func (m *manager) GetPID() int {
 	return m.cmd.Process.Pid
 }
 
+// Wait ждёт завершения через канал — безопасно вызывать несколько раз
 func (m *manager) Wait() error {
 	m.mu.RLock()
-	cmd := m.cmd
-	m.mu.RUnlock()
-	if cmd == nil {
+	if m.cmd == nil {
+		m.mu.RUnlock()
 		return fmt.Errorf("процесс не запущен")
 	}
-	return cmd.Wait()
+	m.mu.RUnlock()
+	<-m.done
+	return nil
 }

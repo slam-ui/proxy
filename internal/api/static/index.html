@@ -12,11 +12,12 @@
             --on:#00e676; --off:#ff3d57; --pending:#ffb300;
             --accent:#7c6cff; --block:#ff6b35;
             --text:#dde0f0; --muted:#4a4a6a; --muted2:#6a6a8a;
+            --lvl-info:#7c6cff; --lvl-warn:#ffb300; --lvl-err:#ff3d57; --lvl-debug:#4a4a6a;
         }
         *{margin:0;padding:0;box-sizing:border-box}
         body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);
             min-height:100vh;display:flex;align-items:flex-start;justify-content:center;
-            padding:36px 16px;overflow-x:hidden}
+            padding:36px 16px 48px;overflow-x:hidden}
         body::before{content:'';position:fixed;inset:0;pointer-events:none;
             background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
             linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
@@ -26,7 +27,7 @@
         .bg-glow.off{background:radial-gradient(ellipse 60% 50% at 25% 40%,rgba(255,61,87,.04) 0%,transparent 70%)}
 
         .layout{position:relative;z-index:1;width:100%;max-width:920px;
-            display:grid;grid-template-columns:320px 1fr;grid-template-rows:auto 1fr;gap:14px;align-items:start}
+            display:grid;grid-template-columns:320px 1fr;grid-template-rows:auto 1fr auto;gap:14px;align-items:start}
 
         /* Proxy card */
         .proxy-card{grid-row:1/3;position:relative;background:var(--surface);
@@ -225,6 +226,72 @@
         @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
         @keyframes pg{0%,100%{box-shadow:none}50%{box-shadow:0 0 8px 2px rgba(0,230,118,.2)}}
 
+        /* ── Event Log panel ───────────────────────────────── */
+        .evlog-panel{grid-column:1/-1;background:var(--surface);border:1px solid var(--border);
+            border-radius:2px;box-shadow:0 8px 32px rgba(0,0,0,.5);overflow:hidden}
+        .evlog-head{padding:10px 18px;border-bottom:1px solid var(--border);
+            display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+        .evlog-head:hover{background:rgba(255,255,255,.02)}
+        .evlog-title{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
+            color:var(--muted);text-transform:uppercase;flex:1;display:flex;align-items:center;gap:8px}
+        .evlog-title::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--off);
+            box-shadow:0 0 5px var(--off);transition:background .3s,box-shadow .3s}
+        .evlog-title.has-err::before{background:var(--off);box-shadow:0 0 6px var(--off)}
+        .evlog-title.has-warn::before{background:var(--pending);box-shadow:0 0 6px var(--pending)}
+        .evlog-title.ok::before{background:var(--on);box-shadow:0 0 5px var(--on)}
+        .ev-badge{font-family:'Space Mono',monospace;font-size:9px;padding:1px 6px;
+            border-radius:10px;border:1px solid var(--border);color:var(--muted);background:var(--surface2)}
+        .ev-badge.has-new{border-color:rgba(255,61,87,.4);color:var(--off);background:rgba(255,61,87,.08);
+            animation:blink 1.2s infinite}
+        .evlog-chevron{color:var(--muted);transition:transform .2s;font-size:12px}
+        .evlog-chevron.open{transform:rotate(180deg)}
+        .evlog-toolbar{padding:7px 18px;border-bottom:1px solid var(--border);
+            display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+        .evlog-body{display:none}
+        .evlog-body.open{display:flex;flex-direction:column}
+        .ev-filter-btn{padding:2px 8px;border-radius:2px;border:1px solid transparent;
+            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+            color:var(--muted);cursor:pointer;background:transparent;transition:all .15s;outline:none}
+        .ev-filter-btn:hover{color:var(--text)}
+        .ev-filter-btn.ef-all {border-color:var(--border2);color:var(--text)}
+        .ev-filter-btn.ef-info{border-color:rgba(124,108,255,.5);color:var(--lvl-info);background:rgba(124,108,255,.08)}
+        .ev-filter-btn.ef-warn{border-color:rgba(255,179,0,.5); color:var(--lvl-warn);background:rgba(255,179,0,.08)}
+        .ev-filter-btn.ef-error{border-color:rgba(255,61,87,.5);color:var(--lvl-err); background:rgba(255,61,87,.08)}
+        .ev-filter-btn.ef-debug{border-color:rgba(74,74,106,.5);color:var(--muted2)}
+        .ev-spacer{flex:1}
+        .ev-autoscroll{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);
+            cursor:pointer;display:flex;align-items:center;gap:5px;padding:2px 6px;
+            border:1px solid transparent;border-radius:2px;transition:all .15s;background:transparent;outline:none}
+        .ev-autoscroll:hover{border-color:var(--border2);color:var(--text)}
+        .ev-autoscroll.on{border-color:rgba(0,230,118,.3);color:var(--on)}
+        .ev-autoscroll .asdot{width:5px;height:5px;border-radius:50%;background:currentColor}
+        .ev-clear{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;
+            text-transform:uppercase;color:var(--muted);cursor:pointer;padding:2px 8px;
+            border:1px solid transparent;border-radius:2px;transition:all .15s;background:transparent;outline:none}
+        .ev-clear:hover{border-color:rgba(255,61,87,.4);color:var(--off)}
+        .evlist{overflow-y:auto;max-height:260px;font-family:'Space Mono',monospace;font-size:10px;
+            scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .evlist::-webkit-scrollbar{width:3px}
+        .evlist::-webkit-scrollbar-thumb{background:var(--border2)}
+        .evrow{display:grid;grid-template-columns:64px 48px 70px 1fr;gap:0;
+            padding:4px 18px;border-bottom:1px solid rgba(31,31,48,.6);transition:background .1s}
+        .evrow:hover{background:rgba(255,255,255,.015)}
+        .evrow:last-child{border-bottom:none}
+        .evrow.lv-error{border-left:2px solid rgba(255,61,87,.5)}
+        .evrow.lv-warn {border-left:2px solid rgba(255,179,0,.4)}
+        .evrow.lv-info {border-left:2px solid rgba(124,108,255,.3)}
+        .evrow.lv-debug{border-left:2px solid rgba(74,74,106,.2)}
+        .ev-time{color:var(--muted);font-size:9px;padding-top:1px;white-space:nowrap}
+        .ev-level{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding-top:1px}
+        .ev-level.lv-error{color:var(--lvl-err)}
+        .ev-level.lv-warn {color:var(--lvl-warn)}
+        .ev-level.lv-info {color:var(--lvl-info)}
+        .ev-level.lv-debug{color:var(--muted)}
+        .ev-src{color:var(--muted2);font-size:9px;padding-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .ev-msg{color:var(--text);line-height:1.5;word-break:break-all;padding-top:1px}
+        .ev-empty{padding:28px;text-align:center;font-family:'Space Mono',monospace;
+            font-size:10px;color:var(--muted)}
+
         .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(14px);
             background:var(--surface);border:1px solid var(--border);border-radius:2px;
             padding:9px 16px;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
@@ -237,6 +304,7 @@
         @media(max-width:700px){
             .layout{grid-template-columns:1fr;grid-template-rows:auto;max-width:420px}
             .proxy-card{grid-row:auto}
+            .evlog-panel{grid-column:1}
         }
     </style>
 </head>
@@ -296,8 +364,6 @@
                 <span class="pill pb" id="sb">0 block</span>
             </div>
         </div>
-
-        <!-- Add form -->
         <div class="add-form">
             <div class="type-row">
                 <button class="tbtn tsel" id="tAuto"  onclick="setType('auto')">auto</button>
@@ -313,11 +379,11 @@
                            autocomplete="off" spellcheck="false"
                            onkeydown="if(event.key==='Enter')addRule()"/>
                     <span class="inp-ico">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-          </span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                    </span>
                 </div>
                 <select class="sel" id="as">
                     <option value="proxy">proxy</option>
@@ -327,19 +393,16 @@
                 <button class="add-btn" onclick="addRule()">+ add</button>
             </div>
         </div>
-
-        <!-- Filter bar -->
         <div class="fbar">
-            <button class="fbtn fa" id="fAll"   onclick="setFilter('all')">все</button>
-            <button class="fbtn"    id="fProxy" onclick="setFilter('proxy')">proxy</button>
-            <button class="fbtn"    id="fDirect"onclick="setFilter('direct')">direct</button>
-            <button class="fbtn"    id="fBlock" onclick="setFilter('block')">block</button>
-            <button class="fbtn"    id="fProc"  onclick="setFilter('process')">.exe</button>
-            <button class="fbtn"    id="fDom"   onclick="setFilter('domain')">домены</button>
-            <button class="fbtn"    id="fIP"    onclick="setFilter('ip')">ip</button>
-            <button class="fbtn"    id="fGeo"   onclick="setFilter('geosite')">geosite</button>
+            <button class="fbtn fa" id="fAll"    onclick="setFilter('all')">все</button>
+            <button class="fbtn"    id="fProxy"  onclick="setFilter('proxy')">proxy</button>
+            <button class="fbtn"    id="fDirect" onclick="setFilter('direct')">direct</button>
+            <button class="fbtn"    id="fBlock"  onclick="setFilter('block')">block</button>
+            <button class="fbtn"    id="fProc"   onclick="setFilter('process')">.exe</button>
+            <button class="fbtn"    id="fDom"    onclick="setFilter('domain')">домены</button>
+            <button class="fbtn"    id="fIP"     onclick="setFilter('ip')">ip</button>
+            <button class="fbtn"    id="fGeo"    onclick="setFilter('geosite')">geosite</button>
         </div>
-
         <div class="rlist" id="rl">
             <div class="rempty" id="re">
                 <div class="rempty-ico">
@@ -357,7 +420,6 @@
                 </div>
             </div>
         </div>
-
         <div class="rfoot">
             <span class="fhint" id="fh">—</span>
             <button class="apply-btn" id="ab" onclick="applyRules()" disabled>
@@ -365,15 +427,47 @@
             </button>
         </div>
     </div>
+
+    <!-- Event Log panel -->
+    <div class="evlog-panel">
+        <div class="evlog-head" onclick="toggleEvlog()">
+            <span class="evlog-title ok" id="evTitle">event log</span>
+            <span class="ev-badge" id="evBadge">0</span>
+            <span class="evlog-chevron" id="evChev">▼</span>
+        </div>
+        <div class="evlog-body" id="evBody">
+            <div class="evlog-toolbar">
+                <button class="ev-filter-btn ef-all" id="ef-all"   onclick="setEvFilter('all')">все</button>
+                <button class="ev-filter-btn"        id="ef-error" onclick="setEvFilter('error')">error</button>
+                <button class="ev-filter-btn"        id="ef-warn"  onclick="setEvFilter('warn')">warn</button>
+                <button class="ev-filter-btn"        id="ef-info"  onclick="setEvFilter('info')">info</button>
+                <button class="ev-filter-btn"        id="ef-debug" onclick="setEvFilter('debug')">debug</button>
+                <div class="ev-spacer"></div>
+                <button class="ev-autoscroll on" id="evAs" onclick="toggleAutoScroll()">
+                    <span class="asdot"></span>auto-scroll
+                </button>
+                <button class="ev-clear" onclick="clearEvents()">очистить</button>
+            </div>
+            <div class="evlist" id="evlist">
+                <div class="ev-empty">Событий пока нет — запустите приложение</div>
+            </div>
+        </div>
+    </div>
+
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
-    const API='http://localhost:8080/api', POLL=3000;
+    const API='http://localhost:8080/api', POLL=3000, EV_POLL=2000;
     let ps={enabled:false,xray:false,pid:0,addr:'',pending:false,conn:false};
     let rules=[], defAction='proxy', dirty=false, filter='all';
     let selectedType='auto';
     const $=id=>document.getElementById(id);
+
+    // ── Event log state ───────────────────────────────────────
+    let evOpen=true, evFilter='all', evAutoScroll=true;
+    let evLatestId=0, evHasNew=false;
+    let evAllEvents=[];  // полный кэш всех событий в памяти
 
     // ── Type selector ─────────────────────────────────────────
     const TYPE_CFG={
@@ -383,12 +477,10 @@
         ip:     {id:'tIP',   cls:'tip',   ph:'8.8.8.8 · 10.0.0.0/8 · 192.168.1.0/24'},
         geosite:{id:'tGeo',  cls:'tgeo',  ph:'discord · youtube · spotify · reddit · tiktok'},
     };
-
     function setType(t){
         selectedType=t;
         Object.entries(TYPE_CFG).forEach(([k,c])=>{
-            const el=$(c.id);
-            el.className='tbtn'+(k===t?' tsel '+(c.cls||''):'');
+            $(c.id).className='tbtn'+(k===t?' tsel '+(c.cls||''):'');
         });
         $('ai').placeholder=TYPE_CFG[t]?.ph||'';
         $('ai').focus();
@@ -434,7 +526,6 @@
         $('sp').textContent=cnt.proxy+' proxy';
         $('sd').textContent=cnt.direct+' direct';
         $('sb').textContent=cnt.block+' block';
-
         let vis=rules;
         if(filter==='proxy')   vis=rules.filter(r=>r.action==='proxy');
         else if(filter==='direct')  vis=rules.filter(r=>r.action==='direct');
@@ -443,7 +534,6 @@
         else if(filter==='domain')  vis=rules.filter(r=>r.type==='domain');
         else if(filter==='ip')      vis=rules.filter(r=>r.type==='ip');
         else if(filter==='geosite') vis=rules.filter(r=>r.type==='geosite');
-
         $('re').style.display=vis.length===0?'':'none';
         vis.forEach(r=>{
             const ico=typeIcon(r.type);
@@ -461,11 +551,9 @@
       </button>`;
             $('rl').appendChild(el);
         });
-
         $('ab').disabled=!dirty||!ps.conn;
         $('ab').className='apply-btn'+(dirty?' dirty':'');
         $('fh').textContent=dirty?'есть несохранённые изменения':'всё применено';
-
         const fmap={
             all:    ['fAll','fa'],    proxy:  ['fProxy','fp'],
             direct: ['fDirect','fd'], block:  ['fBlock','fb'],
@@ -511,6 +599,116 @@
         renderDef();renderRules();
     }
 
+    // ── Event log fetch ───────────────────────────────────────
+    async function fetchEvents(){
+        try{
+            const r=await fetch(`${API}/events?since=${evLatestId}`,{signal:AbortSignal.timeout(3000)});
+            if(!r.ok)return;
+            const d=await r.json();
+            const newEvs=Array.isArray(d.events)?d.events:[];
+            if(d.latest_id!==undefined)evLatestId=d.latest_id;
+            if(newEvs.length>0){
+                evAllEvents.push(...newEvs);
+                // Держим не более 500 в памяти
+                if(evAllEvents.length>500)evAllEvents=evAllEvents.slice(-500);
+                evHasNew=true;
+                renderEvlog(newEvs);
+            }
+        }catch{}
+    }
+
+    function formatTime(ts){
+        const d=new Date(ts);
+        return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    }
+
+    function renderEvlog(newRows){
+        const list=$('evlist');
+        // Убираем заглушку при первых событиях
+        const empty=list.querySelector('.ev-empty');
+        if(empty)empty.remove();
+
+        const wasAtBottom=list.scrollHeight-list.scrollTop-list.clientHeight<8;
+
+        newRows.forEach(e=>{
+            const lv=e.level||'info';
+            if(evFilter!=='all'&&evFilter!==lv)return;
+            const row=document.createElement('div');
+            row.className=`evrow lv-${lv}`;
+            row.dataset.level=lv;
+            row.innerHTML=`
+        <span class="ev-time">${esc(formatTime(e.ts))}</span>
+        <span class="ev-level lv-${lv}">${esc(lv)}</span>
+        <span class="ev-src">${esc(e.source||'')}</span>
+        <span class="ev-msg">${esc(e.message||'')}</span>`;
+            list.appendChild(row);
+        });
+
+        if(evAutoScroll&&(wasAtBottom||newRows.length>0)){
+            list.scrollTop=list.scrollHeight;
+        }
+
+        // Обновляем заголовок
+        const total=evAllEvents.length;
+        $('evBadge').textContent=total;
+
+        const hasErr=evAllEvents.some(e=>e.level==='error');
+        const hasWarn=evAllEvents.some(e=>e.level==='warn');
+        const title=$('evTitle');
+        title.className='evlog-title'+(hasErr?' has-err':hasWarn?' has-warn':' ok');
+
+        if(evHasNew&&!evOpen){
+            $('evBadge').className='ev-badge has-new';
+        }
+    }
+
+    function rebuildEvlog(){
+        const list=$('evlist');
+        list.innerHTML='';
+        const filtered=evFilter==='all'?evAllEvents:evAllEvents.filter(e=>e.level===evFilter);
+        if(filtered.length===0){
+            list.innerHTML='<div class="ev-empty">Нет событий для выбранного фильтра</div>';
+            return;
+        }
+        renderEvlog(filtered);
+    }
+
+    function setEvFilter(f){
+        evFilter=f;
+        ['all','error','warn','info','debug'].forEach(k=>{
+            const btn=$('ef-'+k);
+            if(!btn)return;
+            const cls={all:'ef-all',error:'ef-error',warn:'ef-warn',info:'ef-info',debug:'ef-debug'}[k]||'';
+            btn.className='ev-filter-btn'+(k===f?' '+cls:'');
+        });
+        rebuildEvlog();
+    }
+
+    function toggleEvlog(){
+        evOpen=!evOpen;
+        $('evBody').className='evlog-body'+(evOpen?' open':'');
+        $('evChev').className='evlog-chevron'+(evOpen?' open':'');
+        if(evOpen){
+            evHasNew=false;
+            $('evBadge').className='ev-badge';
+            rebuildEvlog();
+        }
+    }
+
+    function toggleAutoScroll(){
+        evAutoScroll=!evAutoScroll;
+        $('evAs').className='ev-autoscroll'+(evAutoScroll?' on':'');
+    }
+
+    async function clearEvents(){
+        evAllEvents=[];evLatestId=0;evHasNew=false;
+        $('evBadge').textContent='0';
+        $('evBadge').className='ev-badge';
+        $('evlist').innerHTML='<div class="ev-empty">Лог очищен</div>';
+        $('evTitle').className='evlog-title ok';
+        try{await fetch(`${API}/events/clear`,{method:'POST',signal:AbortSignal.timeout(3000)})}catch{}
+    }
+
     // ── Proxy actions ─────────────────────────────────────────
     async function apiPost(ep){
         ps.pending=true;renderProxy();
@@ -553,9 +751,7 @@
     function addRule(){
         let v=$('ai').value.trim();
         if(!v){$('ai').focus();return}
-
         const t=detectType(v);
-
         if(t==='geosite'){
             v=v.replace(/^geosite:/i,'').toLowerCase().trim();
             if(!v){toast('Введите название категории','err');return}
@@ -566,7 +762,6 @@
         } else {
             v=v.replace(/^https?:\/\//i,'').replace(/\/.*$/,'').toLowerCase().trim();
         }
-
         if(!v){toast('Введите значение','err');return}
         const action=$('as').value;
         if(rules.some(r=>r.value===v)){toast(`${v} уже в списке`,'err');return}
@@ -580,7 +775,9 @@
         rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();
     }
 
-    // ── Apply ─────────────────────────────────────────────────
+    // ── Apply — ИСПРАВЛЕНО: один PUT запрос вместо N DELETE+POST ──
+    // Старая логика делала 50+ последовательных await fetch, что блокировало
+    // JS-тред WebView2 на 30+ секунд и вызывало "Не отвечает".
     async function applyRules(){
         if(!dirty||!ps.conn)return;
         const btn=$('ab');
@@ -588,49 +785,48 @@
         btn.innerHTML='<span class="adot"></span>applying...';
 
         try{
-            const cr=await fetch(`${API}/tun/rules`,{signal:AbortSignal.timeout(4000)});
-            const cd=await cr.json();
-            const srv=Array.isArray(cd.rules)?cd.rules:[];
+            // Шаг 1: атомарно заменяем весь список правил одним PUT запросом
+            const pr=await fetch(`${API}/tun/rules`,{
+                method:'PUT',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({default_action:defAction,rules}),
+                signal:AbortSignal.timeout(8000)
+            });
+            if(!pr.ok){
+                const d=await pr.json().catch(()=>({}));
+                toast(d.error||'Ошибка сохранения правил','err');
+                btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
+                await fetchRules();return;
+            }
 
-            for(const sr of srv){
-                const local=rules.find(r=>r.value===sr.value);
-                if(!local||local.action!==sr.action){
-                    await fetch(`${API}/tun/rules/${encodeURIComponent(sr.value)}`,
-                        {method:'DELETE',signal:AbortSignal.timeout(5000)});
-                }
-            }
-            for(const r of rules){
-                const srv_r=srv.find(sr=>sr.value===r.value);
-                if(!srv_r||srv_r.action!==r.action){
-                    const res=await fetch(`${API}/tun/rules`,{method:'POST',
-                        headers:{'Content-Type':'application/json'},
-                        body:JSON.stringify({value:r.value,type:r.type,action:r.action,note:r.note||''}),
-                        signal:AbortSignal.timeout(5000)});
-                    if(!res.ok){
-                        const d=await res.json().catch(()=>({}));
-                        toast(d.error||`Ошибка: ${r.value}`,'err');
-                        btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
-                        await fetchRules();return;
-                    }
-                }
-            }
-            const ar=await fetch(`${API}/tun/apply`,{method:'POST',signal:AbortSignal.timeout(20000)});
+            // Шаг 2: перезапускаем sing-box с новым конфигом
+            const ar=await fetch(`${API}/tun/apply`,{method:'POST',signal:AbortSignal.timeout(6000)});
             if(!ar.ok){
                 const d=await ar.json().catch(()=>({}));
                 toast(d.error||'Ошибка применения','err');
             }else{
                 toast('Применено ✓','ok');dirty=false;
             }
-        }catch(e){toast('Ошибка: '+e.message,'err')}
+        }catch(e){
+            toast('Ошибка: '+e.message,'err');
+        }
 
         btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
         await fetchRules();
     }
 
     // ── Init ──────────────────────────────────────────────────
-    async function init(){await fetchStatus();await fetchRules()}
+    async function init(){
+        await fetchStatus();
+        await fetchRules();
+        await fetchEvents();
+        // Открываем лог по умолчанию
+        $('evBody').className='evlog-body open';
+        $('evChev').className='evlog-chevron open';
+    }
     init();
     setInterval(async()=>{await fetchStatus();if(!dirty)await fetchRules()},POLL);
+    setInterval(fetchEvents,EV_POLL);
 </script>
 </body>
 </html>
