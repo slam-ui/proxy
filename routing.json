@@ -112,17 +112,7 @@
       "action": "proxy"
     },
     {
-      "value": "claude.exe",
-      "type": "process",
-      "action": "proxy"
-    },
-    {
       "value": "spotify.exe",
-      "type": "process",
-      "action": "proxy"
-    },
-    {
-      "value": "AyuGram.exe",
       "type": "process",
       "action": "proxy"
     },
@@ -133,11 +123,6 @@
     },
     {
       "value": "firefox.exe",
-      "type": "process",
-      "action": "proxy"
-    },
-    {
-      "value": "cline64.exe",
       "type": "process",
       "action": "proxy"
     },
