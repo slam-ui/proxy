@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 )
@@ -11,10 +12,10 @@ import (
 type RuleType string
 
 const (
-	RuleTypeProcess RuleType = "process" // chrome.exe
-	RuleTypeDomain  RuleType = "domain"  // google.com, .google.com
-	RuleTypeIP      RuleType = "ip"      // 8.8.8.8, 192.168.0.0/24
-	RuleTypeGeosite RuleType = "geosite" // geosite:discord
+	RuleTypeProcess RuleType = "process"
+	RuleTypeDomain  RuleType = "domain"
+	RuleTypeIP      RuleType = "ip"
+	RuleTypeGeosite RuleType = "geosite"
 )
 
 // RuleAction действие
@@ -29,8 +30,8 @@ const (
 // RoutingRule одно правило маршрутизации
 type RoutingRule struct {
 	Value  string     `json:"value"`
-	Type   RuleType   `json:"type"`   // process / domain / ip
-	Action RuleAction `json:"action"` // proxy / direct / block
+	Type   RuleType   `json:"type"`
+	Action RuleAction `json:"action"`
 	Note   string     `json:"note,omitempty"`
 }
 
@@ -62,12 +63,23 @@ func LoadRoutingConfig(path string) (*RoutingConfig, error) {
 	return &cfg, nil
 }
 
+// SaveRoutingConfig атомарно сохраняет конфиг: пишет во временный файл,
+// затем переименовывает — защита от порчи при аварийном завершении
 func SaveRoutingConfig(path string, cfg *RoutingConfig) error {
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0644)
+
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("не удалось записать временный файл: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("не удалось применить конфиг: %w", err)
+	}
+	return nil
 }
 
 // DetectRuleType автоматически определяет тип правила по значению
@@ -76,87 +88,21 @@ func DetectRuleType(value string) RuleType {
 	if strings.HasSuffix(v, ".exe") {
 		return RuleTypeProcess
 	}
-	if isIPOrCIDR(v) {
-		return RuleTypeIP
-	}
 	if strings.HasPrefix(v, "geosite:") {
 		return RuleTypeGeosite
+	}
+	if isIPOrCIDR(v) {
+		return RuleTypeIP
 	}
 	return RuleTypeDomain
 }
 
 func isIPOrCIDR(s string) bool {
+	// CIDR нотация
 	if strings.Contains(s, "/") {
-		return true
+		_, _, err := net.ParseCIDR(s)
+		return err == nil
 	}
-	if strings.Contains(s, ":") {
-		return true // IPv6
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) != 4 {
-		return false
-	}
-	for _, p := range parts {
-		if len(p) == 0 || len(p) > 3 {
-			return false
-		}
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// ── Обратная совместимость со старым кодом ────────────────
-
-type ProcessAction = RuleAction
-
-const (
-	ProcessProxy  = ActionProxy
-	ProcessDirect = ActionDirect
-	ProcessBlock  = ActionBlock
-)
-
-type ProcessRule struct {
-	ProcessName string        `json:"process_name"`
-	Action      ProcessAction `json:"action"`
-}
-
-type TunConfig struct {
-	Enabled      bool          `json:"enabled"`
-	ProcessRules []ProcessRule `json:"process_rules"`
-}
-
-func LoadTunConfig(path string) (*TunConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &TunConfig{Enabled: false}, nil
-		}
-		return nil, err
-	}
-	var cfg TunConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
-}
-
-func SaveTunConfig(path string, cfg *TunConfig) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0644)
-}
-
-func GenerateRuntimeConfigWithTun(templatePath, secretPath, outputPath string, tunCfg *TunConfig) error {
-	return GenerateRuntimeConfig(templatePath, secretPath, outputPath)
-}
-
-// GenerateRuntimeConfigWithRouting — старый XRay генератор, оставлен для совместимости
-func GenerateRuntimeConfigWithRouting(templatePath, secretPath, outputPath string, routingCfg *RoutingConfig) error {
-	return GenerateRuntimeConfig(templatePath, secretPath, outputPath)
+	// Просто IP
+	return net.ParseIP(s) != nil
 }

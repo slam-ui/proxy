@@ -66,6 +66,10 @@ func (l *launcher) Launch(executable string, rule *apprules.Rule, args ...string
 
 	pid := cmd.Process.Pid
 
+	// Освобождаем дескриптор процесса после завершения.
+	// Без Wait() HANDLE процесса утекает вплоть до финализации GC.
+	go func() { _ = cmd.Wait() }()
+
 	result := &LaunchResult{
 		PID:        pid,
 		Executable: executable,

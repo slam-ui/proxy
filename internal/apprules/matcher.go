@@ -49,8 +49,12 @@ func (m *matcher) Match(pattern string, value string) bool {
 		return true
 	}
 
-	// Contains matching для частичного совпадения
-	if strings.Contains(value, pattern) {
+	// Contains matching — только по имени файла (basename), не по полному пути.
+	// strings.Contains(value, pattern) намеренно убран: он давал ложные срабатывания —
+	// паттерн "chrome" совпадал с "chromium.exe", "chrome_helper.exe" и любым путём
+	// содержащим подстроку "chrome". Теперь частичное совпадение проверяется только
+	// против basename процесса, что безопаснее и предсказуемее.
+	if strings.Contains(valueBase, pattern) {
 		return true
 	}
 

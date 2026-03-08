@@ -1,6 +1,7 @@
 package window
 
 import (
+	"runtime"
 	"sync"
 
 	"github.com/jchv/go-webview2"
@@ -23,6 +24,12 @@ func Open(url string) {
 	mu.Unlock()
 
 	go func() {
+		// BUG FIX: WebView2 использует COM STA на Windows.
+		// Без LockOSThread Go runtime может перемещать горутину между
+		// OS-потоками, что ломает COM и приводит к зависанию окна ("Не отвечает").
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
 		w := webview2.NewWithOptions(webview2.WebViewOptions{
 			Debug:  false,
 			Window: nil,

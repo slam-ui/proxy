@@ -17,6 +17,7 @@ type VLESSParams struct {
 	SNI       string
 	PublicKey string
 	ShortID   string
+	Flow      string
 }
 
 // GenerateRuntimeConfig создает config.runtime.json на основе шаблона и VLESS-ключа
@@ -86,6 +87,7 @@ func parseVLESSKey(secretPath string) (*VLESSParams, error) {
 		SNI:       queryParams.Get("sni"),
 		PublicKey: queryParams.Get("pbk"),
 		ShortID:   queryParams.Get("sid"),
+		Flow:      queryParams.Get("flow"),
 	}, nil
 }
 
@@ -169,6 +171,9 @@ func updateConfig(config map[string]interface{}, params *VLESSParams) error {
 	}
 
 	firstUser["id"] = params.UUID
+	if params.Flow != "" {
+		firstUser["flow"] = params.Flow
+	}
 
 	// Обновляем streamSettings
 	streamSettings, ok := firstOutbound["streamSettings"].(map[string]interface{})
@@ -188,15 +193,21 @@ func updateConfig(config map[string]interface{}, params *VLESSParams) error {
 	return nil
 }
 
-// saveConfig сохраняет конфигурацию в файл
+// saveConfig атомарно сохраняет конфигурацию: пишет во временный файл,
+// затем переименовывает — защита от повреждения при аварийном завершении.
 func saveConfig(config map[string]interface{}, outputPath string) error {
 	outputBytes, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("ошибка формирования JSON: %w", err)
 	}
 
-	if err := os.WriteFile(outputPath, outputBytes, 0644); err != nil {
-		return fmt.Errorf("не удалось записать файл '%s': %w", outputPath, err)
+	tmp := outputPath + ".tmp"
+	if err := os.WriteFile(tmp, outputBytes, 0644); err != nil {
+		return fmt.Errorf("не удалось записать временный файл '%s': %w", tmp, err)
+	}
+	if err := os.Rename(tmp, outputPath); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("не удалось применить конфиг '%s': %w", outputPath, err)
 	}
 
 	return nil

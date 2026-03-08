@@ -3,7 +3,6 @@ package proxy
 import (
 	"fmt"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -92,5 +91,4 @@ func notifyWindows() error {
 	return nil
 }
 
-// Для избежания unused import
-var _ = unsafe.Sizeof(0)
+
