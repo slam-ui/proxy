@@ -23,19 +23,17 @@ var (
 	setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
 	setWindowPos     = user32.NewProc("SetWindowPos")
 	sendMessageW     = user32.NewProc("SendMessageW")
-	// DwmExtendFrameIntoClientArea позволяет убрать DWM-рамку полностью.
-	// Без него DWM рисует тонкую светлую полосу сверху даже после снятия WS_CAPTION.
-	dwmExtendFrame = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	dwmExtendFrame   = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	dwmSetWindowAttr = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
 // gwlStyle = -16 как uintptr через bitwise complement.
 // ^uintptr(15) == 0xFFFF...FFF0 (two's complement -16).
-// Go запрещает uintptr(-16) как константу, но ^uintptr(15) — валидно.
 const gwlStyle = ^uintptr(15) // == -16
 
 const (
-	wsCaption       = uintptr(0x00C00000) // заголовок окна (белая полоса)
-	wsSysMenu       = uintptr(0x00080000) // системное меню
+	wsCaption       = uintptr(0x00C00000)
+	wsSysMenu       = uintptr(0x00080000)
 	swpNomove       = uintptr(0x0002)
 	swpNosize       = uintptr(0x0001)
 	swpNozorder     = uintptr(0x0004)
@@ -43,30 +41,42 @@ const (
 	wmSysCommand    = uintptr(0x0112)
 	scMinimize      = uintptr(0xF020)
 	scMaximize      = uintptr(0xF030)
+
+	// DwmSetWindowAttribute: отключает отрисовку неклиентской области DWM
+	dwmwaNCRenderingPolicy = uintptr(2) // DWMWA_NCRENDERING_POLICY
+	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED
 )
 
 // dwmMargins для DwmExtendFrameIntoClientArea.
-// Значения -1 говорят DWM полностью не рисовать никакой рамки.
+// {0,0,0,0} — сворачивает DWM-рамку, не добавляя «стекло» по периметру.
 type dwmMargins struct{ Left, Right, Top, Bottom int32 }
 
-// makeFrameless убирает системный заголовок и DWM-рамку.
+// makeFrameless убирает системный заголовок и DWM-рамку без артефактов.
 //
-// Двухшаговый процесс:
-//  1. SetWindowLongPtr — снимаем WS_CAPTION и WS_SYSMENU со стиля окна,
-//     чтобы Win32 перестал резервировать место под заголовок.
-//  2. DwmExtendFrameIntoClientArea с margins {-1,-1,-1,-1} — говорим DWM
-//     расширить клиентскую область на весь размер окна и не рисовать свою рамку.
-//     Без этого шага DWM всё равно рисует тонкую светлую полосу сверху.
+// Три шага:
+//  1. SetWindowLongPtr — снимаем WS_CAPTION | WS_SYSMENU; Win32 перестаёт
+//     резервировать место под заголовок.
+//  2. DwmSetWindowAttribute(DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED) —
+//     отключает отрисовку неклиентской области DWM (убирает белую/серую полосу
+//     которую DWM рисует поверх окна независимо от стилей Win32).
+//  3. DwmExtendFrameIntoClientArea({0,0,0,0}) — сворачивает DWM-рамку в ноль.
+//     НЕ {-1,-1,-1,-1}: отрицательные margins включают режим "sheet of glass"
+//     и добавляют рамку по всему периметру.
 func makeFrameless(hwnd uintptr) {
-	// Шаг 1: убираем WS_CAPTION | WS_SYSMENU
+	// Шаг 1: убираем Win32 заголовок
 	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
 	style &^= wsCaption | wsSysMenu
 	setWindowLongPtr.Call(hwnd, gwlStyle, style)
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
 
-	// Шаг 2: убираем DWM-рамку через отрицательные margins
-	m := dwmMargins{-1, -1, -1, -1}
+	// Шаг 2: отключаем DWM некlientскую отрисовку
+	policy := dwmncrpDisabled
+	dwmSetWindowAttr.Call(hwnd, dwmwaNCRenderingPolicy,
+		uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
+
+	// Шаг 3: сворачиваем DWM рамку в ноль
+	m := dwmMargins{0, 0, 0, 0}
 	dwmExtendFrame.Call(hwnd, uintptr(unsafe.Pointer(&m)))
 }
 
@@ -111,7 +121,6 @@ func Open(url string) {
 
 		w.SetSize(960, 640, webview2.HintNone)
 
-		// Убираем заголовок и DWM-рамку
 		hwnd := uintptr(unsafe.Pointer(w.Window()))
 		makeFrameless(hwnd)
 

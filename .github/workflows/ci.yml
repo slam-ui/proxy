@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# Opt into Node.js 24 для всех actions — убирает предупреждения о Node.js 20 deprecation
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
