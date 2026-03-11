@@ -96,11 +96,6 @@ func (ts *trafficStore) get() (trafficSnapshot, bool) {
 //     host+outbound+network как fallback.
 //  2. Outbound в sing-box Clash API: поле называется "outbound" (проверено).
 
-type connKey struct {
-	id      string
-	fallback string // host+outbound для соединений без id
-}
-
 type connSample struct {
 	upload   int64
 	download int64
@@ -165,8 +160,12 @@ func (ct *connSpeedTracker) tick() {
 		}
 		dUp := c.Upload - prev.upload
 		dDn := c.Download - prev.download
-		if dUp < 0 { dUp = 0 }
-		if dDn < 0 { dDn = 0 }
+		if dUp < 0 {
+			dUp = 0
+		}
+		if dDn < 0 {
+			dDn = 0
+		}
 
 		ob := c.effectiveOutbound()
 		sp := newSpeeds[ob]
@@ -296,7 +295,7 @@ func fetchConnectionsData() ([]clashConn, error) {
 func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 	conns, err := fetchConnectionsData()
 	snap, snapOK := trafficCollector.get()
-	
+
 	connTracker.mu.RLock()
 	speeds := make(map[string]interface{})
 	for k, v := range connTracker.speeds {
@@ -308,7 +307,9 @@ func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 	// Первые 5 соединений для диагностики
 	sample := []map[string]interface{}{}
 	for i, c := range conns {
-		if i >= 5 { break }
+		if i >= 5 {
+			break
+		}
 		sample = append(sample, map[string]interface{}{
 			"id":       c.ID,
 			"outbound": c.Outbound,
@@ -316,21 +317,26 @@ func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 			"download": c.Download,
 			"host":     c.Metadata.Host,
 			"proc":     c.Metadata.ProcessPath,
-			"chains":  c.Chains,
-			"rule":    c.Rule,
+			"chains":   c.Chains,
+			"rule":     c.Rule,
 			"network":  c.Metadata.Network,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"traffic_snap":      snap,
-		"traffic_snap_ok":   snapOK,
+		"traffic_snap":       snap,
+		"traffic_snap_ok":    snapOK,
 		"speeds_by_outbound": speeds,
-		"prev_count":        prevCount,
-		"total_conns":       len(conns),
-		"err":               func() string { if err != nil { return err.Error() }; return "" }(),
-		"sample_conns":      sample,
+		"prev_count":         prevCount,
+		"total_conns":        len(conns),
+		"err": func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return ""
+		}(),
+		"sample_conns": sample,
 	})
 }
 

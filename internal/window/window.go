@@ -24,26 +24,30 @@ var (
 	sendMessageW     = user32.NewProc("SendMessageW")
 )
 
+// gwlStyle = -16 как uintptr: используем битовый complement вместо отрицательной константы.
+// ^uintptr(15) == 0xFFFF...FFF0, что совпадает с -16 в two's complement.
+// Go запрещает uintptr(-16) как константное выражение, но ^uintptr(15) — валидно.
+const gwlStyle = ^uintptr(15) // == -16
+
 const (
-	gwlStyle        = -16
-	wsCaption       = 0x00C00000 // заголовок окна (белая полоса)
-	wsSysMenu       = 0x00080000 // системное меню
-	swpNomove       = 0x0002
-	swpNosize       = 0x0001
-	swpNozorder     = 0x0004
-	swpFrameChanged = 0x0020
-	wmSysCommand    = 0x0112
-	scMinimize      = 0xF020
-	scMaximize      = 0xF030
+	wsCaption       = uintptr(0x00C00000) // заголовок окна (белая полоса)
+	wsSysMenu       = uintptr(0x00080000) // системное меню
+	swpNomove       = uintptr(0x0002)
+	swpNosize       = uintptr(0x0001)
+	swpNozorder     = uintptr(0x0004)
+	swpFrameChanged = uintptr(0x0020)
+	wmSysCommand    = uintptr(0x0112)
+	scMinimize      = uintptr(0xF020)
+	scMaximize      = uintptr(0xF030)
 )
 
 // makeFrameless убирает системный заголовок окна (белую полосу),
 // оставляя тонкую рамку для изменения размера (wsThickFrame сохраняется).
 func makeFrameless(hwnd uintptr) {
-	style, _, _ := getWindowLongPtr.Call(hwnd, uintptr(gwlStyle))
+	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
 	style &^= wsCaption | wsSysMenu
-	setWindowLongPtr.Call(hwnd, uintptr(gwlStyle), style)
-	// SWP_FRAMECHANGED заставляет Windows пересчитать некликтентскую область
+	setWindowLongPtr.Call(hwnd, gwlStyle, style)
+	// SWP_FRAMECHANGED заставляет Windows пересчитать неклиентскую область
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
 }
@@ -94,7 +98,7 @@ func Open(url string) {
 		makeFrameless(hwnd)
 
 		// Привязываем JS-функции для кастомных кнопок управления окном.
-		// Вызов из HTML: await window.windowMinimize() / windowClose()
+		// Вызов из HTML: await windowMinimize() / windowClose()
 		w.Bind("windowMinimize", func() {
 			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
 		})
