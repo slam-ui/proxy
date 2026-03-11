@@ -22,19 +22,19 @@ var (
 	setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
 	setWindowPos     = user32.NewProc("SetWindowPos")
 	sendMessageW     = user32.NewProc("SendMessageW")
-	dwmExtendFrame   = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	getSystemMetrics = user32.NewProc("GetSystemMetrics")
 	dwmSetWindowAttr = dwmapi.NewProc("DwmSetWindowAttribute")
+	dwmExtendFrame   = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
 )
 
 // gwlStyle = -16 через bitwise complement: ^uintptr(15) == -16 в two's complement
 const gwlStyle = ^uintptr(15)
 
 const (
-	// Биты стиля окна которые создают заголовок и рамку
-	wsCaption    = uintptr(0x00C00000) // заголовок (белая полоса)
-	wsSysMenu    = uintptr(0x00080000) // системное меню
-	wsThickFrame = uintptr(0x00040000) // рамка изменения размера
-	wsBorder     = uintptr(0x00800000) // тонкая рамка
+	// Убираем только заголовок — WS_THICKFRAME оставляем для resize!
+	wsCaption = uintptr(0x00C00000) // заголовок (белая полоса)
+	wsSysMenu = uintptr(0x00080000) // системное меню
+	// wsThickFrame НЕ убираем — он даёт resize по краям окна
 
 	swpNomove       = uintptr(0x0002)
 	swpNosize       = uintptr(0x0001)
@@ -45,38 +45,44 @@ const (
 	scMinimize   = uintptr(0xF020)
 	scMaximize   = uintptr(0xF030)
 
+	// DWM: отключаем отрисовку неклиентской области (белая полоса от DWM)
 	dwmwaNCRenderingPolicy = uintptr(2) // DWMWA_NCRENDERING_POLICY
-	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED — DWM не рисует рамку
+	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED
+
+	// GetSystemMetrics индексы
+	smCxScreen = uintptr(0) // ширина экрана
+	smCyScreen = uintptr(1) // высота экрана
 )
 
 type dwmMargins struct{ Left, Right, Top, Bottom int32 }
 
-// makeFrameless полностью убирает системную рамку и заголовок.
+// makeFrameless убирает заголовок, оставляя resize по краям.
 //
-// Нужно убрать ВСЕ четыре бита отвечающих за рамки:
-//
-//	WS_CAPTION    — заголовок (белая/серая полоса сверху)
-//	WS_SYSMENU    — системное меню в заголовке
-//	WS_THICKFRAME — рамка изменения размера по периметру
-//	WS_BORDER     — тонкая рамка окна
-//
-// Если убрать только WS_CAPTION, Windows всё равно рисует рамку через
-// WS_THICKFRAME и DWM добавляет тень/border поверх.
+// Убираем только WS_CAPTION и WS_SYSMENU.
+// WS_THICKFRAME ОСТАВЛЯЕМ — он нужен для resize окна мышью.
+// Белая полоса от DWM убирается через DwmSetWindowAttribute(DWMNCRP_DISABLED).
 func makeFrameless(hwnd uintptr) {
 	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
-	style &^= wsCaption | wsSysMenu | wsThickFrame | wsBorder
+	style &^= wsCaption | wsSysMenu
 	setWindowLongPtr.Call(hwnd, gwlStyle, style)
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
 
-	// Отключаем DWM некlientскую отрисовку — убирает DWM-рамку/тень
+	// Отключаем DWM неклиентскую отрисовку — убирает белую полосу сверху
 	policy := dwmncrpDisabled
 	dwmSetWindowAttr.Call(hwnd, dwmwaNCRenderingPolicy,
 		uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
 
-	// Сворачиваем DWM рамку в ноль (НЕ -1: отрицательные margins = "sheet of glass")
+	// Сворачиваем DWM рамку в ноль (0 = убрать, -1 = "sheet of glass" — не то)
 	m := dwmMargins{0, 0, 0, 0}
 	dwmExtendFrame.Call(hwnd, uintptr(unsafe.Pointer(&m)))
+}
+
+// screenSize возвращает размер основного монитора
+func screenSize() (int, int) {
+	w, _, _ := getSystemMetrics.Call(smCxScreen)
+	h, _, _ := getSystemMetrics.Call(smCyScreen)
+	return int(w), int(h)
 }
 
 func Open(url string) {
@@ -89,6 +95,7 @@ func Open(url string) {
 	mu.Unlock()
 
 	go func() {
+		// BUG FIX: WebView2 использует COM STA — LockOSThread обязателен
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
@@ -114,11 +121,31 @@ func Open(url string) {
 		instance = w
 		mu.Unlock()
 
-		w.SetSize(960, 640, webview2.HintNone)
+		// Размер окна: экран минус отступ 60px с каждой стороны
+		sw, sh := screenSize()
+		margin := 60
+		winW := sw - margin*2
+		winH := sh - margin*2
+		if winW < 800 {
+			winW = 800
+		}
+		if winH < 600 {
+			winH = 600
+		}
+		w.SetSize(winW, winH, webview2.HintNone)
 
 		hwnd := uintptr(unsafe.Pointer(w.Window()))
 		makeFrameless(hwnd)
 
+		// Центрируем окно на экране
+		x := (sw - winW) / 2
+		y := (sh - winH) / 2
+		setWindowPos.Call(hwnd, 0,
+			uintptr(x), uintptr(y), uintptr(winW), uintptr(winH),
+			swpNozorder|swpFrameChanged)
+
+		// JS-биндинги для кастомных кнопок в HTML
+		// Вызов: await windowMinimize() / windowMaximize() / windowClose()
 		w.Bind("windowMinimize", func() {
 			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
 		})
