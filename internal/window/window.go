@@ -3,8 +3,10 @@ package window
 import (
 	"runtime"
 	"sync"
+	"unsafe"
 
 	"github.com/jchv/go-webview2"
+	"golang.org/x/sys/windows"
 )
 
 var (
@@ -12,6 +14,39 @@ var (
 	instance webview2.WebView
 	opened   bool
 )
+
+// Win32 API для управления стилем окна
+var (
+	user32           = windows.NewLazyDLL("user32.dll")
+	getWindowLongPtr = user32.NewProc("GetWindowLongPtrW")
+	setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
+	setWindowPos     = user32.NewProc("SetWindowPos")
+	sendMessageW     = user32.NewProc("SendMessageW")
+)
+
+const (
+	gwlStyle        = -16
+	wsCaption       = 0x00C00000 // заголовок окна (белая полоса)
+	wsSysMenu       = 0x00080000 // системное меню
+	swpNomove       = 0x0002
+	swpNosize       = 0x0001
+	swpNozorder     = 0x0004
+	swpFrameChanged = 0x0020
+	wmSysCommand    = 0x0112
+	scMinimize      = 0xF020
+	scMaximize      = 0xF030
+)
+
+// makeFrameless убирает системный заголовок окна (белую полосу),
+// оставляя тонкую рамку для изменения размера (wsThickFrame сохраняется).
+func makeFrameless(hwnd uintptr) {
+	style, _, _ := getWindowLongPtr.Call(hwnd, uintptr(gwlStyle))
+	style &^= wsCaption | wsSysMenu
+	setWindowLongPtr.Call(hwnd, uintptr(gwlStyle), style)
+	// SWP_FRAMECHANGED заставляет Windows пересчитать некликтентскую область
+	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
+		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
+}
 
 // Open открывает окно с Web UI. Если окно уже открыто — фокусирует его.
 func Open(url string) {
@@ -52,8 +87,24 @@ func Open(url string) {
 		instance = w
 		mu.Unlock()
 
-		w.SetTitle("Proxy Control")
 		w.SetSize(960, 640, webview2.HintNone)
+
+		// Убираем системную белую полосу заголовка
+		hwnd := uintptr(unsafe.Pointer(w.Window()))
+		makeFrameless(hwnd)
+
+		// Привязываем JS-функции для кастомных кнопок управления окном.
+		// Вызов из HTML: await window.windowMinimize() / windowClose()
+		w.Bind("windowMinimize", func() {
+			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
+		})
+		w.Bind("windowMaximize", func() {
+			sendMessageW.Call(hwnd, wmSysCommand, scMaximize, 0)
+		})
+		w.Bind("windowClose", func() {
+			w.Terminate()
+		})
+
 		w.Navigate(url)
 		w.Run()
 	}()

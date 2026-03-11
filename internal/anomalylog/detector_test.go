@@ -37,7 +37,95 @@ func waitFile(t *testing.T, dir, substr string, timeout time.Duration) string {
 	return ""
 }
 
-// ─── Тесты детекции ───────────────────────────────────────────────────────
+// ─── Регрессионные тесты на исправленные баги ─────────────────────────────
+
+// TestDetector_CrashKeywordInWarnLevel проверяет исправление бага:
+// crash-ключевые слова ранее проверялись только в LevelInfo, но не в LevelWarn.
+// В результате "panic: ..." на уровне warn не создавал _crash.log файл.
+func TestDetector_CrashKeywordInWarnLevel(t *testing.T) {
+	d, evLog, dir := newTestDetector(t)
+	d.Start()
+	defer d.Stop()
+
+	evLog.Add(eventlog.LevelWarn, "sing-box", "panic: runtime error: nil pointer dereference")
+
+	path := waitFile(t, dir, "crash", 2*time.Second)
+	content, _ := os.ReadFile(path)
+	if !strings.Contains(string(content), "nil pointer dereference") {
+		t.Error("crash-сообщение из LevelWarn не попало в _crash.log")
+	}
+}
+
+// TestDetector_CrashWarnNotCountedAsBurst проверяет исправление бага:
+// warn-событие содержащее crash-ключевое слово ранее добавлялось в burst-счётчик.
+// Правильное поведение: такой warn классифицируется как CRASH и не идёт в burst.
+func TestDetector_CrashWarnNotCountedAsBurst(t *testing.T) {
+	d, evLog, dir := newTestDetector(t)
+	d.Start()
+	defer d.Stop()
+
+	// 1 crash-warn + 2 обычных warn = всего 2 не-crash warn, burst не должен сработать
+	evLog.Add(eventlog.LevelWarn, "sing-box", "fatal: cannot bind port")
+	evLog.Add(eventlog.LevelWarn, "net", "connection reset")
+	evLog.Add(eventlog.LevelWarn, "net", "read timeout")
+
+	// Ждём достаточно для нескольких циклов poll
+	time.Sleep(1500 * time.Millisecond)
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "warn_burst") {
+			t.Errorf("warn_burst файл не должен создаваться: crash-warn не считается в burst: %s", e.Name())
+		}
+	}
+
+	// crash-файл должен появиться (от первого warn)
+	waitFile(t, dir, "crash", 2*time.Second)
+}
+
+// TestDetector_MixedKindsInOneTick_SeparateFiles проверяет исправление бага:
+// когда за один тик появлялись аномалии разных видов (ERROR и CRASH),
+// все они писались в один файл с видом последнего события.
+// Правильное поведение: каждый вид аномалии → отдельный файл.
+func TestDetector_MixedKindsInOneTick_SeparateFiles(t *testing.T) {
+	d, evLog, dir := newTestDetector(t)
+	d.Start()
+	defer d.Stop()
+
+	// Оба события попадут в один тик детектора
+	evLog.Add(eventlog.LevelError, "api", "connection refused")
+	evLog.Add(eventlog.LevelInfo, "sing-box", "panic: runtime error")
+
+	// Ждём оба файла
+	errorPath := waitFile(t, dir, "error", 2*time.Second)
+	crashPath := waitFile(t, dir, "crash", 2*time.Second)
+
+	errorContent, _ := os.ReadFile(errorPath)
+	crashContent, _ := os.ReadFile(crashPath)
+
+	// Каждый файл должен декларировать правильный вид аномалии в заголовке
+	if !strings.Contains(string(errorContent), "ERROR") {
+		t.Errorf("_error.log не содержит тип ERROR в заголовке")
+	}
+	if !strings.Contains(string(crashContent), "CRASH") {
+		t.Errorf("_crash.log не содержит тип CRASH в заголовке")
+	}
+
+	// Каждый файл должен содержать своё аномальное событие в секции АНОМАЛИЯ.
+	// Проверяем по секции "── АНОМАЛИЯ", а не по всему файлу (контекст
+	// намеренно включает все последние события, в том числе из других видов).
+	errorBody := string(errorContent)
+	anomalyIdx := strings.LastIndex(errorBody, "── АНОМАЛИЯ")
+	if anomalyIdx < 0 || !strings.Contains(errorBody[anomalyIdx:], "connection refused") {
+		t.Error("_error.log не содержит 'connection refused' в секции АНОМАЛИЯ")
+	}
+
+	crashBody := string(crashContent)
+	anomalyIdx = strings.LastIndex(crashBody, "── АНОМАЛИЯ")
+	if anomalyIdx < 0 || !strings.Contains(crashBody[anomalyIdx:], "panic: runtime error") {
+		t.Error("_crash.log не содержит 'panic: runtime error' в секции АНОМАЛИЯ")
+	}
+}
 
 func TestDetector_ErrorCreatesFile(t *testing.T) {
 	d, evLog, dir := newTestDetector(t)

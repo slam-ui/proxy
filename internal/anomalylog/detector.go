@@ -111,8 +111,14 @@ func (d *Detector) check() {
 	defer d.mu.Unlock()
 
 	now := time.Now()
-	var anomalies []eventlog.Event
-	kind := KindError
+
+	// BUG FIX: группируем аномалии по виду, а не собираем всё в один срез.
+	// Прежний код хранил единственную переменную kind, которую перезаписывал
+	// каждый раз при обнаружении новой аномалии — в результате, если за один
+	// тик появлялись и ERROR, и CRASH, оба события писались в один файл с
+	// видом последнего обработанного события. Теперь каждый вид аномалии
+	// записывается в отдельный файл (anomaly-..._error.log, ..._crash.log и т.д.).
+	byKind := map[AnomalyKind][]eventlog.Event{}
 
 	for _, e := range events {
 		if e.ID > d.lastID {
@@ -121,13 +127,21 @@ func (d *Detector) check() {
 
 		switch e.Level {
 		case eventlog.LevelError:
-			anomalies = append(anomalies, e)
-			kind = KindError
+			byKind[KindError] = append(byKind[KindError], e)
 
 		case eventlog.LevelWarn:
+			// BUG FIX: crash-ключевые слова проверяем ДО burst-счётчика.
+			// Прежний код проверял crash-сигнатуры только для LevelInfo,
+			// хотя комментарий явно говорил «info/warn сообщениях sing-box».
+			// Кроме того, warn с crash-ключевым словом не должен засчитываться
+			// в burst-счётчик — это самостоятельный вид аномалии.
+			if isCrashMessage(e.Message) {
+				byKind[KindCrash] = append(byKind[KindCrash], e)
+				break
+			}
+
 			// Отслеживаем burst: 3+ warn за 60 секунд
 			d.warnTimes = append(d.warnTimes, e.Timestamp)
-			// Убираем старые метки
 			cutoff := now.Add(-60 * time.Second)
 			fresh := d.warnTimes[:0]
 			for _, t := range d.warnTimes {
@@ -137,26 +151,31 @@ func (d *Detector) check() {
 			}
 			d.warnTimes = fresh
 			if len(d.warnTimes) >= 3 {
-				anomalies = append(anomalies, e)
-				kind = KindWarnBurst
+				byKind[KindWarnBurst] = append(byKind[KindWarnBurst], e)
 			}
 
 		case eventlog.LevelInfo:
-			// Детектируем краш по ключевым словам в info/warn сообщениях sing-box
-			msg := strings.ToLower(e.Message)
-			for _, kw := range crashKeywords {
-				if strings.Contains(msg, strings.ToLower(kw)) {
-					anomalies = append(anomalies, e)
-					kind = KindCrash
-					break
-				}
+			// Детектируем краш по ключевым словам в info-сообщениях sing-box
+			if isCrashMessage(e.Message) {
+				byKind[KindCrash] = append(byKind[KindCrash], e)
 			}
 		}
 	}
 
-	if len(anomalies) > 0 {
+	for kind, anomalies := range byKind {
 		d.writeFile(kind, anomalies)
 	}
+}
+
+// isCrashMessage проверяет, содержит ли сообщение краш-сигнатуру sing-box.
+func isCrashMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	for _, kw := range crashKeywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
 }
 
 // writeFile сохраняет диагностический файл.
