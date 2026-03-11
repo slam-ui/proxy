@@ -12,689 +12,698 @@
             --on:#00e676; --off:#ff3d57; --pending:#ffb300;
             --accent:#7c6cff; --block:#ff6b35;
             --text:#dde0f0; --muted:#4a4a6a; --muted2:#6a6a8a;
-            --lvl-info:#7c6cff; --lvl-warn:#ffb300; --lvl-err:#ff3d57; --lvl-debug:#4a4a6a;
+            --input-bg:#0f0f1a;
         }
+        .light{--bg:#f0f2f8;--surface:#fff;--surface2:#f5f7fc;--border:#dde0f0;--border2:#c8cce0;--text:#1a1a2e;--muted:#8890aa;--muted2:#6a7090;--input-bg:#fff}
+        .light body::before{background-image:linear-gradient(rgba(0,0,0,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.04) 1px,transparent 1px)}
         *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);
-            min-height:100vh;display:flex;align-items:flex-start;justify-content:center;
-            padding:16px 12px 32px;overflow-x:hidden}
-        body::before{content:'';position:fixed;inset:0;pointer-events:none;
-            background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),
-            linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);
-            background-size:36px 36px}
+        body{font-family:'Syne',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow-x:hidden}
+        body::before{content:'';position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.018) 1px,transparent 1px);background-size:36px 36px}
         .bg-glow{position:fixed;inset:0;pointer-events:none;transition:all 1s ease}
         .bg-glow.on{background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(0,230,118,.06) 0%,transparent 70%)}
         .bg-glow.off{background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(255,61,87,.04) 0%,transparent 70%)}
 
-        .layout{position:relative;z-index:1;width:100%;max-width:480px;
-            display:flex;flex-direction:column;gap:8px}
+        /* ── App shell ─── */
+        .app{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;max-width:520px;margin:0 auto}
 
-        /* ── Proxy bar ──────────────────────────────────────── */
-        .proxy-card{position:relative;background:var(--surface);
-            border:1px solid var(--border);border-radius:4px;padding:14px 16px;
-            box-shadow:0 8px 32px rgba(0,0,0,.6);overflow:hidden}
-        .conn-bar{position:absolute;top:0;left:0;right:0;height:2px;
-            background:linear-gradient(90deg,transparent,var(--muted),transparent);
-            background-size:200% 100%;animation:shimmer 2s infinite}
-        .conn-bar.ok{background:var(--on);animation:none}
-        .conn-bar.err{background:var(--off);animation:none}
-        @keyframes shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
-
-        /* Horizontal proxy row */
-        .proxy-row{display:flex;align-items:center;gap:12px}
-        .pwr-btn{width:44px;height:44px;border-radius:50%;background:var(--bg);
-            border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;
-            justify-content:center;transition:all .3s;outline:none;flex-shrink:0}
+        /* ── Top bar ─── */
+        .topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+        .topbar-status{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+        .pwr-btn{width:36px;height:36px;border-radius:50%;background:var(--bg);border:1px solid var(--border);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .3s;outline:none;flex-shrink:0}
         .pwr-btn:hover:not(:disabled){background:rgba(255,255,255,.04);transform:scale(1.05)}
         .pwr-btn:active:not(:disabled){transform:scale(.95)}
         .pwr-btn:disabled{cursor:not-allowed;opacity:.5}
-        .pwr{width:20px;height:20px;transition:all .4s}
-        .pwr.on{color:var(--on);filter:drop-shadow(0 0 7px var(--on))}
-        .pwr.off{color:var(--off);filter:drop-shadow(0 0 5px var(--off))}
-        .pwr.pend{color:var(--pending);animation:spin 1s linear infinite}
-        @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
-
-        .proxy-info{flex:1;min-width:0}
-        .slabel{font-size:16px;font-weight:800;letter-spacing:-.01em;transition:color .4s;line-height:1.1}
+        .pwr svg{width:16px;height:16px;transition:all .3s}
+        .pwr.on{stroke:var(--on)}.pwr.off{stroke:var(--off)}.pwr.pend{stroke:var(--pending)}
+        .conn-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .3s}
+        .conn-dot.ok{background:var(--on)}.conn-dot.err{background:var(--off)}
+        .topbar-info{display:flex;flex-direction:column;gap:1px;min-width:0}
+        .slabel{font-size:13px;font-weight:800;letter-spacing:.1em;transition:color .3s}
         .slabel.on{color:var(--on)}.slabel.off{color:var(--off)}.slabel.pend{color:var(--pending)}
-        .proxy-meta{display:flex;gap:10px;margin-top:4px;flex-wrap:wrap}
-        .pmeta-item{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);
-            display:flex;align-items:center;gap:4px}
-        .pmeta-item .dot{width:5px;height:5px;border-radius:50%;background:currentColor}
-        .pmeta-item.hi{color:var(--on)}
-        .pmeta-val{color:var(--muted2)}
+        .smeta{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .topbar-actions{display:flex;gap:6px}
+        .tbtn-sm{background:none;border:1px solid var(--border);border-radius:3px;padding:4px 10px;font-size:10px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'Space Mono',monospace}
+        .tbtn-sm.on-btn{border-color:rgba(0,230,118,.3);color:var(--on)}
+        .tbtn-sm.on-btn:hover{background:rgba(0,230,118,.08)}
+        .tbtn-sm.off-btn{border-color:rgba(255,61,87,.3);color:var(--off)}
+        .tbtn-sm.off-btn:hover{background:rgba(255,61,87,.08)}
+        .tbtn-sm:disabled{opacity:.35;cursor:not-allowed}
+        .theme-sm{width:28px;height:28px;background:none;border:1px solid var(--border);border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted2);transition:all .2s}
+        .theme-sm:hover{border-color:var(--border2);color:var(--text)}
 
-        .proxy-acts{display:flex;gap:6px;flex-shrink:0}
-        .btn{padding:7px 10px;border:1px solid var(--border);border-radius:2px;background:transparent;
-            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.1em;text-transform:uppercase;
-            color:var(--muted);cursor:pointer;transition:all .2s;outline:none;white-space:nowrap}
-        .btn:hover:not(:disabled){border-color:rgba(255,255,255,.15);color:var(--text);background:rgba(255,255,255,.03)}
-        .btn:disabled{opacity:.3;cursor:not-allowed}
-        .btn.bon:hover:not(:disabled){border-color:var(--on);color:var(--on)}
-        .btn.boff:hover:not(:disabled){border-color:var(--off);color:var(--off)}
+        /* ── Stats strip ─── */
+        .stats-strip{display:flex;align-items:center;background:var(--surface2);border-bottom:1px solid var(--border);padding:6px 14px;gap:0;flex-shrink:0;font-family:'Space Mono',monospace}
+        .sc{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}
+        .sc-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+        .sc-vals{display:flex;gap:6px;align-items:center}
+        .sc-up{font-size:10px;font-weight:700;color:#7c6cff}
+        .sc-dn{font-size:10px;font-weight:700;color:#00e676}
+        .sc-arr{font-size:8px;opacity:.5}
+        .ss-sep{width:1px;background:var(--border);align-self:stretch;margin:0 10px}
+        .ss-ip{font-size:9px;color:var(--muted2);padding:0 8px;white-space:nowrap}
+        .ss-test{background:none;border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-size:9px;color:var(--muted2);cursor:pointer;transition:all .2s;white-space:nowrap}
+        .ss-test:hover{border-color:var(--accent);color:var(--accent)}
+        .ss-offline{font-size:9px;color:var(--muted);margin-left:4px}
 
-        .proxy-footer{display:flex;align-items:center;justify-content:space-between;
-            margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
-        .engine-badge{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
-            color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:6px}
-        .engine-badge::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--accent)}
-        .shint{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted)}
+        /* ── Tabs ─── */
+        .tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+        .tab{flex:1;padding:9px 4px;text-align:center;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted2);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;user-select:none;position:relative}
+        .tab:hover{color:var(--text)}
+        .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+        .tab-badge{position:absolute;top:5px;right:6px;background:var(--accent);color:#fff;font-size:8px;border-radius:8px;padding:1px 5px;line-height:14px}
 
-        /* ── Default panel ───────────────────────────────────── */
-        .def-panel{background:var(--surface);border:1px solid var(--border);border-radius:4px;
-            padding:10px 16px;box-shadow:0 4px 16px rgba(0,0,0,.4)}
-        .def-label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
-            color:var(--muted);text-transform:uppercase;margin-bottom:8px;
-            display:flex;align-items:center;gap:8px}
-        .def-label::before{content:'';width:4px;height:4px;border-radius:50%;background:var(--muted2)}
-        .def-row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-        .def-btn{padding:7px;border-radius:2px;border:1px solid var(--border);
-            background:transparent;font-family:'Space Mono',monospace;
-            font-size:10px;letter-spacing:.08em;text-transform:uppercase;
-            color:var(--muted);cursor:pointer;transition:all .2s;outline:none}
-        .def-btn.ap{border-color:var(--on);color:var(--on);background:rgba(0,230,118,.08)}
-        .def-btn.ad{border-color:var(--muted2);color:var(--text);background:rgba(255,255,255,.04)}
-        .def-btn:hover:not(.ap):not(.ad){border-color:rgba(255,255,255,.15);color:var(--text)}
+        /* ── Tab content ─── */
+        .tab-content{flex:1;overflow-y:auto;overflow-x:hidden;display:none}
+        .tab-content.active{display:block}
+        .tab-content::-webkit-scrollbar{width:3px}
+        .tab-content::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
+        .tab-content{scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
 
-        /* Rules panel */
-        .rules-panel{background:var(--surface);border:1px solid var(--border);border-radius:4px;
-            display:flex;flex-direction:column;box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden;position:relative}
-        .rtop{position:absolute;top:0;left:0;right:0;height:2px;background:var(--accent);opacity:.5}
-        .rhead{padding:14px 18px 12px;border-bottom:1px solid var(--border);
-            display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none}
-        .rhead:hover .rtitle{color:var(--text)}
-        .rchev{color:var(--muted);transition:transform .2s;font-size:12px}
-        .rchev.open{transform:rotate(180deg)}
-        .rules-body{display:none}
-        .rules-body.open{display:block}
-        .rtitle{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
-            color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:8px}
-        .rtitle::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.7}
-        .stats{display:flex;gap:6px}
-        .pill{font-family:'Space Mono',monospace;font-size:9px;padding:2px 7px;
-            border-radius:10px;border:1px solid var(--border);color:var(--muted);background:var(--surface2)}
-        .pill.pp{border-color:rgba(0,230,118,.3);color:var(--on);background:rgba(0,230,118,.05)}
-        .pill.pd{border-color:rgba(106,106,138,.4);color:var(--muted2)}
-        .pill.pb{border-color:rgba(255,107,53,.3);color:var(--block);background:rgba(255,107,53,.05)}
+        /* ── Section ─── */
+        .section{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 14px}
+        .section+.section{border-top:none}
+        .sec-title{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted2);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+        .sec-dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
 
-        /* Add form */
-        .add-form{padding:12px 18px;border-bottom:1px solid var(--border)}
-        .type-row{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
-        .tbtn{padding:3px 9px;border-radius:2px;border:1px solid var(--border);
-            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
-            text-transform:uppercase;color:var(--muted);cursor:pointer;background:transparent;
-            transition:all .15s;outline:none}
-        .tbtn:hover{border-color:var(--border2);color:var(--text)}
-        .tbtn.tsel{border-color:var(--accent);color:var(--accent);background:rgba(124,108,255,.1)}
-        .tbtn.tsel.tdom {border-color:var(--on);  color:var(--on);  background:rgba(0,230,118,.08)}
-        .tbtn.tsel.tproc{border-color:#b06cff;    color:#b06cff;    background:rgba(176,108,255,.08)}
-        .tbtn.tsel.tip  {border-color:#6cbfff;    color:#6cbfff;    background:rgba(108,191,255,.08)}
-        .tbtn.tsel.tgeo {border-color:#ffb300;    color:#ffb300;    background:rgba(255,179,0,.08)}
-        .inp-row{display:flex;gap:6px}
+        /* ── Default action ─── */
+        .def-row{display:flex;gap:6px}
+        .def-btn{flex:1;padding:8px;border-radius:3px;border:1px solid var(--border);background:none;color:var(--muted2);font-size:11px;font-weight:700;cursor:pointer;transition:all .2s;letter-spacing:.04em}
+        .def-btn.ap{background:rgba(0,230,118,.08);border-color:rgba(0,230,118,.3);color:var(--on)}
+        .def-btn.ad{background:rgba(124,108,255,.08);border-color:rgba(124,108,255,.3);color:var(--accent)}
+
+        /* ── Rules ─── */
+        .add-form{padding:10px 14px 0;background:var(--surface)}
+        .type-row{display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap}
+        .tbtn{padding:3px 9px;border-radius:3px;border:1px solid var(--border);background:none;font-size:10px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'Space Mono',monospace}
+        .tbtn.tsel{border-color:var(--accent);color:var(--accent);background:rgba(124,108,255,.08)}
+        .tbtn.tsel.tdom{border-color:#00e5ff;color:#00e5ff}
+        .tbtn.tsel.tproc{border-color:#ff6b35;color:#ff6b35}
+        .tbtn.tsel.tip{border-color:#ffb300;color:#ffb300}
+        .tbtn.tsel.tgeo{border-color:#7c6cff;color:#7c6cff}
+        .inp-row{display:flex;gap:6px;margin-bottom:8px}
         .inp-wrap{position:relative;flex:1}
-        .inp{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:2px;
-            padding:9px 10px 9px 28px;font-family:'Space Mono',monospace;font-size:11px;
-            color:var(--text);outline:none;transition:border-color .2s}
-        .inp::placeholder{color:var(--muted)}
+        .inp{width:100%;background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:6px 10px 6px 30px;font-size:12px;color:var(--text);outline:none;font-family:'Space Mono',monospace}
         .inp:focus{border-color:var(--accent)}
-        .inp-ico{position:absolute;left:8px;top:50%;transform:translateY(-50%);
-            color:var(--muted);pointer-events:none}
-        .inp-ico svg{width:13px;height:13px}
-        .sel{background:var(--surface2);border:1px solid var(--border);border-radius:2px;
-            padding:9px 7px;font-family:'Space Mono',monospace;font-size:10px;
-            color:var(--muted2);outline:none;cursor:pointer;min-width:72px;
-            appearance:none;text-align:center;transition:border-color .2s}
-        .sel:focus{border-color:var(--accent)}
-        .add-btn{background:rgba(124,108,255,.08);border:1px solid rgba(124,108,255,.3);
-            border-radius:2px;padding:9px 12px;font-family:'Space Mono',monospace;
-            font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);
-            cursor:pointer;transition:all .2s;outline:none;white-space:nowrap}
-        .add-btn:hover{background:rgba(124,108,255,.16);border-color:var(--accent)}
-        .add-btn:active{transform:scale(.97)}
-
-        /* Filter bar */
-        .fbar{padding:7px 18px;border-bottom:1px solid var(--border);display:flex;gap:4px;flex-wrap:wrap}
-        .fbtn{padding:3px 9px;border-radius:2px;border:1px solid transparent;
-            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
-            text-transform:uppercase;color:var(--muted);cursor:pointer;background:transparent;
-            transition:all .15s;outline:none}
-        .fbtn:hover{color:var(--text)}
-        .fbtn.fa   {border-color:var(--border2);color:var(--text);background:rgba(255,255,255,.03)}
-        .fbtn.fp   {border-color:rgba(0,230,118,.4);  color:var(--on);   background:rgba(0,230,118,.06)}
-        .fbtn.fd   {border-color:rgba(106,106,138,.5);color:var(--muted2);background:rgba(255,255,255,.03)}
-        .fbtn.fb   {border-color:rgba(255,107,53,.4); color:var(--block);background:rgba(255,107,53,.06)}
-        .fbtn.fproc{border-color:rgba(176,108,255,.4);color:#b06cff;     background:rgba(176,108,255,.06)}
-        .fbtn.fdom {border-color:rgba(0,230,118,.4);  color:var(--on);   background:rgba(0,230,118,.06)}
-        .fbtn.fip  {border-color:rgba(108,191,255,.4);color:#6cbfff;     background:rgba(108,191,255,.06)}
-        .fbtn.fgeo {border-color:rgba(255,179,0,.4);  color:#ffb300;     background:rgba(255,179,0,.06)}
-
-        /* Rules list */
-        .rlist{flex:1;overflow-y:auto;max-height:320px;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
-        .rlist::-webkit-scrollbar{width:3px}
-        .rlist::-webkit-scrollbar-thumb{background:var(--border2)}
-        .ritem{display:flex;align-items:center;padding:9px 18px;border-bottom:1px solid var(--border);
-            gap:9px;transition:background .15s;animation:fi .18s ease}
-        .ritem:last-child{border-bottom:none}
-        .ritem:hover{background:rgba(255,255,255,.02)}
-        @keyframes fi{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
+        .inp::placeholder{color:var(--muted)}
+        .inp-ico{position:absolute;left:8px;top:50%;transform:translateY(-50%);color:var(--muted);width:14px;height:14px}
+        .sel{background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:6px 8px;font-size:11px;color:var(--text);outline:none;cursor:pointer}
+        .add-btn{background:rgba(124,108,255,.12);border:1px solid rgba(124,108,255,.3);border-radius:3px;padding:6px 12px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap;transition:all .15s}
+        .add-btn:hover{background:rgba(124,108,255,.2)}
+        .fbar{display:flex;gap:4px;flex-wrap:wrap;padding:6px 14px;background:var(--surface2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+        .fbtn{padding:3px 9px;border-radius:3px;border:1px solid transparent;background:none;font-size:10px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'Space Mono',monospace}
+        .fbtn.fa{color:var(--text)}.fbtn.fp{border-color:rgba(0,230,118,.3);color:var(--on)}.fbtn.fd{border-color:rgba(124,108,255,.3);color:var(--accent)}
+        .fbtn.fb{border-color:rgba(255,107,53,.3);color:var(--block)}.fbtn.fproc,.fbtn.fdom,.fbtn.fip,.fbtn.fgeo{border-color:var(--border2);color:var(--text)}
+        .rule-search{width:100%;background:var(--input-bg);border:none;border-bottom:1px solid var(--border);padding:7px 14px;font-size:12px;color:var(--text);font-family:'Space Mono',monospace;outline:none}
+        .rule-search::placeholder{color:var(--muted)}
+        .rule-search:focus{border-bottom-color:var(--accent)}
+        .rlist{max-height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .rlist::-webkit-scrollbar{width:3px}.rlist::-webkit-scrollbar-thumb{background:var(--border2)}
+        .ritem{display:flex;align-items:center;padding:5px 14px;gap:7px;border-bottom:1px solid var(--border);transition:background .15s;cursor:grab}
+        .ritem:hover{background:rgba(255,255,255,.02)}.ritem.dragging{opacity:.5}.ritem.drag-over{border-top:2px solid var(--accent)}
+        .drag-handle{color:var(--muted);cursor:grab;flex-shrink:0;opacity:.4}
+        .drag-handle:hover{opacity:.8}
+        .rpos{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace;min-width:18px;flex-shrink:0}
         .rdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-        .rdot.proxy {background:var(--on);   box-shadow:0 0 4px var(--on)}
-        .rdot.direct{background:var(--muted2)}
-        .rdot.block {background:var(--block);box-shadow:0 0 4px var(--block)}
-        .rval{flex:1;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
-            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-        .rtype-icon{color:var(--muted);flex-shrink:0}
-        .rtype-icon svg{width:11px;height:11px}
-        .rtype-icon.tgeo {color:#ffb300}
-        .rtype-icon.tproc{color:#b06cff}
-        .rtype-icon.tip  {color:#6cbfff}
-        .rbadge{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;
-            text-transform:uppercase;padding:1px 6px;border-radius:2px;flex-shrink:0}
-        .rbadge.proxy {background:rgba(0,230,118,.1); color:var(--on);   border:1px solid rgba(0,230,118,.2)}
-        .rbadge.direct{background:rgba(255,255,255,.04);color:var(--muted2);border:1px solid rgba(106,106,138,.3)}
-        .rbadge.block {background:rgba(255,107,53,.1); color:var(--block);border:1px solid rgba(255,107,53,.2)}
-        .rdel{width:20px;height:20px;background:transparent;border:1px solid transparent;
-            border-radius:2px;color:var(--muted);cursor:pointer;display:flex;align-items:center;
-            justify-content:center;transition:all .2s;flex-shrink:0;outline:none;padding:0}
-        .rdel:hover{border-color:var(--off);color:var(--off);background:rgba(255,61,87,.08)}
-        .rdel svg{width:10px;height:10px}
-
-        /* Empty */
-        .rempty{padding:36px 18px;text-align:center}
-        .rempty-ico{width:34px;height:34px;margin:0 auto 12px;color:var(--border2)}
-        .rempty-ico svg{width:100%;height:100%}
-        .rempty-t{font-family:'Space Mono',monospace;font-size:11px;color:var(--muted);margin-bottom:5px}
-        .rempty-h{font-family:'Space Mono',monospace;font-size:10px;color:var(--border2);line-height:1.7}
-
-        /* Footer */
-        .rfoot{padding:9px 18px;border-top:1px solid var(--border);
-            display:flex;justify-content:space-between;align-items:center}
-        .fhint{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted)}
-        .apply-btn{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.25);
-            border-radius:2px;padding:7px 13px;font-family:'Space Mono',monospace;font-size:10px;
-            letter-spacing:.1em;text-transform:uppercase;color:var(--on);cursor:pointer;
-            transition:all .2s;outline:none;display:flex;align-items:center;gap:5px}
-        .apply-btn:hover:not(:disabled){background:rgba(0,230,118,.16);border-color:var(--on)}
+        .rdot.proxy{background:var(--on)}.rdot.direct{background:var(--accent)}.rdot.block{background:var(--block)}
+        .rtype-icon{width:14px;height:14px;flex-shrink:0;color:var(--muted2)}
+        .rval{flex:1;font-size:11px;font-family:'Space Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .rbadge{font-size:9px;padding:2px 7px;border-radius:3px;font-family:'Space Mono',monospace;flex-shrink:0}
+        .rbadge.proxy{background:rgba(0,230,118,.12);color:var(--on)}.rbadge.direct{background:rgba(124,108,255,.12);color:var(--accent)}.rbadge.block{background:rgba(255,107,53,.12);color:var(--block)}
+        .rdel{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 4px;border-radius:2px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+        .rdel:hover{color:var(--off);background:rgba(255,61,87,.08)}
+        .rempty{padding:24px 14px;text-align:center}.rempty-ico{color:var(--muted);margin-bottom:8px}.rempty-t{font-size:12px;color:var(--muted2);margin-bottom:6px}.rempty-h{font-size:10px;color:var(--muted);line-height:1.6}
+        .rfoot{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface2);border-top:1px solid var(--border)}
+        .fhint{font-size:10px;color:var(--muted2);font-family:'Space Mono',monospace}
+        .apply-btn{display:flex;align-items:center;gap:6px;background:rgba(124,108,255,.1);border:1px solid rgba(124,108,255,.2);border-radius:3px;padding:5px 14px;font-size:11px;color:var(--accent);cursor:pointer;transition:all .2s;font-weight:700;letter-spacing:.04em}
+        .apply-btn.dirty{background:rgba(124,108,255,.2);border-color:var(--accent);box-shadow:0 0 10px rgba(124,108,255,.2)}
         .apply-btn:disabled{opacity:.3;cursor:not-allowed}
-        .adot{width:5px;height:5px;border-radius:50%;background:var(--on)}
-        .apply-btn.dirty .adot{animation:blink 1s infinite}
-        .apply-btn.applying{animation:pg 1s infinite}
-        @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
-        @keyframes pg{0%,100%{box-shadow:none}50%{box-shadow:0 0 8px 2px rgba(0,230,118,.2)}}
+        .adot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
+        .stats{display:flex;gap:6px}
+        .pill{font-size:9px;padding:2px 7px;border-radius:10px;font-family:'Space Mono',monospace}
+        .pp{background:rgba(0,230,118,.1);color:var(--on)}.pd{background:rgba(124,108,255,.1);color:var(--accent)}.pb{background:rgba(255,107,53,.1);color:var(--block)}
+        .rules-head{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+        .rtitle{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted2);text-transform:uppercase}
 
-        .evlog-panel{background:var(--surface);border:1px solid var(--border);
-            border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden}
-        .evlog-head{padding:10px 18px;border-bottom:1px solid var(--border);
-            display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
-        .evlog-head:hover{background:rgba(255,255,255,.02)}
-        .evlog-title{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
-            color:var(--muted);text-transform:uppercase;flex:1;display:flex;align-items:center;gap:8px}
-        .evlog-title::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--off);
-            box-shadow:0 0 5px var(--off);transition:background .3s,box-shadow .3s}
-        .evlog-title.has-err::before{background:var(--off);box-shadow:0 0 6px var(--off)}
-        .evlog-title.has-warn::before{background:var(--pending);box-shadow:0 0 6px var(--pending)}
-        .evlog-title.ok::before{background:var(--on);box-shadow:0 0 5px var(--on)}
-        .ev-badge{font-family:'Space Mono',monospace;font-size:9px;padding:1px 6px;
-            border-radius:10px;border:1px solid var(--border);color:var(--muted);background:var(--surface2)}
-        .ev-badge.has-new{border-color:rgba(255,61,87,.4);color:var(--off);background:rgba(255,61,87,.08);
-            animation:blink 1.2s infinite}
-        .evlog-chevron{color:var(--muted);transition:transform .2s;font-size:12px}
-        .evlog-chevron.open{transform:rotate(180deg)}
-        .evlog-toolbar{padding:7px 18px;border-bottom:1px solid var(--border);
-            display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-        .evlog-body{display:none}
-        .evlog-body.open{display:flex;flex-direction:column}
-        .ev-filter-btn{padding:2px 8px;border-radius:2px;border:1px solid transparent;
-            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;text-transform:uppercase;
-            color:var(--muted);cursor:pointer;background:transparent;transition:all .15s;outline:none}
-        .ev-filter-btn:hover{color:var(--text)}
-        .ev-filter-btn.ef-all {border-color:var(--border2);color:var(--text)}
-        .ev-filter-btn.ef-info{border-color:rgba(124,108,255,.5);color:var(--lvl-info);background:rgba(124,108,255,.08)}
-        .ev-filter-btn.ef-warn{border-color:rgba(255,179,0,.5); color:var(--lvl-warn);background:rgba(255,179,0,.08)}
-        .ev-filter-btn.ef-error{border-color:rgba(255,61,87,.5);color:var(--lvl-err); background:rgba(255,61,87,.08)}
-        .ev-filter-btn.ef-debug{border-color:rgba(74,74,106,.5);color:var(--muted2)}
-        .ev-spacer{flex:1}
-        .ev-autoscroll{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);
-            cursor:pointer;display:flex;align-items:center;gap:5px;padding:2px 6px;
-            border:1px solid transparent;border-radius:2px;transition:all .15s;background:transparent;outline:none}
-        .ev-autoscroll:hover{border-color:var(--border2);color:var(--text)}
-        .ev-autoscroll.on{border-color:rgba(0,230,118,.3);color:var(--on)}
-        .ev-autoscroll .asdot{width:5px;height:5px;border-radius:50%;background:currentColor}
-        .ev-clear{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;
-            text-transform:uppercase;color:var(--muted);cursor:pointer;padding:2px 8px;
-            border:1px solid transparent;border-radius:2px;transition:all .15s;background:transparent;outline:none}
-        .ev-clear:hover{border-color:rgba(255,61,87,.4);color:var(--off)}
-        .evlist{overflow-y:auto;max-height:260px;font-family:'Space Mono',monospace;font-size:10px;
-            scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
-        .evlist::-webkit-scrollbar{width:3px}
-        .evlist::-webkit-scrollbar-thumb{background:var(--border2)}
-        .evrow{display:grid;grid-template-columns:64px 48px 70px 1fr;gap:0;
-            padding:4px 18px;border-bottom:1px solid rgba(31,31,48,.6);transition:background .1s}
-        .evrow:hover{background:rgba(255,255,255,.015)}
-        .evrow:last-child{border-bottom:none}
-        .evrow.lv-error{border-left:2px solid rgba(255,61,87,.5)}
-        .evrow.lv-warn {border-left:2px solid rgba(255,179,0,.4)}
-        .evrow.lv-info {border-left:2px solid rgba(124,108,255,.3)}
-        .evrow.lv-debug{border-left:2px solid rgba(74,74,106,.2)}
-        .ev-time{color:var(--muted);font-size:9px;padding-top:1px;white-space:nowrap}
-        .ev-level{font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding-top:1px}
-        .ev-level.lv-error{color:var(--lvl-err)}
-        .ev-level.lv-warn {color:var(--lvl-warn)}
-        .ev-level.lv-info {color:var(--lvl-info)}
-        .ev-level.lv-debug{color:var(--muted)}
-        .ev-src{color:var(--muted2);font-size:9px;padding-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-        .ev-msg{color:var(--text);line-height:1.5;word-break:break-all;padding-top:1px}
-        .ev-empty{padding:28px;text-align:center;font-family:'Space Mono',monospace;
-            font-size:10px;color:var(--muted)}
-
-        .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(14px);
-            background:var(--surface);border:1px solid var(--border);border-radius:2px;
-            padding:9px 16px;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
-            opacity:0;transition:all .3s;pointer-events:none;white-space:nowrap;z-index:100}
-        .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-        .toast.err{border-color:var(--off);color:var(--off)}
-        .toast.ok{border-color:var(--on);color:var(--on)}
-        .toast.inf{border-color:var(--accent);color:var(--accent)}
-
-        /* ── Drag & reorder ───────────────────────────────── */
-        .drag-handle{width:14px;flex-shrink:0;cursor:grab;color:var(--muted);opacity:.35;transition:opacity .15s;display:flex;align-items:center}
-        .drag-handle:hover,.ritem:hover .drag-handle{opacity:.8}
-        .drag-handle svg{width:10px;height:10px}
-        .ritem.dragging{opacity:.35;background:rgba(124,108,255,.08);border:1px dashed rgba(124,108,255,.4)}
-        .ritem.drag-over{box-shadow:inset 0 2px 0 var(--accent)}
-        .rpos{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);width:16px;text-align:right;flex-shrink:0;opacity:.5}
-
-        /* ── Process monitor panel ─────────────────────── */
-        .proc-panel{background:var(--surface);border:1px solid var(--border);border-radius:4px;
-            box-shadow:0 4px 16px rgba(0,0,0,.4);overflow:hidden}
-        .proc-head{padding:10px 18px;border-bottom:1px solid var(--border);
-            display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
-        .proc-head:hover{background:rgba(255,255,255,.02)}
-        .proc-title{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.2em;
-            color:var(--muted);text-transform:uppercase;flex:1;display:flex;align-items:center;gap:8px}
-        .proc-title::before{content:'';width:5px;height:5px;border-radius:50%;background:#b06cff;box-shadow:0 0 5px #b06cff}
-        .proc-badge{font-family:'Space Mono',monospace;font-size:9px;padding:1px 6px;
-            border-radius:10px;border:1px solid var(--border);color:var(--muted);background:var(--surface2)}
-        .proc-badge.has-proc{border-color:rgba(176,108,255,.4);color:#b06cff;background:rgba(176,108,255,.08)}
-        .proc-chevron{color:var(--muted);transition:transform .2s;font-size:12px}
-        .proc-chevron.open{transform:rotate(180deg)}
-        .proc-body{display:none}
-        .proc-body.open{display:block}
-        .proc-toolbar{padding:7px 18px;border-bottom:1px solid var(--border);
-            display:flex;align-items:center;gap:6px}
-        .proc-search{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:2px;
-            padding:5px 9px;font-family:'Space Mono',monospace;font-size:10px;
-            color:var(--text);outline:none;transition:border-color .2s}
-        .proc-search::placeholder{color:var(--muted)}
+        /* ── Process monitor ─── */
+        .proc-toolbar{display:flex;gap:8px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+        .proc-search{flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:5px 10px;font-size:12px;color:var(--text);outline:none;font-family:'Space Mono',monospace}
         .proc-search:focus{border-color:var(--accent)}
-        .proc-refresh{padding:4px 9px;border:1px solid var(--border);border-radius:2px;
-            background:transparent;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.08em;
-            text-transform:uppercase;color:var(--muted);cursor:pointer;transition:all .15s;outline:none}
-        .proc-refresh:hover{border-color:var(--border2);color:var(--text)}
-        .proc-fbar{padding:6px 18px;border-bottom:1px solid var(--border);display:flex;gap:4px}
-        .proc-list{max-height:200px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
-        .proc-list::-webkit-scrollbar{width:3px}
-        .proc-list::-webkit-scrollbar-thumb{background:var(--border2)}
-        .pitem{display:flex;align-items:center;padding:6px 18px;border-bottom:1px solid var(--border);
-            gap:8px;transition:background .15s;animation:fi .18s ease}
-        .pitem:last-child{border-bottom:none}
-        .pitem:hover{background:rgba(255,255,255,.02)}
-        .pdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
-        .pdot.PROXY  {background:var(--on);   box-shadow:0 0 4px var(--on)}
-        .pdot.DIRECT {background:var(--muted2)}
-        .pdot.BLOCKED{background:var(--block);box-shadow:0 0 4px var(--block)}
-        .pdot.UNKNOWN{background:var(--muted)}
-        .pname{flex:1;font-family:'Space Mono',monospace;font-size:11px;color:var(--text);
-            white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-        .ppid{font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);
-            flex-shrink:0;min-width:48px;text-align:right}
-        .pstatus{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.06em;
-            text-transform:uppercase;padding:1px 6px;border-radius:2px;flex-shrink:0}
-        .pstatus.PROXY  {background:rgba(0,230,118,.1); color:var(--on);   border:1px solid rgba(0,230,118,.2)}
-        .pstatus.DIRECT {background:rgba(255,255,255,.04);color:var(--muted2);border:1px solid rgba(106,106,138,.3)}
-        .pstatus.BLOCKED{background:rgba(255,107,53,.1); color:var(--block);border:1px solid rgba(255,107,53,.2)}
-        .pstatus.UNKNOWN{background:rgba(255,255,255,.03);color:var(--muted);border:1px solid rgba(74,74,106,.3)}
-        .padd{width:22px;height:22px;background:transparent;border:1px solid transparent;
-            border-radius:2px;cursor:pointer;display:flex;align-items:center;justify-content:center;
-            color:var(--muted);transition:all .15s;outline:none;flex-shrink:0}
-        .padd:hover{border-color:var(--accent);color:var(--accent);background:rgba(124,108,255,.08)}
-        .padd svg{width:10px;height:10px}
-        .proc-empty{padding:24px;text-align:center;font-family:'Space Mono',monospace;font-size:10px;color:var(--muted)}
-        .pgroup-header{display:flex;align-items:center;gap:8px;padding:5px 18px;
-            background:var(--surface2);border-bottom:1px solid var(--border);
-            font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.14em;
-            text-transform:uppercase;color:var(--muted);cursor:pointer;user-select:none;
-            position:sticky;top:0;z-index:1}
-        .pgroup-header:hover{background:rgba(255,255,255,.03)}
-        .pgroup-dot{width:5px;height:5px;border-radius:50%}
-        .pgroup-dot.user{background:#b06cff;box-shadow:0 0 4px #b06cff}
-        .pgroup-dot.system{background:var(--muted2)}
-        .pgroup-count{margin-left:auto;font-size:9px;color:var(--muted2)}
-        .pgroup-chev{font-size:10px;color:var(--muted);transition:transform .2s}
+        .proc-search::placeholder{color:var(--muted)}
+        .proc-refresh{background:rgba(124,108,255,.08);border:1px solid rgba(124,108,255,.2);border-radius:3px;padding:5px 12px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap}
+        .proc-fbar{display:flex;gap:4px;padding:6px 14px;background:var(--surface2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+        .proc-list{overflow-y:auto;max-height:calc(100vh - 280px);scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .proc-list::-webkit-scrollbar{width:3px}.proc-list::-webkit-scrollbar-thumb{background:var(--border2)}
+        .proc-empty{padding:20px;text-align:center;font-size:11px;color:var(--muted)}
+        .pgroup-header{display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted2);text-transform:uppercase;position:sticky;top:0;z-index:2}
+        .pgroup-header:hover{background:var(--surface2)}
+        .pgroup-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+        .pgroup-dot.user{background:var(--accent)}.pgroup-dot.system{background:var(--muted)}
+        .pgroup-count{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace}
+        .pgroup-chev{margin-left:auto;font-size:9px;color:var(--muted);transition:transform .2s}
         .pgroup-chev.collapsed{transform:rotate(-90deg)}
-        .pgroup-items.collapsed{display:none}
+        .pgroup-items{display:block}.pgroup-items.collapsed{display:none}
+        .pitem{display:flex;align-items:center;padding:6px 14px;border-bottom:1px solid var(--border);gap:8px;background:var(--surface2)}
+        .pitem:hover{background:var(--surface)}
+        .pdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+        .pdot.PROXY{background:var(--on)}.pdot.DIRECT{background:var(--accent)}.pdot.BLOCKED{background:var(--block)}.pdot.UNKNOWN{background:var(--muted)}
+        .pname{flex:1;font-size:12px;font-family:'Space Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+        .ppid{font-size:9px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap;flex-shrink:0}
+        .pstatus{font-size:9px;padding:2px 6px;border-radius:3px;font-family:'Space Mono',monospace;flex-shrink:0}
+        .pstatus.PROXY{background:rgba(0,230,118,.12);color:var(--on)}.pstatus.DIRECT{background:rgba(124,108,255,.12);color:var(--accent)}.pstatus.BLOCKED{background:rgba(255,107,53,.12);color:var(--block)}.pstatus.UNKNOWN{background:rgba(74,74,106,.12);color:var(--muted2)}
+        .padd{background:none;border:1px solid var(--border);border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--muted);flex-shrink:0;transition:all .15s}
+        .padd:hover{border-color:var(--accent);color:var(--accent)}
+        .proc-badge{font-size:9px;background:var(--border2);border-radius:8px;padding:1px 7px;font-family:'Space Mono',monospace;color:var(--muted2)}
+        .proc-badge.has-proc{background:rgba(124,108,255,.15);color:var(--accent)}
 
-        @media(max-width:380px){
-            body{padding:8px 8px 24px}
-            .proxy-acts{flex-direction:column}
-        }
-    </style>
+        /* ── Profiles tab ─── */
+        .prof-list{display:flex;flex-direction:column;gap:4px}
+        .prof-item{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .15s;background:var(--surface2)}
+        .prof-item:hover{background:var(--surface)}
+        .prof-name{flex:1;font-size:12px;color:var(--text);font-family:'Space Mono',monospace}
+        .prof-meta{font-size:10px;color:var(--muted)}
+        .prof-del{background:none;border:none;color:var(--muted);cursor:pointer;padding:3px 7px;border-radius:2px;font-size:13px;line-height:1}
+        .prof-del:hover{color:var(--off);background:rgba(255,61,87,.08)}
+        .prof-save-row{display:flex;gap:8px;padding:10px 14px;background:var(--surface);border-top:1px solid var(--border)}
+        .prof-inp{flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:7px 10px;font-size:12px;color:var(--text);outline:none;font-family:'Space Mono',monospace}
+        .prof-inp:focus{border-color:var(--accent)}
+        .prof-save-btn{background:rgba(124,108,255,.12);border:1px solid rgba(124,108,255,.3);border-radius:3px;padding:7px 14px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap;transition:all .15s}
+        .prof-empty{padding:20px;text-align:center;font-size:11px;color:var(--muted)}
+
+        /* ── Diag ─── */
+        .diag-section{padding:12px 14px}
+        .diag-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+        .diag-test-btn{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.25);border-radius:3px;padding:7px 18px;font-size:11px;color:var(--on);cursor:pointer;transition:all .2s;font-family:'Space Mono',monospace}
+        .diag-test-btn:hover{background:rgba(0,230,118,.16)}
+        .diag-test-btn:disabled{opacity:.4;cursor:not-allowed}
+        .diag-result{font-size:11px;font-family:'Space Mono',monospace;color:var(--muted2)}
+        .conn-table{width:100%;border-collapse:collapse;font-size:10px;font-family:'Space Mono',monospace}
+        .conn-table th{color:var(--muted);font-weight:400;padding:4px 0;text-align:left;border-bottom:1px solid var(--border);font-size:9px}
+        .conn-table td{color:var(--text);padding:4px 0;border-bottom:1px solid var(--border2);overflow:hidden;text-overflow:ellipsis;max-width:140px;white-space:nowrap}
+
+        /* ── Toast ─── */
+        .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:8px 18px;font-size:11px;font-family:'Space Mono',monospace;white-space:nowrap;pointer-events:none;opacity:0;transition:all .25s;z-index:999;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
+        .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+        .toast.ok{border-color:rgba(0,230,118,.4);color:var(--on)}
+        .toast.error{border-color:rgba(255,61,87,.4);color:var(--off)}
+        .toast.inf{border-color:rgba(124,108,255,.4);color:var(--accent)}
+            .geo-hint{display:none;margin-top:5px;padding:6px 10px;background:rgba(80,80,200,0.08);border:1px solid rgba(80,80,200,0.25);border-radius:4px;font-size:11px;color:var(--muted);align-items:center;gap:8px}
+        .geo-hint.show{display:flex}
+        .geo-hint b{color:var(--text)}
+        .geo-hint-use{padding:2px 10px;font-size:10px;background:rgba(80,80,200,0.15);border:1px solid rgba(80,80,200,0.35);border-radius:3px;color:#9999ff;cursor:pointer;margin-left:auto}
+        .geo-hint-dl{padding:2px 10px;font-size:10px;background:rgba(0,200,85,0.1);border:1px solid rgba(0,200,85,0.3);border-radius:3px;color:#00cc55;cursor:pointer;margin-left:auto}
+        .geo-hint-use:hover{background:rgba(80,80,200,0.25)}
+        .geo-hint-dl:hover{background:rgba(0,200,85,0.2)}
+
+        /* ── Rule Analysis ──────────────────────────────────────── */
+        .analysis-bar{margin:0 0 0 0;padding:0}
+        .analysis-item{display:flex;align-items:flex-start;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border2);font-size:11px;animation:slideIn .2s ease}
+        @keyframes slideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+        .analysis-item:last-child{border-bottom:none}
+        .analysis-icon{flex-shrink:0;width:16px;height:16px;margin-top:1px}
+        .analysis-body{flex:1;min-width:0}
+        .analysis-title{font-weight:700;color:var(--text);margin-bottom:2px}
+        .analysis-desc{color:var(--muted2);font-size:10px;line-height:1.5;word-break:break-all}
+        .analysis-actions{display:flex;gap:6px;margin-top:5px;flex-wrap:wrap}
+        .analysis-fix{font-size:10px;padding:2px 10px;border-radius:3px;cursor:pointer;border:1px solid;transition:opacity .15s}
+        .analysis-fix:hover{opacity:.75}
+        .fix-warn{background:rgba(255,170,0,.1);border-color:rgba(255,170,0,.35);color:#ffaa00}
+        .fix-ok{background:rgba(0,200,85,.1);border-color:rgba(0,200,85,.35);color:#00cc55}
+        .fix-err{background:rgba(255,61,87,.1);border-color:rgba(255,61,87,.35);color:var(--off)}
+        .analysis-badge{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:9px;font-weight:700;flex-shrink:0;margin-left:auto;cursor:pointer}
+        .anl-warn{color:#ffaa00}.anl-ok{color:var(--on)}.anl-err{color:var(--off)}
+        .analysis-header{display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--surface2);border-bottom:1px solid var(--border);cursor:pointer;user-select:none}
+        .analysis-header-title{font-size:10px;font-weight:700;font-family:'Space Mono',monospace}
+        .analysis-header-count{font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700}
+        .analysis-header-toggle{margin-left:auto;font-size:10px;color:var(--muted);transition:transform .2s}
+        .analysis-wrap{border-top:1px solid var(--border)}
+        .analysis-wrap.collapsed .analysis-bar{display:none}
+        #anlBtn{font-size:9px;padding:2px 8px;opacity:.8;position:relative}
+        #anlBadge{position:absolute;top:-4px;right:-4px;width:14px;height:14px;border-radius:50%;font-size:8px;font-weight:700;display:none;align-items:center;justify-content:center;background:var(--off);color:#fff}
+        </style>
 </head>
 <body>
 <div class="bg-glow off" id="bg"></div>
-<div class="layout">
+<div class="app">
 
-    <!-- Proxy bar -->
-    <div class="proxy-card">
-        <div class="conn-bar" id="cb"></div>
-        <div class="proxy-row">
-            <button class="pwr-btn" id="rb" onclick="toggleProxy()">
-                <svg class="pwr off" id="pi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
-                </svg>
-            </button>
-            <div class="proxy-info">
+    <!-- Top bar -->
+    <div class="topbar">
+        <button class="pwr-btn" id="rb" onclick="toggleProxy()">
+            <svg class="pwr off" id="pi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+            </svg>
+        </button>
+        <div class="topbar-status">
+            <div class="conn-dot" id="cdot"></div>
+            <div class="topbar-info">
                 <div class="slabel off" id="sl">ОТКЛЮЧЁН</div>
-                <div class="proxy-meta">
-                    <span class="pmeta-item" id="ma-wrap">
-                        <span class="pmeta-val" id="ma">—</span>
-                    </span>
-                    <span class="pmeta-item" id="me-wrap">
-                        <span class="pmeta-val" id="me">—</span>
-                    </span>
-                    <span class="pmeta-item">pid <span class="pmeta-val" id="mp">—</span></span>
-                </div>
-            </div>
-            <div class="proxy-acts">
-                <button class="btn bon" id="be" onclick="enableProxy()">вкл</button>
-                <button class="btn boff" id="bd" onclick="disableProxy()">выкл</button>
+                <div class="smeta" id="smeta">sing-box · vless · reality</div>
             </div>
         </div>
-        <div class="proxy-footer">
-            <span class="engine-badge">sing-box · vless · reality</span>
-            <span class="shint" id="sh">нажмите для включения</span>
+        <div class="topbar-actions">
+            <button class="tbtn-sm on-btn" id="be" onclick="enableProxy()">вкл</button>
+            <button class="tbtn-sm off-btn" id="bd" onclick="disableProxy()">выкл</button>
+            <button class="theme-sm" id="themeBtn" onclick="toggleTheme()" title="Тема">☀</button>
         </div>
     </div>
 
-    <!-- Default panel -->
-    <div class="def-panel">
-        <div class="def-label">трафик по умолчанию</div>
-        <div class="def-row">
-            <button class="def-btn ap" id="dp" onclick="setDefault('proxy')">● через прокси</button>
-            <button class="def-btn"    id="dd" onclick="setDefault('direct')">○ напрямую</button>
+    <!-- Stats strip -->
+    <div class="stats-strip" id="statsStrip">
+        <div class="sc">
+            <span class="sc-lbl">proxy</span>
+            <div class="sc-vals">
+                <span class="sc-arr">↑</span><span class="sc-up" id="stPrU">—</span>
+                <span class="sc-arr">↓</span><span class="sc-dn" id="stPrD">—</span>
+            </div>
         </div>
+        <div class="ss-sep"></div>
+        <div class="sc">
+            <span class="sc-lbl">direct</span>
+            <div class="sc-vals">
+                <span class="sc-arr">↑</span><span class="sc-up" id="stDiU">—</span>
+                <span class="sc-arr">↓</span><span class="sc-dn" id="stDiD">—</span>
+            </div>
+        </div>
+        <div class="ss-sep"></div>
+        <div class="sc">
+            <span class="sc-lbl">total</span>
+            <div class="sc-vals">
+                <span class="sc-arr">↑</span><span class="sc-up" id="stToU">—</span>
+                <span class="sc-arr">↓</span><span class="sc-dn" id="stToD">—</span>
+            </div>
+        </div>
+        <span class="ss-ip" id="ssIP">—</span>
+        <button class="ss-test" onclick="runDiagTest()" id="ssTestBtn">⚡</button>
     </div>
 
-    <!-- Rules panel -->
-    <div class="rules-panel">
-        <div class="rtop"></div>
-        <div class="rhead" onclick="toggleRules()">
-            <span class="rtitle">правила маршрутизации</span>
-            <div style="display:flex;align-items:center;gap:8px">
-                <div class="stats">
-                    <span class="pill pp" id="sp">0 proxy</span>
-                    <span class="pill pd" id="sd">0 direct</span>
-                    <span class="pill pb" id="sb">0 block</span>
-                </div>
-                <span class="rchev open" id="rChev">▼</span>
-            </div>
-        </div>
-        <div class="rules-body open" id="rulesBody">
-            <div class="add-form">
-                <div class="type-row">
-                    <button class="tbtn tsel" id="tAuto"  onclick="setType('auto')">auto</button>
-                    <button class="tbtn"      id="tDom"   onclick="setType('domain')">домен</button>
-                    <button class="tbtn"      id="tProc"  onclick="setType('process')">.exe</button>
-                    <button class="tbtn"      id="tIP"    onclick="setType('ip')">ip/cidr</button>
-                    <button class="tbtn"      id="tGeo"   onclick="setType('geosite')">geosite</button>
-                </div>
-                <div class="inp-row">
-                    <div class="inp-wrap">
-                        <input class="inp" id="ai" type="text"
-                               placeholder="chrome.exe · google.com · 8.8.8.8 · geosite:discord"
-                               autocomplete="off" spellcheck="false"
-                               onkeydown="if(event.key==='Enter')addRule()"/>
-                        <span class="inp-ico">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                        </svg>
-                    </span>
-                    </div>
-                    <select class="sel" id="as">
-                        <option value="proxy">proxy</option>
-                        <option value="direct">direct</option>
-                        <option value="block">block</option>
-                    </select>
-                    <button class="add-btn" onclick="addRule()">+ add</button>
-                </div>
-            </div>
-            <div class="fbar">
-                <button class="fbtn fa" id="fAll"    onclick="setFilter('all')">все</button>
-                <button class="fbtn"    id="fProxy"  onclick="setFilter('proxy')">proxy</button>
-                <button class="fbtn"    id="fDirect" onclick="setFilter('direct')">direct</button>
-                <button class="fbtn"    id="fBlock"  onclick="setFilter('block')">block</button>
-                <button class="fbtn"    id="fProc"   onclick="setFilter('process')">.exe</button>
-                <button class="fbtn"    id="fDom"    onclick="setFilter('domain')">домены</button>
-                <button class="fbtn"    id="fIP"     onclick="setFilter('ip')">ip</button>
-                <button class="fbtn"    id="fGeo"    onclick="setFilter('geosite')">geosite</button>
-            </div>
-            <div class="rlist" id="rl">
-                <div class="rempty" id="re">
-                    <div class="rempty-ico">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
-                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                        </svg>
-                    </div>
-                    <div class="rempty-t">нет правил</div>
-                    <div class="rempty-h">
-                        <b>chrome.exe</b> — процесс через TUN<br>
-                        <b>google.com</b> — домен<br>
-                        <b>8.8.8.8</b> или <b>10.0.0.0/8</b> — IP/CIDR<br>
-                        <b>geosite:discord</b> — категория доменов
-                    </div>
-                </div>
-            </div>
-            <div class="rfoot">
-                <span class="fhint" id="fh">—</span>
-                <button class="apply-btn" id="ab" onclick="applyRules()" disabled>
-                    <span class="adot"></span>apply
-                </button>
-            </div><!-- /rfoot -->
-        </div><!-- /rules-body -->
+    <!-- Tabs -->
+    <div class="tabs">
+        <div class="tab active" id="tab-main"    onclick="switchTab('main')">Главная</div>
+        <div class="tab"        id="tab-rules"   onclick="switchTab('rules')">Правила<span class="tab-badge" id="rulesBadge" style="display:none">0</span></div>
+        <div class="tab"        id="tab-proc"    onclick="switchTab('proc')">Процессы<span class="tab-badge" id="procTabBadge" style="display:none">0</span></div>
+        <div class="tab"        id="tab-settings"onclick="switchTab('settings')">Профили</div>
     </div>
 
-    <!-- Process monitor panel -->
-    <div class="proc-panel">
-        <div class="proc-head" onclick="toggleProc()">
-            <span class="proc-title">мониторинг процессов</span>
-            <span class="proc-badge" id="procBadge">0</span>
-            <span class="proc-chevron" id="procChev">▼</span>
+    <!-- TAB: Главная -->
+    <div class="tab-content active" id="tc-main">
+        <div class="section">
+            <div class="sec-title"><div class="sec-dot"></div>Трафик по умолчанию</div>
+            <div class="def-row">
+                <button class="def-btn ap" id="dp" onclick="setDefault('proxy')">● через прокси</button>
+                <button class="def-btn"    id="dd" onclick="setDefault('direct')">○ напрямую</button>
+            </div>
         </div>
-        <div class="proc-body" id="procBody">
-            <div class="proc-toolbar">
-                <input class="proc-search" id="procSearch" type="text"
-                       placeholder="фильтр по имени..." oninput="renderProcesses()"
-                       autocomplete="off" spellcheck="false"/>
-                <button class="proc-refresh" onclick="refreshProcesses()">↺ обновить</button>
+        <div class="section">
+            <div class="sec-title" style="justify-content:space-between">
+                <span style="display:flex;align-items:center;gap:6px"><div class="sec-dot"></div>Активные соединения</span>
+                <span id="connCount" style="font-size:9px;color:var(--muted);font-family:'Space Mono',monospace">—</span>
             </div>
-            <div class="proc-fbar">
-                <button class="fbtn fa" id="pf-all"     onclick="setProcFilter('all')">все</button>
-                <button class="fbtn"    id="pf-PROXY"   onclick="setProcFilter('PROXY')">proxy</button>
-                <button class="fbtn"    id="pf-DIRECT"  onclick="setProcFilter('DIRECT')">direct</button>
-                <button class="fbtn"    id="pf-BLOCKED" onclick="setProcFilter('BLOCKED')">block</button>
-                <button class="fbtn"    id="pf-UNKNOWN" onclick="setProcFilter('UNKNOWN')">без правил</button>
-            </div>
-            <div class="proc-list" id="procList">
-                <div class="proc-empty">Нажмите «↺ обновить» или дождитесь автообновления</div>
+            <div style="overflow-x:auto">
+                <table class="conn-table" id="connTable">
+                    <thead><tr>
+                        <th style="cursor:pointer;user-select:none" onclick="sortConn('host')" id="th_host">хост <span id="si_host"></span></th>
+                        <th style="cursor:pointer;user-select:none" onclick="sortConn('proc')" id="th_proc">процесс <span id="si_proc"></span></th>
+                        <th style="cursor:pointer;user-select:none" onclick="sortConn('net')" id="th_net">тип <span id="si_net"></span></th>
+                        <th style="cursor:pointer;user-select:none" onclick="sortConn('via')" id="th_via">маршрут <span id="si_via"></span></th>
+                        <th style="cursor:pointer;user-select:none" onclick="sortConn('bytes')" id="th_bytes">↑↓ <span id="si_bytes">▼</span></th>
+                    </tr></thead>
+                    <tbody id="connTbody"><tr><td colspan="5" style="color:var(--muted);text-align:center;padding:12px">—</td></tr></tbody>
+                </table>
             </div>
         </div>
     </div>
 
-    <!-- Event Log panel -->
-    <div class="evlog-panel">
-        <div class="evlog-head" onclick="toggleEvlog()">
-            <span class="evlog-title ok" id="evTitle">event log</span>
-            <span class="ev-badge" id="evBadge">0</span>
-            <span class="evlog-chevron" id="evChev">▼</span>
+    <!-- TAB: Правила -->
+    <div class="tab-content" id="tc-rules">
+        <div class="add-form">
+            <div class="type-row">
+                <button class="tbtn tsel" id="tAuto"  onclick="setType('auto')">auto</button>
+                <button class="tbtn"      id="tDom"   onclick="setType('domain')">домен</button>
+                <button class="tbtn"      id="tProc"  onclick="setType('process')">.exe</button>
+                <button class="tbtn"      id="tIP"    onclick="setType('ip')">ip/cidr</button>
+                <button class="tbtn"      id="tGeo"   onclick="setType('geosite')">geosite</button>
+            </div>
+            <div class="inp-row">
+                <div class="inp-wrap" style="position:relative">
+                    <input class="inp" id="ai" type="text"
+                           placeholder="chrome.exe · google.com · 8.8.8.8"
+                           autocomplete="off" spellcheck="false"
+                           oninput="checkGeoHint()" onkeydown="if(event.key==='Enter')addRule()"/>
+                    <span class="inp-ico">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px">
+                        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                    </svg></span>
+                </div>
+                <select class="sel" id="as">
+                    <option value="proxy">proxy</option>
+                    <option value="direct">direct</option>
+                    <option value="block">block</option>
+                </select>
+                <button class="add-btn" onclick="addRule()">+ add</button>
+            </div>
+            <div class="geo-hint" id="geoHint">
+                <span id="geoHintText"></span>
+                <button id="geoHintBtn" class="geo-hint-use" onclick="applyGeoHint()"></button>
+            </div>
         </div>
-        <div class="evlog-body" id="evBody">
-            <div class="evlog-toolbar">
-                <button class="ev-filter-btn ef-all" id="ef-all"   onclick="setEvFilter('all')">все</button>
-                <button class="ev-filter-btn"        id="ef-error" onclick="setEvFilter('error')">error</button>
-                <button class="ev-filter-btn"        id="ef-warn"  onclick="setEvFilter('warn')">warn</button>
-                <button class="ev-filter-btn"        id="ef-info"  onclick="setEvFilter('info')">info</button>
-                <button class="ev-filter-btn"        id="ef-debug" onclick="setEvFilter('debug')">debug</button>
-                <div class="ev-spacer"></div>
-                <button class="ev-autoscroll on" id="evAs" onclick="toggleAutoScroll()">
-                    <span class="asdot"></span>auto-scroll
-                </button>
-                <button class="ev-clear" onclick="clearEvents()">очистить</button>
+        <input class="rule-search" id="ruleSearch" type="text" placeholder="🔍 поиск..."
+               oninput="renderRules()" autocomplete="off" spellcheck="false">
+        <div class="fbar">
+            <button class="fbtn fa" id="fAll"    onclick="setFilter('all')">все</button>
+            <button class="fbtn"    id="fProxy"  onclick="setFilter('proxy')">proxy</button>
+            <button class="fbtn"    id="fDirect" onclick="setFilter('direct')">direct</button>
+            <button class="fbtn"    id="fBlock"  onclick="setFilter('block')">block</button>
+            <button class="fbtn"    id="fProc"   onclick="setFilter('process')">.exe</button>
+            <button class="fbtn"    id="fDom"    onclick="setFilter('domain')">домены</button>
+            <button class="fbtn"    id="fIP"     onclick="setFilter('ip')">ip</button>
+            <button class="fbtn"    id="fGeo"    onclick="setFilter('geosite')">geosite</button>
+        </div>
+
+        <!-- Rule Analysis Panel -->
+        <div id="anlWrap" class="analysis-wrap collapsed" style="display:none">
+            <div class="analysis-header" onclick="toggleAnalysis()">
+                <span id="anlIcon" style="font-size:12px">⚠</span>
+                <span class="analysis-header-title" id="anlHeaderTitle">Анализ правил</span>
+                <span class="analysis-header-count" id="anlHeaderCount"></span>
+                <span class="analysis-header-toggle" id="anlToggleArrow">▼</span>
             </div>
-            <div class="evlist" id="evlist">
-                <div class="ev-empty">Событий пока нет — запустите приложение</div>
+            <div class="analysis-bar" id="anlBar"></div>
+        </div>
+        <div class="rules-head">
+            <div class="stats">
+                <span class="pill pp" id="sp">0 proxy</span>
+                <span class="pill pd" id="sd">0 direct</span>
+                <span class="pill pb" id="sb">0 block</span>
             </div>
+            <div style="display:flex;gap:6px;align-items:center">
+                <button class="tbtn-sm" id="anlBtn" style="font-size:9px;padding:3px 8px" onclick="runAnalysis(true)" title="Анализ правил">🔍<span id="anlBadge"></span></button>
+                <button class="tbtn-sm" style="font-size:9px;padding:3px 8px;opacity:.7" onclick="exportRules()" title="Экспорт">↓</button>
+                <label class="tbtn-sm" style="font-size:9px;padding:3px 8px;opacity:.7;cursor:pointer" title="Импорт">↑<input type="file" accept=".json" style="display:none" onchange="importRules(this)"></label>
+            </div>
+        </div>
+        <div class="rlist" id="rl">
+            <div class="rempty" id="re">
+                <div class="rempty-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div>
+                <div class="rempty-t">нет правил</div>
+                <div class="rempty-h"><b>chrome.exe</b> · <b>google.com</b> · <b>8.8.8.8</b> · <b>geosite:discord</b></div>
+            </div>
+        </div>
+        <div class="rfoot">
+            <span class="fhint" id="fh">—</span>
+            <button class="apply-btn" id="ab" onclick="applyRules()" disabled><span class="adot"></span>apply</button>
         </div>
     </div>
 
-</div>
+    <!-- TAB: Процессы -->
+    <div class="tab-content" id="tc-proc">
+        <div class="proc-toolbar">
+            <input class="proc-search" id="procSearch" type="text" placeholder="фильтр по имени..."
+                   oninput="renderProcesses()" autocomplete="off" spellcheck="false"/>
+            <button class="proc-refresh" onclick="refreshProcesses()">↺ обновить</button>
+        </div>
+        <div class="proc-fbar">
+            <button class="fbtn fa" id="pf-all"     onclick="setProcFilter('all')">все</button>
+            <button class="fbtn"    id="pf-PROXY"   onclick="setProcFilter('PROXY')">proxy</button>
+            <button class="fbtn"    id="pf-DIRECT"  onclick="setProcFilter('DIRECT')">direct</button>
+            <button class="fbtn"    id="pf-BLOCKED" onclick="setProcFilter('BLOCKED')">block</button>
+            <button class="fbtn"    id="pf-UNKNOWN" onclick="setProcFilter('UNKNOWN')">без правил</button>
+            <span id="procBadge" class="proc-badge" style="margin-left:auto">0</span>
+        </div>
+        <div class="proc-list" id="procList">
+            <div class="proc-empty">Нажмите «↺ обновить»</div>
+        </div>
+    </div>
+
+    <!-- TAB: Профили -->
+    <div class="tab-content" id="tc-settings">
+        <div class="section">
+            <div class="sec-title"><div class="sec-dot"></div>Профили правил</div>
+            <div class="prof-list" id="profList">
+                <div class="prof-empty">Нет сохранённых профилей</div>
+            </div>
+            <div class="prof-save-row">
+                <input class="prof-inp" id="profName" type="text" placeholder="название профиля..."
+                       autocomplete="off" spellcheck="false"
+                       onkeydown="if(event.key==='Enter')saveProfile()">
+                <button class="prof-save-btn" onclick="saveProfile()">💾 сохранить</button>
+            </div>
+        </div>
+        <div class="section" id="diagSection">
+            <div class="sec-title"><div class="sec-dot" style="background:var(--on)"></div>Диагностика</div>
+            <div class="diag-row">
+                <button class="diag-test-btn" id="diagBtn" onclick="runDiagTest()">⚡ тест соединения</button>
+                <span class="diag-result" id="diagResult">—</span>
+            </div>
+            <div class="diag-row" style="margin-top:6px">
+            </div>
+            <pre id="debugOutput" style="display:none;margin-top:8px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-size:9px;font-family:'Space Mono',monospace;color:var(--text);overflow-x:auto;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></pre>
+        </div>
+    </div>
+
+</div><!-- /app -->
 <div class="toast" id="toast"></div>
 
 <script>
-    const API='http://localhost:8080/api', POLL=3000, EV_POLL=2000;
+    const API='http://localhost:8080/api', POLL=3000;
     let ps={enabled:false,xray:false,pid:0,addr:'',pending:false,conn:false};
     let rules=[], defAction='proxy', dirty=false, filter='all';
     let selectedType='auto';
+    let procData=[], procFilter='all';
+    const groupCollapsed={user:false,system:true};
     const $=id=>document.getElementById(id);
 
-    // ── Event log state ───────────────────────────────────────
-    let evOpen=true, evFilter='all', evAutoScroll=true;
-    let evLatestId=0, evHasNew=false;
-    let evAllEvents=[];  // полный кэш всех событий в памяти
+    function setDirty(val){dirty=val;renderRules();}
+    const loadRules=()=>fetchRules();
 
-    // ── Type selector ─────────────────────────────────────────
-    const TYPE_CFG={
-        auto:   {id:'tAuto', cls:'',      ph:'chrome.exe · google.com · 8.8.8.8 · geosite:discord'},
-        domain: {id:'tDom',  cls:'tdom',  ph:'google.com · .discord.com · example.org'},
-        process:{id:'tProc', cls:'tproc', ph:'chrome.exe · discord.exe · spotify.exe'},
-        ip:     {id:'tIP',   cls:'tip',   ph:'8.8.8.8 · 10.0.0.0/8 · 192.168.1.0/24'},
-        geosite:{id:'tGeo',  cls:'tgeo',  ph:'discord · youtube · spotify · reddit · tiktok'},
-    };
-    function setType(t){
-        selectedType=t;
-        Object.entries(TYPE_CFG).forEach(([k,c])=>{
-            $(c.id).className='tbtn'+(k===t?' tsel '+(c.cls||''):'');
+    // ── Theme ──────────────────────────────────────────────────
+    let isLight=localStorage.getItem('theme')==='light';
+    function applyTheme(){
+        document.documentElement.classList.toggle('light',isLight);
+        $('themeBtn').textContent=isLight?'🌙':'☀';
+    }
+    function toggleTheme(){isLight=!isLight;localStorage.setItem('theme',isLight?'light':'dark');applyTheme();}
+    applyTheme();
+
+    // ── Tabs ───────────────────────────────────────────────────
+    let activeTab='main';
+    function switchTab(name){
+        activeTab=name;
+        ['main','rules','proc','settings'].forEach(t=>{
+            $('tab-'+t).className='tab'+(t===name?' active':'');
+            $('tc-'+t).className='tab-content'+(t===name?' active':'');
         });
-        $('ai').placeholder=TYPE_CFG[t]?.ph||'';
-        $('ai').focus();
+        if(name==='proc'&&procData.length===0)fetchProcesses();
+        if(name==='settings')loadProfiles();
     }
 
-    // ── Proxy render ──────────────────────────────────────────
+    // ── Proxy render ───────────────────────────────────────────
     function renderProxy(){
         const s=ps.pending?'pend':(ps.enabled?'on':'off');
         $('bg').className='bg-glow '+(ps.enabled?'on':'off');
-        $('cb').className='conn-bar '+(ps.conn?'ok':'err');
+        $('cdot').className='conn-dot '+(ps.conn?'ok':'err');
         $('pi').className='pwr '+s;
         $('sl').className='slabel '+s;
-        if(ps.pending){$('sl').textContent='ОЖИДАНИЕ...';$('sh').textContent='выполняется операция'}
-        else if(ps.enabled){$('sl').textContent='ВКЛЮЧЁН';$('sh').textContent='нажмите для отключения'}
-        else{$('sl').textContent='ОТКЛЮЧЁН';$('sh').textContent='нажмите для включения'}
-        $('ma').textContent=ps.addr||'—';
-        const maWrap=$('ma-wrap');
-        if(maWrap)maWrap.className='pmeta-item'+(ps.enabled?' hi':'');
-        $('me').textContent=ps.xray?'sing-box running':'sing-box stopped';
-        const meWrap=$('me-wrap');
-        if(meWrap)meWrap.className='pmeta-item'+(ps.xray?' hi':'');
-        $('mp').textContent=ps.pid||'—';
+        if(ps.pending)$('sl').textContent='ОЖИДАНИЕ...';
+        else if(ps.enabled)$('sl').textContent='ВКЛЮЧЁН';
+        else $('sl').textContent='ОТКЛЮЧЁН';
+        $('smeta').textContent=ps.xray?`${ps.addr||'127.0.0.1:10807'} · pid ${ps.pid}`:'sing-box · vless · reality';
         const b=ps.pending;
         $('rb').disabled=b||!ps.conn;$('be').disabled=b||ps.enabled||!ps.conn;$('bd').disabled=b||!ps.enabled||!ps.conn;
     }
 
-    // ── Default render ────────────────────────────────────────
+    // ── Default render ─────────────────────────────────────────
     function renderDef(){
         $('dp').className='def-btn'+(defAction==='proxy'?' ap':'');
         $('dd').className='def-btn'+(defAction==='direct'?' ad':'');
     }
 
-    // ── Type icon ─────────────────────────────────────────────
+    // ── Type icon ──────────────────────────────────────────────
     function typeIcon(type){
         if(type==='process')return{cls:'tproc',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`};
-        if(type==='ip')     return{cls:'tip',  svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>`};
-        if(type==='geosite')return{cls:'tgeo', svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>`};
+        if(type==='ip')return{cls:'tip',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>`};
+        if(type==='geosite')return{cls:'tgeo',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>`};
         return{cls:'',svg:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>`};
     }
 
-    // ── Rules render ──────────────────────────────────────────
+    // ── Rules render ───────────────────────────────────────────
     function renderRules(){
         $('rl').querySelectorAll('.ritem').forEach(e=>e.remove());
         const cnt={proxy:0,direct:0,block:0};
-        rules.forEach(r=>{if(cnt[r.action]!==undefined)cnt[r.action]++});
+        rules.forEach(r=>{if(cnt[r.action]!==undefined)cnt[r.action]++;});
         $('sp').textContent=cnt.proxy+' proxy';
         $('sd').textContent=cnt.direct+' direct';
         $('sb').textContent=cnt.block+' block';
+        const total=rules.length;
+        const badge=$('rulesBadge');
+        badge.textContent=total;badge.style.display=total>0?'':'none';
         let vis=rules;
-        if(filter==='proxy')   vis=rules.filter(r=>r.action==='proxy');
-        else if(filter==='direct')  vis=rules.filter(r=>r.action==='direct');
-        else if(filter==='block')   vis=rules.filter(r=>r.action==='block');
-        else if(filter==='process') vis=rules.filter(r=>r.type==='process');
-        else if(filter==='domain')  vis=rules.filter(r=>r.type==='domain');
-        else if(filter==='ip')      vis=rules.filter(r=>r.type==='ip');
-        else if(filter==='geosite') vis=rules.filter(r=>r.type==='geosite');
+        if(filter==='proxy')vis=rules.filter(r=>r.action==='proxy');
+        else if(filter==='direct')vis=rules.filter(r=>r.action==='direct');
+        else if(filter==='block')vis=rules.filter(r=>r.action==='block');
+        else if(filter==='process')vis=rules.filter(r=>r.type==='process');
+        else if(filter==='domain')vis=rules.filter(r=>r.type==='domain');
+        else if(filter==='ip')vis=rules.filter(r=>r.type==='ip');
+        else if(filter==='geosite')vis=rules.filter(r=>r.type==='geosite');
+        const q=($('ruleSearch')||{value:''}).value.trim().toLowerCase();
+        if(q)vis=vis.filter(r=>r.value.toLowerCase().includes(q));
         $('re').style.display=vis.length===0?'':'none';
-        vis.forEach((r,idx)=>{
+        vis.forEach(r=>{
             const ico=typeIcon(r.type);
-            const globalIdx=rules.indexOf(r);
+            const gi=rules.indexOf(r);
             const el=document.createElement('div');
-            el.className='ritem';
-            el.draggable=true;
-            el.dataset.value=r.value;
+            el.className='ritem';el.draggable=true;el.dataset.value=r.value;
             el.innerHTML=`
-      <div class="drag-handle" title="Перетащить для изменения порядка">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="10" height="10">
-          <circle cx="9" cy="5" r="1.2"/><circle cx="15" cy="5" r="1.2"/>
-          <circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/>
-          <circle cx="9" cy="19" r="1.2"/><circle cx="15" cy="19" r="1.2"/>
-        </svg>
-      </div>
-      <span class="rpos">${globalIdx+1}</span>
-      <div class="rdot ${r.action}"></div>
-      <span class="rtype-icon ${ico.cls}">${ico.svg}</span>
-      <div class="rval">${esc(r.value)}</div>
-      <span class="rbadge ${r.action}">${r.action}</span>
-      <button class="rdel" onclick="removeRule('${esc(r.value)}')" title="Удалить">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
-      </button>`;
+  <div class="drag-handle"><svg viewBox="0 0 24 24" fill="currentColor" width="10" height="10"><circle cx="9" cy="5" r="1.2"/><circle cx="15" cy="5" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="19" r="1.2"/><circle cx="15" cy="19" r="1.2"/></svg></div>
+  <span class="rpos">${gi+1}</span>
+  <div class="rdot ${r.action}"></div>
+  <span class="rtype-icon ${ico.cls}">${ico.svg}</span>
+  <div class="rval">${esc(r.value)}</div>
+  <span class="rbadge ${r.action}">${r.action}</span>
+  <button class="rdel" data-val="${esc(r.value)}" onclick="removeRule(this.dataset.val)" title="Удалить"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
             setupDrag(el);
             $('rl').appendChild(el);
         });
         $('ab').disabled=!dirty||!ps.conn;
         $('ab').className='apply-btn'+(dirty?' dirty':'');
-        $('fh').textContent=dirty?'есть несохранённые изменения':'всё применено';
-        const fmap={
-            all:    ['fAll','fa'],    proxy:  ['fProxy','fp'],
-            direct: ['fDirect','fd'], block:  ['fBlock','fb'],
-            process:['fProc','fproc'],domain: ['fDom','fdom'],
-            ip:     ['fIP','fip'],    geosite:['fGeo','fgeo'],
-        };
-        Object.entries(fmap).forEach(([f,[id,cls]])=>{
-            $(id).className='fbtn'+(filter===f?' '+cls:'');
-        });
+        $('fh').textContent=dirty?'несохранённые изменения':'всё применено';
+        // Автоматический анализ при каждом изменении правил
+        setTimeout(runAnalysis, 0);
+        const fmap={all:['fAll','fa'],proxy:['fProxy','fp'],direct:['fDirect','fd'],block:['fBlock','fb'],process:['fProc','fproc'],domain:['fDom','fdom'],ip:['fIP','fip'],geosite:['fGeo','fgeo']};
+        Object.entries(fmap).forEach(([f,[id,cls]])=>{$(id)&&($(id).className='fbtn'+(filter===f?' '+cls:''));});
     }
 
     function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
-    // ── Toast ─────────────────────────────────────────────────
+    // ── Toast ──────────────────────────────────────────────────
     let tt;
     function toast(text,type=''){
         clearTimeout(tt);const t=$('toast');
         t.textContent=text;t.className='toast '+type+' show';
-        tt=setTimeout(()=>t.className='toast',2500);
+        tt=setTimeout(()=>t.className='toast',2800);
     }
 
-    // ── Fetch status ──────────────────────────────────────────
+    // ── Stats ──────────────────────────────────────────────────
+    let statsInterval=null;
+    function fmtBytes(b){
+        if(!b&&b!==0)return'—';
+        if(b<1024)return b+'B/s';
+        if(b<1048576)return(b/1024).toFixed(1)+'KB/s';
+        return(b/1048576).toFixed(2)+'MB/s';
+    }
+    function fmtBytesTotal(b){
+        // Форматирует накопленные байты (без /s)
+        if(!b)return'0B';
+        if(b<1024)return b+'B';
+        if(b<1048576)return(b/1024).toFixed(0)+'KB';
+        if(b<1073741824)return(b/1048576).toFixed(1)+'MB';
+        return(b/1073741824).toFixed(2)+'GB';
+    }
+    async function fetchStats(){
+        try{
+            const r=await fetch(API+'/stats',{signal:AbortSignal.timeout(3000)});
+            if(!r.ok)return;
+            const j=await r.json();
+            $('stPrU').textContent=fmtBytes(j.proxy_up);
+            $('stPrD').textContent=fmtBytes(j.proxy_dn);
+            $('stDiU').textContent=fmtBytes(j.direct_up);
+            $('stDiD').textContent=fmtBytes(j.direct_dn);
+            $('stToU').textContent=fmtBytes(j.up);
+            $('stToD').textContent=fmtBytes(j.down);
+            if(j.active_connections!==undefined&&$('connCount'))
+                $('connCount').textContent=j.active_connections+' активных';
+        }catch{}
+    }
+    function startStats(){fetchStats();if(!statsInterval)statsInterval=setInterval(fetchStats,2000);}
+    function stopStats(){
+        clearInterval(statsInterval);statsInterval=null;
+        ['stPrU','stPrD','stDiU','stDiD','stToU','stToD'].forEach(id=>{if($(id))$(id).textContent='—';});
+    }
+
+    // ── Diagnostics ────────────────────────────────────────────
+    async function runDiagTest(){
+        const btn=$('ssTestBtn'),btn2=$('diagBtn'),res=$('diagResult');
+        [btn,btn2].forEach(b=>{if(b){b.disabled=true;if(b.id==='diagBtn')b.textContent='⏳ проверка...';}});
+        try{
+            const r=await fetch(API+'/diagnostics/test',{signal:AbortSignal.timeout(12000)});
+            const j=await r.json();
+            if(j.ok){
+                const msg=`✓ ${j.latency_ms}ms`;
+                if(res)res.textContent=msg+` · IP: ${j.external_ip}`;
+                $('ssIP').textContent=j.external_ip||'—';
+                toast(msg,'ok');
+            }else{
+                if(res)res.textContent=`✗ ${j.error||'нет соединения'}`;
+                toast('Ошибка: '+(j.error||'нет ответа'),'error');
+            }
+        }catch(e){if(res)res.textContent='✗ timeout';}
+        [btn,btn2].forEach(b=>{if(b){b.disabled=false;if(b.id==='diagBtn')b.textContent='⚡ тест соединения';if(b.id==='ssTestBtn')b.textContent='⚡';}});
+    }
+
+    // ── Connections ────────────────────────────────────────────
+    let connSortKey='bytes', connSortDir=-1;
+    let lastConns=[];
+
+    function sortConn(key){
+        if(connSortKey===key){connSortDir*=-1;}else{connSortKey=key;connSortDir=key==='bytes'?-1:1;}
+        ['host','proc','net','via','bytes'].forEach(k=>{
+            const el=$('si_'+k);
+            if(el)el.textContent=connSortKey===k?(connSortDir>0?'▲':'▼'):'';
+        });
+        renderConns(lastConns);
+    }
+
+    function connSortVal(c, key){
+        const meta=c.metadata||{};
+        if(key==='host')return(meta.host||meta.destinationIP||'').toLowerCase();
+        if(key==='proc')return(meta.processPath||'').split(/[/\\]/).pop().toLowerCase();
+        if(key==='net')return(meta.network||'').toLowerCase();
+        if(key==='via'){const ob=c.outbound||(c.chains&&c.chains[0])||'';return ob.toLowerCase();}
+        return c.upload+c.download; // bytes
+    }
+
+    function renderConns(conns){
+        lastConns=conns;
+        const tbody=$('connTbody');
+        if(!conns.length){tbody.innerHTML='<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:12px">нет активных соединений</td></tr>';return;}
+        const sorted=conns.slice().sort((a,b)=>{
+            const av=connSortVal(a,connSortKey), bv=connSortVal(b,connSortKey);
+            return(av<bv?-1:av>bv?1:0)*connSortDir;
+        });
+        tbody.innerHTML=sorted.slice(0,40).map(c=>{
+            const meta=c.metadata||{};
+            const host=meta.host||meta.destinationIP||'—';
+            const proc=(meta.processPath||meta.process_path||'').split(/[/\\]/).pop()||'—';
+            const type=meta.network||'—';
+            const total=c.upload+c.download;
+            const traf=total>0?fmtBytesTotal(total):'—';
+            // sing-box может вернуть outbound="" но chains[0]="proxy-out"/"direct"
+            const ob=c.outbound||(c.chains&&c.chains[0])||'';
+            const obLabel=ob==='proxy-out'?'proxy':ob==='direct'?'direct':ob||'?';
+            const obColor=ob==='proxy-out'?'var(--on)':ob==='direct'?'var(--accent)':'var(--muted2)';
+            return`<tr>
+              <td title="${esc(host)}">${esc(host.length>24?host.slice(0,24)+'…':host)}</td>
+              <td>${esc(proc.length>15?proc.slice(0,15)+'…':proc)}</td>
+              <td>${esc(type)}</td>
+              <td style="color:${obColor};font-size:9px">${esc(obLabel)}</td>
+              <td style="white-space:nowrap">${traf}</td>
+            </tr>`;
+        }).join('');
+    }
+
+
+
+    async function fetchConnections(){
+        try{
+            const r=await fetch(API+'/connections',{signal:AbortSignal.timeout(3000)});
+            if(!r.ok)return;
+            const j=await r.json();
+            const conns=j.connections||[];
+            $('connCount').textContent=conns.length+' активных';
+            renderConns(conns);
+        }catch{}
+    }
+
+    // ── Status ─────────────────────────────────────────────────
     async function fetchStatus(){
         try{
             const r=await fetch(`${API}/status`,{signal:AbortSignal.timeout(4000)});
@@ -702,10 +711,13 @@
             ps.conn=true;ps.enabled=d.proxy?.enabled??false;
             ps.xray=d.xray?.running??false;ps.pid=d.xray?.pid??0;ps.addr=d.proxy?.address??'';
         }catch{ps.conn=false}
+        // BUG FIX: убран вызов fetchConnections() отсюда — он уже вызывается
+        // через setInterval каждые 4с. Двойной fetch на главной вкладке создавал
+        // лишнюю нагрузку и мог вызывать мерцание таблицы соединений.
         renderProxy();
     }
 
-    // ── Fetch rules ───────────────────────────────────────────
+    // ── Rules ──────────────────────────────────────────────────
     async function fetchRules(){
         try{
             const r=await fetch(`${API}/tun/rules`,{signal:AbortSignal.timeout(4000)});
@@ -713,340 +725,257 @@
             const d=await r.json();
             rules=Array.isArray(d.rules)?d.rules:[];
             defAction=d.default_action||'proxy';
-            dirty=false;
-        }catch{}
-        renderDef();renderRules();
-    }
-
-    // ── Event log fetch ───────────────────────────────────────
-    async function fetchEvents(){
-        try{
-            const r=await fetch(`${API}/events?since=${evLatestId}`,{signal:AbortSignal.timeout(3000)});
-            if(!r.ok)return;
-            const d=await r.json();
-            const newEvs=Array.isArray(d.events)?d.events:[];
-            if(d.latest_id!==undefined)evLatestId=d.latest_id;
-            if(newEvs.length>0){
-                evAllEvents.push(...newEvs);
-                // Держим не более 500 в памяти
-                if(evAllEvents.length>500)evAllEvents=evAllEvents.slice(-500);
-                evHasNew=true;
-                renderEvlog(newEvs);
-            }
+            dirty=false;renderRules();renderDef();
         }catch{}
     }
 
-    function formatTime(ts){
-        const d=new Date(ts);
-        return d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    }
-
-    function renderEvlog(newRows){
-        const list=$('evlist');
-        // Убираем заглушку при первых событиях
-        const empty=list.querySelector('.ev-empty');
-        if(empty)empty.remove();
-
-        const wasAtBottom=list.scrollHeight-list.scrollTop-list.clientHeight<8;
-
-        newRows.forEach(e=>{
-            const lv=e.level||'info';
-            if(evFilter!=='all'&&evFilter!==lv)return;
-            const row=document.createElement('div');
-            row.className=`evrow lv-${lv}`;
-            row.dataset.level=lv;
-            row.innerHTML=`
-        <span class="ev-time">${esc(formatTime(e.ts))}</span>
-        <span class="ev-level lv-${lv}">${esc(lv)}</span>
-        <span class="ev-src">${esc(e.source||'')}</span>
-        <span class="ev-msg">${esc(e.message||'')}</span>`;
-            list.appendChild(row);
-        });
-
-        if(evAutoScroll&&(wasAtBottom||newRows.length>0)){
-            list.scrollTop=list.scrollHeight;
-        }
-
-        // Обновляем заголовок
-        const total=evAllEvents.length;
-        $('evBadge').textContent=total;
-
-        const hasErr=evAllEvents.some(e=>e.level==='error');
-        const hasWarn=evAllEvents.some(e=>e.level==='warn');
-        const title=$('evTitle');
-        title.className='evlog-title'+(hasErr?' has-err':hasWarn?' has-warn':' ok');
-
-        if(evHasNew&&!evOpen){
-            $('evBadge').className='ev-badge has-new';
-        }
-    }
-
-    function rebuildEvlog(){
-        const list=$('evlist');
-        list.innerHTML='';
-        const filtered=evFilter==='all'?evAllEvents:evAllEvents.filter(e=>e.level===evFilter);
-        if(filtered.length===0){
-            list.innerHTML='<div class="ev-empty">Нет событий для выбранного фильтра</div>';
-            return;
-        }
-        renderEvlog(filtered);
-    }
-
-    function setEvFilter(f){
-        evFilter=f;
-        ['all','error','warn','info','debug'].forEach(k=>{
-            const btn=$('ef-'+k);
-            if(!btn)return;
-            const cls={all:'ef-all',error:'ef-error',warn:'ef-warn',info:'ef-info',debug:'ef-debug'}[k]||'';
-            btn.className='ev-filter-btn'+(k===f?' '+cls:'');
-        });
-        rebuildEvlog();
-    }
-
-    function toggleEvlog(){
-        evOpen=!evOpen;
-        $('evBody').className='evlog-body'+(evOpen?' open':'');
-        $('evChev').className='evlog-chevron'+(evOpen?' open':'');
-        if(evOpen){
-            evHasNew=false;
-            $('evBadge').className='ev-badge';
-            rebuildEvlog();
-        }
-    }
-
-    function toggleAutoScroll(){
-        evAutoScroll=!evAutoScroll;
-        $('evAs').className='ev-autoscroll'+(evAutoScroll?' on':'');
-    }
-
-    async function clearEvents(){
-        evAllEvents=[];evLatestId=0;evHasNew=false;
-        $('evBadge').textContent='0';
-        $('evBadge').className='ev-badge';
-        $('evlist').innerHTML='<div class="ev-empty">Лог очищен</div>';
-        $('evTitle').className='evlog-title ok';
-        try{await fetch(`${API}/events/clear`,{method:'POST',signal:AbortSignal.timeout(3000)})}catch{}
-    }
-
-    // ── Proxy actions ─────────────────────────────────────────
+    // ── Proxy actions ──────────────────────────────────────────
     async function apiPost(ep){
         ps.pending=true;renderProxy();
-        try{
-            const r=await fetch(`${API}${ep}`,{method:'POST',signal:AbortSignal.timeout(6000)});
-            const d=await r.json();
-            toast(r.ok?(d.message||'Готово'):(d.error||'Ошибка'),r.ok?'ok':'err');
-        }catch{toast('Нет соединения','err')}
-        finally{ps.pending=false;await fetchStatus()}
+        try{await fetch(`${API}${ep}`,{method:'POST',signal:AbortSignal.timeout(5000)});}catch{}
+        await fetchStatus();ps.pending=false;renderProxy();
     }
     function toggleProxy(){if(!ps.pending&&ps.conn)apiPost('/proxy/toggle')}
     function enableProxy(){if(!ps.pending&&!ps.enabled&&ps.conn)apiPost('/proxy/enable')}
     function disableProxy(){if(!ps.pending&&ps.enabled&&ps.conn)apiPost('/proxy/disable')}
 
-    // ── Default ───────────────────────────────────────────────
+    // ── Default ────────────────────────────────────────────────
     async function setDefault(action){
-        if(defAction===action)return;
         const prev=defAction;defAction=action;dirty=true;renderDef();renderRules();
         try{
-            const r=await fetch(`${API}/tun/default`,{method:'POST',
-                headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({action}),signal:AbortSignal.timeout(4000)});
-            if(!r.ok){defAction=prev;renderDef();toast('Ошибка сохранения','err')}
-        }catch{defAction=prev;renderDef();toast('Нет соединения','err')}
+            const r=await fetch(`${API}/tun/default`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});
+            if(!r.ok){defAction=prev;dirty=false;renderDef();renderRules();}
+        }catch{defAction=prev;dirty=false;renderDef();renderRules();}
     }
 
-    // ── Filter ────────────────────────────────────────────────
-    function setFilter(f){filter=f;renderRules()}
+    // ── Filter ─────────────────────────────────────────────────
+    function setFilter(f){filter=f;renderRules();}
 
-    // ── Detect type ───────────────────────────────────────────
+    // ── Type selector ──────────────────────────────────────────
+    const TYPE_CFG={
+        auto:   {id:'tAuto',cls:'',ph:'chrome.exe · google.com · 8.8.8.8 · geosite:discord'},
+        domain: {id:'tDom', cls:'tdom',ph:'google.com · .discord.com'},
+        process:{id:'tProc',cls:'tproc',ph:'chrome.exe · discord.exe'},
+        ip:     {id:'tIP',  cls:'tip', ph:'8.8.8.8 · 10.0.0.0/8'},
+        geosite:{id:'tGeo', cls:'tgeo',ph:'discord · youtube · spotify'},
+    };
+    function setType(t){
+        selectedType=t;
+        Object.entries(TYPE_CFG).forEach(([k,c])=>{$(c.id).className='tbtn'+(k===t?' tsel '+(c.cls||''):'');});
+        $('ai').placeholder=TYPE_CFG[t]?.ph||'';
+        $('ai').focus();
+    }
+
+    // ── Detect type ────────────────────────────────────────────
     function detectType(v){
-        if(selectedType!=='auto')return selectedType;
-        if(v.endsWith('.exe'))return'process';
+        v=v.trim().toLowerCase();
         if(v.startsWith('geosite:'))return'geosite';
-        if(/^[\d.]+\/\d+$/.test(v)||/^[\d.]+$/.test(v))return'ip';
+        if(v.endsWith('.exe'))return'process';
+        if(/^[\d.:\/]+$/.test(v)&&(v.includes('.')||v.includes(':')))return'ip';
         return'domain';
     }
 
-    // ── Add rule ──────────────────────────────────────────────
-    function addRule(){
-        let v=$('ai').value.trim();
-        if(!v){$('ai').focus();return}
-        const t=detectType(v);
-        if(t==='geosite'){
-            v=v.replace(/^geosite:/i,'').toLowerCase().trim();
-            if(!v){toast('Введите название категории','err');return}
-            v='geosite:'+v;
-        } else if(t==='process'){
-            v=v.toLowerCase().trim();
-            if(!v.endsWith('.exe'))v+='.exe';
-        } else {
-            v=v.replace(/^https?:\/\//i,'').replace(/\/.*$/,'').toLowerCase().trim();
-        }
-        if(!v){toast('Введите значение','err');return}
-        const action=$('as').value;
-        if(rules.some(r=>r.value===v)){toast(`${v} уже в списке`,'err');return}
-        const newRule={value:v,type:t,action,note:''};
-        const insertInfo=smartInsert(newRule);
-        dirty=true;$('ai').value='';$('ai').focus();renderRules();
-        if(insertInfo.auto){
-            toast(`+ ${v} → поз. ${insertInfo.pos+1} (авто)`, 'inf');
-        } else {
-            toast(`+ ${v}`,'inf');
-        }
+    // ── Geosite hint ───────────────────────────────────────────────
+    // Известные geosite — имя должно совпадать с файлом geosite-{name}.bin на GitHub
+    const GEO_KNOWN = [
+        'youtube','discord','instagram','tiktok','spotify','reddit','soundcloud',
+        'google','github','twitter','facebook','netflix','twitch','amazon',
+        'microsoft','apple','cn','geolocation-!cn','category-ads-all',
+    ];
+
+    let _geoAvailable = null;   // Set имён которые есть локально
+    let _geoHintName  = null;   // текущее предложение
+
+    async function loadGeoAvailable() {
+        try {
+            const r = await fetch(`${API}/geosite`);
+            const d = await r.json();
+            _geoAvailable = new Set((d.items||[]).filter(x=>x.available).map(x=>x.name));
+        } catch(e) { _geoAvailable = new Set(); }
+        // Перезапускаем анализ: теперь знаем какие geosite доступны
+        runAnalysis();
     }
 
-    // ── Remove rule ───────────────────────────────────────────
-    function removeRule(v){
-        rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();
+    // Извлекаем «базовое имя» из ввода: discord.exe → discord, discord.com → discord
+    function guessGeoName(raw) {
+        let s = raw.toLowerCase().trim();
+        if(s.startsWith('geosite:')) return null; // уже geosite — не показываем
+        s = s.replace(/\.exe$/,'').replace(/^www\./,'');
+        // берём первый сегмент домена: some.service.com → service
+        const parts = s.split('.');
+        const base = parts.length >= 2 ? parts[parts.length-2] : parts[0];
+        // Проверяем точное совпадение или вхождение в known list
+        if(GEO_KNOWN.includes(base)) return base;
+        // Ищем частичное совпадение (например "googlevideo" → "google")
+        const partial = GEO_KNOWN.find(n => base.includes(n) || n.includes(base));
+        return partial || null;
     }
 
-    // ── Apply — ИСПРАВЛЕНО: один PUT запрос вместо N DELETE+POST ──
-    // Старая логика делала 50+ последовательных await fetch, что блокировало
-    // JS-тред WebView2 на 30+ секунд и вызывало "Не отвечает".
-    async function applyRules(){
-        if(!dirty||!ps.conn)return;
-        const btn=$('ab');
-        btn.disabled=true;btn.className='apply-btn applying';
-        btn.innerHTML='<span class="adot"></span>applying...';
+    function checkGeoHint() {
+        const raw = $('ai').value.trim();
+        const hint = $('geoHint');
+        const text = $('geoHintText');
+        const btn  = $('geoHintBtn');
+        if(!raw || !hint) return;
 
-        try{
-            // Шаг 1: атомарно заменяем весь список правил одним PUT запросом
-            const pr=await fetch(`${API}/tun/rules`,{
-                method:'PUT',
+        const name = guessGeoName(raw);
+        if(!name) { hint.classList.remove('show'); _geoHintName=null; return; }
+
+        _geoHintName = name;
+        const available = _geoAvailable && _geoAvailable.has(name);
+
+        text.innerHTML = available
+            ? `Найден <b>geosite:${name}</b> — охватывает все домены сервиса`
+            : `Доступен <b>geosite:${name}</b> — нужно скачать файл`;
+
+        if(available) {
+            btn.className = 'geo-hint-use';
+            btn.textContent = 'использовать';
+            btn.onclick = applyGeoHint;
+        } else {
+            btn.className = 'geo-hint-dl';
+            btn.textContent = '⬇ скачать и использовать';
+            btn.onclick = downloadAndApplyGeo;
+        }
+        hint.classList.add('show');
+    }
+
+    function applyGeoHint() {
+        if(!_geoHintName) return;
+        $('ai').value = _geoHintName;
+        setType('geosite');
+        $('geoHint').classList.remove('show');
+        addRule();
+    }
+
+    async function downloadAndApplyGeo() {
+        if(!_geoHintName) return;
+        const btn = $('geoHintBtn');
+        btn.textContent = '⏳ скачиваю...';
+        btn.style.opacity = '0.6';
+        btn.style.pointerEvents = 'none';
+        try {
+            const r = await fetch(`${API}/geosite/download`,{
+                method:'POST',
                 headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({default_action:defAction,rules}),
-                signal:AbortSignal.timeout(8000)
+                body: JSON.stringify({name: _geoHintName})
             });
-            if(!pr.ok){
-                const d=await pr.json().catch(()=>({}));
-                toast(d.error||'Ошибка сохранения правил','err');
-                btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
-                await fetchRules();return;
+            const d = await r.json();
+            if(d.ok) {
+                if(_geoAvailable) _geoAvailable.add(_geoHintName);
+                toast(`geosite-${_geoHintName} скачан ✓`, 'ok');
+                applyGeoHint();
+            } else {
+                toast(d.error || 'Ошибка скачивания', 'error');
+                btn.textContent = '⬇ скачать и использовать';
+                btn.style.opacity = '';
+                btn.style.pointerEvents = '';
             }
-
-            // Шаг 2: перезапускаем sing-box с новым конфигом
-            const ar=await fetch(`${API}/tun/apply`,{method:'POST',signal:AbortSignal.timeout(6000)});
-            if(!ar.ok){
-                const d=await ar.json().catch(()=>({}));
-                toast(d.error||'Ошибка применения','err');
-            }else{
-                toast('Применено ✓','ok');dirty=false;
-            }
-        }catch(e){
-            toast('Ошибка: '+e.message,'err');
+        } catch(e) {
+            toast('Ошибка сети', 'error');
+            btn.textContent = '⬇ скачать и использовать';
+            btn.style.opacity = '';
+            btn.style.pointerEvents = '';
         }
-
-        btn.innerHTML='<span class="adot"></span>apply';btn.className='apply-btn';
-        await fetchRules();
     }
 
-    // ── Smart rule insertion ──────────────────────────────────
-    // Правила применяются сверху вниз — первое совпадение выигрывает.
-    // Поэтому более специфичные правила (домен/ip/geosite) должны стоять
-    // ПЕРЕД широкими правилами процессов, иначе процессное правило перехватит
-    // трафик раньше, чем проверится доменное.
+        // ── Add rule ───────────────────────────────────────────────
+    function addRule(){
+        const raw=$('ai').value.trim();
+        if(!raw)return;
+        const type=selectedType==='auto'?detectType(raw):selectedType;
+        const action=$('as').value;
+        const value=type==='geosite'&&!raw.startsWith('geosite:')?'geosite:'+raw:raw;
+        if(rules.some(r=>r.value===value)){toast('Правило уже существует','error');return;}
+        smartInsert({type,action,value});
+        dirty=true;$('ai').value='';$('ai').focus();renderRules();
+        if(activeTab!=='rules')switchTab('rules');
+    }
+
+    // ── Remove rule ────────────────────────────────────────────
+    function removeRule(v){rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();}
+
+    // ── Apply ──────────────────────────────────────────────────
+    async function applyRules(){
+        const btn=$('ab');
+        btn.disabled=true;btn.textContent='⏳ сохранение...';
+        try{
+            // 1. Сохраняем правила в routing.json
+            const r=await fetch(`${API}/tun/rules`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({default_action:defAction,rules})});
+            if(!r.ok){const e=await r.json();toast(e.error||'Ошибка','error');return;}
+            dirty=false;
+            // 2. Перезапускаем sing-box с новым конфигом
+            btn.textContent='⏳ перезапуск...';
+            const r2=await fetch(`${API}/tun/apply`,{method:'POST',signal:AbortSignal.timeout(5000)});
+            if(!r2.ok){toast('Правила сохранены, но перезапуск не удался','error');return;}
+            // 3. Ждём завершения перезапуска (polling)
+            let attempts=0;
+            while(attempts++<20){
+                await new Promise(res=>setTimeout(res,1000));
+                try{
+                    const st=await fetch(`${API}/tun/apply/status`,{signal:AbortSignal.timeout(2000)});
+                    const sd=await st.json();
+                    if(!sd.running){
+                        if(sd.last_err){toast('Ошибка перезапуска: '+sd.last_err,'error');return;}
+                        toast('Применено и перезапущено ✓','ok');
+                        fetchStatus();
+                        return;
+                    }
+                }catch{}
+            }
+            toast('Правила применены (перезапуск занял слишком долго)','ok');
+        }catch(e){toast('Ошибка сети: '+e.message,'error');}
+        finally{btn.disabled=false;btn.textContent='apply';renderRules();}
+    }
+
+    // ── Smart insert ───────────────────────────────────────────
     function smartInsert(rule){
-        const isSpecific = rule.type==='domain'||rule.type==='ip'||rule.type==='geosite';
-        const isProcess  = rule.type==='process';
-
-        if(isSpecific){
-            // Ищем первое процессное правило с другим действием
-            // (это потенциальный конфликт: process→PROXY перехватит трафик до domain→DIRECT)
-            const conflictIdx=rules.findIndex(r=>r.type==='process'&&r.action!==rule.action);
-            if(conflictIdx>=0){
-                rules.splice(conflictIdx,0,rule);
-                return{auto:true,pos:conflictIdx};
-            }
-            // Ищем первое процессное правило с ТЕМ ЖЕ действием — вставляем перед ним
-            // чтобы держать специфичные правила выше общих
-            const procIdx=rules.findIndex(r=>r.type==='process');
-            if(procIdx>=0){
-                rules.splice(procIdx,0,rule);
-                return{auto:true,pos:procIdx};
-            }
-        }
-
-        if(isProcess){
-            // Процессные правила идут после доменных/ip/geosite
-            let lastSpecific=-1;
-            for(let i=0;i<rules.length;i++){
-                if(rules[i].type!=='process')lastSpecific=i;
-            }
-            const pos=lastSpecific+1;
-            rules.splice(pos,0,rule);
-            return{auto:lastSpecific>=0,pos};
-        }
-
-        // Остальное — в конец
-        rules.push(rule);
-        return{auto:false,pos:rules.length-1};
+        if(rule.action==='block'){rules.unshift(rule);return;}
+        const firstNonBlock=rules.findIndex(r=>r.action!=='block');
+        if(firstNonBlock<0){rules.push(rule);return;}
+        rules.splice(firstNonBlock,0,rule);
     }
 
-    // ── Drag & drop reorder ───────────────────────────────────
+    // ── Drag & drop ────────────────────────────────────────────
     let dragSrc=null;
     function setupDrag(el){
-        el.addEventListener('dragstart',e=>{
-            dragSrc=el;
-            el.classList.add('dragging');
-            e.dataTransfer.effectAllowed='move';
-            e.dataTransfer.setData('text/plain',el.dataset.value);
-        });
-        el.addEventListener('dragend',()=>{
-            el.classList.remove('dragging');
-            document.querySelectorAll('.ritem.drag-over').forEach(x=>x.classList.remove('drag-over'));
-            dragSrc=null;
-        });
-        el.addEventListener('dragover',e=>{
-            e.preventDefault();
-            if(!dragSrc||dragSrc===el)return;
-            document.querySelectorAll('.ritem.drag-over').forEach(x=>x.classList.remove('drag-over'));
-            el.classList.add('drag-over');
-        });
-        el.addEventListener('drop',e=>{
-            e.preventDefault();
-            el.classList.remove('drag-over');
-            if(!dragSrc||dragSrc===el)return;
-            const fromVal=dragSrc.dataset.value;
-            const toVal=el.dataset.value;
-            const fromIdx=rules.findIndex(r=>r.value===fromVal);
-            const toIdx=rules.findIndex(r=>r.value===toVal);
-            if(fromIdx<0||toIdx<0)return;
-            const [moved]=rules.splice(fromIdx,1);
-            rules.splice(toIdx,0,moved);
-            dirty=true;
-            renderRules();
-            toast('Порядок изменён','inf');
-        });
+        el.addEventListener('dragstart',e=>{dragSrc=el;el.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',el.dataset.value);});
+        el.addEventListener('dragend',()=>{el.classList.remove('dragging');document.querySelectorAll('.ritem.drag-over').forEach(x=>x.classList.remove('drag-over'));dragSrc=null;});
+        el.addEventListener('dragover',e=>{e.preventDefault();if(!dragSrc||dragSrc===el)return;document.querySelectorAll('.ritem.drag-over').forEach(x=>x.classList.remove('drag-over'));el.classList.add('drag-over');});
+        el.addEventListener('drop',e=>{e.preventDefault();el.classList.remove('drag-over');if(!dragSrc||dragSrc===el)return;const fi=rules.findIndex(r=>r.value===dragSrc.dataset.value),ti=rules.findIndex(r=>r.value===el.dataset.value);if(fi<0||ti<0)return;const[m]=rules.splice(fi,1);rules.splice(ti,0,m);dirty=true;renderRules();toast('Порядок изменён','inf');});
     }
 
-    // ── Process monitor ───────────────────────────────────────
-    let rulesOpen=true;
-    function toggleRules(){
-        rulesOpen=!rulesOpen;
-        $('rulesBody').className='rules-body'+(rulesOpen?' open':'');
-        $('rChev').className='rchev'+(rulesOpen?' open':'');
+    // ── Export / Import ────────────────────────────────────────
+    function exportRules(){
+        const blob=new Blob([JSON.stringify({default_action:defAction,rules},null,2)],{type:'application/json'});
+        const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='routing.json';a.click();
+    }
+    async function importRules(input){
+        const file=input.files?.[0];if(!file)return;
+        try{
+            const text=await file.text();
+            const data=JSON.parse(text);
+            const fd=new FormData();
+            fd.append('file',new Blob([JSON.stringify(data)],{type:'application/json'}),'routing.json');
+            const r=await fetch(API+'/tun/import',{method:'POST',body:fd});
+            if(!r.ok){const e=await r.json();toast(e.error||'Ошибка импорта','error');return;}
+            toast('Импортировано ✓','ok');
+            await loadRules();setDirty(true);
+        }catch(e){toast('Ошибка: '+e.message,'error');}
+        input.value='';
     }
 
-    let procOpen=false, procFilter='all', procData=[];
-
-    function toggleProc(){
-        procOpen=!procOpen;
-        $('procBody').className='proc-body'+(procOpen?' open':'');
-        $('procChev').className='proc-chevron'+(procOpen?' open':'');
-        if(procOpen&&procData.length===0)fetchProcesses();
-    }
-
+    // ── Process monitor ────────────────────────────────────────
     function setProcFilter(f){
         procFilter=f;
         const map={'all':'pf-all','PROXY':'pf-PROXY','DIRECT':'pf-DIRECT','BLOCKED':'pf-BLOCKED','UNKNOWN':'pf-UNKNOWN'};
         Object.entries(map).forEach(([k,id])=>{
-            const btn=$(id);
-            if(!btn)return;
+            const btn=$(id);if(!btn)return;
             const act={all:'fa',PROXY:'fp',DIRECT:'fd',BLOCKED:'fb',UNKNOWN:''}[k]||'';
             btn.className='fbtn'+(k===f?(act?' '+act:''):'');
         });
         renderProcesses();
     }
-
     async function fetchProcesses(){
         try{
             const r=await fetch(`${API}/apps/processes`,{signal:AbortSignal.timeout(4000)});
@@ -1056,190 +985,398 @@
             renderProcesses();
         }catch{}
     }
-
     async function refreshProcesses(){
-        try{
-            await fetch(`${API}/apps/processes/refresh`,{method:'POST',signal:AbortSignal.timeout(4000)});
-        }catch{}
-        await fetchProcesses();
-        toast('Процессы обновлены','inf');
+        try{await fetch(`${API}/apps/processes/refresh`,{method:'POST',signal:AbortSignal.timeout(4000)});}catch{}
+        await fetchProcesses();toast('Процессы обновлены','inf');
     }
-
     function procStatusFromRule(proc){
-        // status из apprules (DIRECT/PROXY/BLOCKED) или UNKNOWN
         if(proc.proxy_status&&proc.proxy_status!=='UNKNOWN')return proc.proxy_status;
-        // Пробуем найти в TUN-правилах
         const name=proc.name?.toLowerCase()||'';
         const exe=proc.executable?.toLowerCase()||'';
         for(const r of rules){
             if(r.type==='process'){
                 const p=r.value.toLowerCase();
-                if(name===p||exe.endsWith(p)||exe.endsWith('/'+p)||exe.endsWith('\\'+p)){
-                    return r.action.toUpperCase();
-                }
+                if(name===p||exe.endsWith(p)||exe.endsWith('/'+p)||exe.endsWith('\\'+p))return r.action.toUpperCase();
             }
         }
         return'UNKNOWN';
     }
-
-    // Список системных процессов Windows
-    const SYSTEM_PROCS=new Set([
-        'system','system idle process','smss.exe','csrss.exe','wininit.exe','winlogon.exe',
-        'services.exe','lsass.exe','svchost.exe','dwm.exe','explorer.exe','taskhostw.exe',
-        'taskhost.exe','spoolsv.exe','wuauclt.exe','msiexec.exe','conhost.exe','dllhost.exe',
-        'rundll32.exe','regsvr32.exe','wermgr.exe','werfault.exe','searchindexer.exe',
-        'searchhost.exe','sihost.exe','fontdrvhost.exe','audiodg.exe','ctfmon.exe',
-        'securityhealthsyshost.exe','securityhealthservice.exe','msmpeng.exe','nissrv.exe',
-        'antimalware service executable','registry','memory compression','runtimebroker.exe',
-        'applicationframehost.exe','shellexperiencehost.exe','startmenuexperiencehost.exe',
-        'textinputhost.exe','searchui.exe','cortana.exe','backgroundtaskhost.exe',
-        'useroobebroker.exe','settingssynchost.exe','taskmgr.exe','mmc.exe',
-        'lsaiso.exe','wlanext.exe','wmpnetwk.exe','sppsvc.exe','vssvc.exe',
-        'msdtc.exe','wmiprvse.exe','unsecapp.exe','wbemhost.exe',
-        'sddm.exe','logonui.exe','userinit.exe','ntoskrnl.exe','hal.dll',
-        'igfxem.exe','igfxtray.exe','igfxhk.exe','nvdisplay.container.exe',
-        'amdow.exe','amdrsserv.exe','radeoninstaller.exe',
-        'googleupdate.exe','googlecrashhandler.exe','googlecrashhandler64.exe',
-    ]);
-
+    const SYSTEM_PROCS=new Set(['system','system idle process','smss.exe','csrss.exe','wininit.exe','winlogon.exe','services.exe','lsass.exe','svchost.exe','dwm.exe','explorer.exe','taskhostw.exe','taskhost.exe','spoolsv.exe','wuauclt.exe','msiexec.exe','conhost.exe','dllhost.exe','rundll32.exe','regsvr32.exe','wermgr.exe','werfault.exe','searchindexer.exe','searchhost.exe','sihost.exe','fontdrvhost.exe','audiodg.exe','ctfmon.exe','securityhealthsyshost.exe','securityhealthservice.exe','msmpeng.exe','nissrv.exe','registry','memory compression','runtimebroker.exe','applicationframehost.exe','shellexperiencehost.exe','startmenuexperiencehost.exe','textinputhost.exe','searchui.exe','cortana.exe','backgroundtaskhost.exe','useroobebroker.exe','settingssynchost.exe','taskmgr.exe','mmc.exe','lsaiso.exe','wlanext.exe','wmpnetwk.exe','sppsvc.exe','vssvc.exe','msdtc.exe','wmiprvse.exe','unsecapp.exe','wbemhost.exe','logonui.exe','userinit.exe','igfxem.exe','igfxtray.exe','igfxhk.exe','nvdisplay.container.exe','googleupdate.exe','googlecrashhandler.exe','googlecrashhandler64.exe','backgroundtransferhost.exe','compattelrunner.exe','musnotification.exe','sgrmbroker.exe','wininit.exe']);
     function isSystemProcess(proc){
         const name=(proc.name||'').toLowerCase();
         const exe=(proc.executable||'').toLowerCase();
         if(SYSTEM_PROCS.has(name))return true;
-        // По пути: System32, SysWOW64, WindowsApps, Windows\
         if(exe.includes('\\windows\\system32\\'))return true;
         if(exe.includes('\\windows\\syswow64\\'))return true;
-        if(exe.includes('\\windows\\systemapps\\'))return true;  // только системные UWP
+        if(exe.includes('\\windows\\systemapps\\'))return true;
         if(/^c:\\windows\\/i.test(exe))return true;
         if(proc.pid===4||proc.pid===0)return true;
         return false;
     }
-
-    // Состояние свёрнутости групп
-    const groupCollapsed={user:false,system:true};
-
-    function toggleGroup(group){
-        groupCollapsed[group]=!groupCollapsed[group];
-        renderProcesses();
-    }
-
+    function toggleGroup(group){groupCollapsed[group]=!groupCollapsed[group];renderProcesses();}
     function renderProcesses(){
         const list=$('procList');
         const query=($('procSearch')?.value||'').toLowerCase().trim();
-
         let visible=procData.filter(p=>{
             const status=procStatusFromRule(p);
-            const nameMatch=!query||(p.name||'').toLowerCase().includes(query);
-            const filterMatch=procFilter==='all'||status===procFilter;
-            return nameMatch&&filterMatch;
+            return(!query||(p.name||'').toLowerCase().includes(query))&&(procFilter==='all'||status===procFilter);
         });
-
-        // Дедупликация по имени — показываем уникальные .exe
-        const seen=new Set();
-        const deduped=[];
-        for(const p of visible){
-            const key=(p.name||'').toLowerCase();
-            if(!seen.has(key)){seen.add(key);deduped.push(p);}
-        }
+        const seen=new Set();const deduped=[];
+        for(const p of visible){const k=(p.name||'').toLowerCase();if(!seen.has(k)){seen.add(k);deduped.push(p);}}
         visible=deduped;
-
-        // Обновляем счётчик
-        $('procBadge').textContent=procData.length;
-        $('procBadge').className='proc-badge'+(procData.length>0?' has-proc':'');
-
         if(visible.length===0){
-            list.innerHTML='<div class="proc-empty">'+(procData.length===0?'Нет данных о процессах':'Нет совпадений')+'</div>';
+            $('procBadge').textContent=0;$('procBadge').className='proc-badge';
+            $('procTabBadge').style.display='none';
+            list.innerHTML='<div class="proc-empty">'+(procData.length===0?'Нет данных':'Нет совпадений')+'</div>';
             return;
         }
-
-        // Разбиваем на группы
-        const userProcs=[], sysProcs=[];
+        const userProcs=[],sysProcs=[];
         visible.forEach(p=>(isSystemProcess(p)?sysProcs:userProcs).push(p));
-
-        // Сортировка внутри групп: с правилами вверх, потом по имени
-        const sortProcs=arr=>arr.sort((a,b)=>{
-            const sa=procStatusFromRule(a),sb=procStatusFromRule(b);
-            if(sa==='UNKNOWN'&&sb!=='UNKNOWN')return 1;
-            if(sa!=='UNKNOWN'&&sb==='UNKNOWN')return -1;
-            return(a.name||'').localeCompare(b.name||'');
-        });
-        sortProcs(userProcs);
-        sortProcs(sysProcs);
-
+        // Badge показывает уникальные .exe после dedup (userProcs+sysProcs)
+        const totalVisible=userProcs.length+sysProcs.length;
+        $('procBadge').textContent=totalVisible;
+        $('procBadge').className='proc-badge'+(totalVisible>0?' has-proc':'');
+        $('procTabBadge').textContent=totalVisible;
+        $('procTabBadge').style.display=totalVisible>0?'':'none';
+        const sortProcs=arr=>arr.sort((a,b)=>{const sa=procStatusFromRule(a),sb=procStatusFromRule(b);if(sa==='UNKNOWN'&&sb!=='UNKNOWN')return 1;if(sa!=='UNKNOWN'&&sb==='UNKNOWN')return-1;return(a.name||'').localeCompare(b.name||'');});
+        sortProcs(userProcs);sortProcs(sysProcs);
         list.innerHTML='';
-
         function renderGroup(procs,groupKey,label,dotCls){
             if(procs.length===0)return;
             const collapsed=groupCollapsed[groupKey];
-
-            // Заголовок группы
             const hdr=document.createElement('div');
             hdr.className='pgroup-header';
             hdr.onclick=()=>toggleGroup(groupKey);
-            hdr.innerHTML=`
-      <span class="pgroup-dot ${dotCls}"></span>
-      ${label}
-      <span class="pgroup-count">${procs.length}</span>
-      <span class="pgroup-chev${collapsed?' collapsed':''}">▼</span>`;
+            hdr.innerHTML=`<span class="pgroup-dot ${dotCls}"></span>${label}<span class="pgroup-count">${procs.length}</span><span class="pgroup-chev${collapsed?' collapsed':''}">▼</span>`;
             list.appendChild(hdr);
-
-            // Элементы группы
             const wrap=document.createElement('div');
             wrap.className='pgroup-items'+(collapsed?' collapsed':'');
             procs.forEach(p=>{
                 const status=procStatusFromRule(p);
                 const name=p.name||'unknown';
-                const el=document.createElement('div');
-                el.className='pitem';
-                el.innerHTML=`
-        <div class="pdot ${status}"></div>
-        <div class="pname" title="${esc(p.executable||name)}">${esc(name)}</div>
-        <span class="ppid">PID ${p.pid||'?'}</span>
-        <span class="pstatus ${status}">${status}</span>
-        <button class="padd" onclick="addFromProcess('${esc(name)}','proxy')" title="Добавить правило PROXY">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
-          </svg>
-        </button>`;
+                const el=document.createElement('div');el.className='pitem';
+                el.innerHTML=`<div class="pdot ${status}"></div><div class="pname" title="${esc(p.executable||name)}">${esc(name)}</div><span class="ppid">PID ${p.pid||'?'}</span><span class="pstatus ${status}">${status}</span><button class="padd" data-proc="${esc(name)}" onclick="addFromProcess(this.dataset.proc,'proxy')" title="Добавить PROXY"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:12px;height:12px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg></button>`;
                 wrap.appendChild(el);
             });
             list.appendChild(wrap);
         }
-
         renderGroup(userProcs,'user','пользовательские','user');
         renderGroup(sysProcs,'system','системные','system');
     }
-
     function addFromProcess(name,action){
-        // Заполняем форму добавления правила именем процесса
-        const procName=name.toLowerCase().endsWith('.exe')?name.toLowerCase():name.toLowerCase()+'.exe';
-        $('ai').value=procName;
-        $('as').value=action;
-        setType('process');
-        // Скроллим к форме
-        document.querySelector('.add-form')?.scrollIntoView({behavior:'smooth',block:'nearest'});
+        const n=name.toLowerCase().endsWith('.exe')?name.toLowerCase():name.toLowerCase()+'.exe';
+        $('ai').value=n;$('as').value=action;setType('process');
+        switchTab('rules');
         $('ai').focus();
-        toast(`${procName} → заполнено в форме`,'inf');
+        toast(`${n} → заполнено в форме`,'inf');
     }
 
-    // ── Init ──────────────────────────────────────────────────
+    // ── Profiles ───────────────────────────────────────────────
+    async function loadProfiles(){
+        try{
+            const r=await fetch(API+'/profiles');if(!r.ok)return;
+            const j=await r.json();
+            const list=j.profiles||[];
+            const el=$('profList');
+            if(list.length===0){el.innerHTML='<div class="prof-empty">Нет сохранённых профилей</div>';return;}
+            el.innerHTML=list.map(p=>`
+  <div class="prof-item" onclick="applyProfile('${esc(p.name)}')">
+    <span class="prof-name">${esc(p.name)}</span>
+    <span class="prof-meta">${p.rule_count} правил</span>
+    <button class="prof-del" onclick="event.stopPropagation();deleteProfile('${esc(p.name)}')" title="Удалить">✕</button>
+  </div>`).join('');
+        }catch{}
+    }
+    async function saveProfile(){
+        const name=$('profName').value.trim();
+        if(!name){toast('Введите название','error');return;}
+        const btn=$('profList').closest('.section')?.querySelector('.prof-save-btn');
+        if(btn){btn.disabled=true;btn.textContent='...';}
+        try{
+            const r=await fetch(API+'/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,routing:{default_action:defAction,rules:rules||[]}})});
+            let j={};try{j=await r.json();}catch{}
+            if(!r.ok){toast(j.error||'HTTP '+r.status,'error');return;}
+            toast(j.message||'Сохранено','ok');
+            $('profName').value='';loadProfiles();
+        }catch(e){toast('Сеть: '+e.message,'error');}
+        finally{if(btn){btn.disabled=false;btn.textContent='💾 сохранить';}}
+    }
+    async function applyProfile(name){
+        try{
+            const r=await fetch(API+'/profiles/'+encodeURIComponent(name));
+            const j=await r.json();
+            if(!r.ok){toast('Профиль не найден','error');return;}
+            const fd=new FormData();
+            fd.append('file',new Blob([JSON.stringify(j.routing)],{type:'application/json'}),'routing.json');
+            const r2=await fetch(API+'/tun/import',{method:'POST',body:fd});
+            if(!r2.ok){toast('Ошибка применения','error');return;}
+            toast('Профиль "'+name+'" загружен','ok');
+            await fetchRules();setDirty(true);
+        }catch(e){toast('Ошибка: '+e.message,'error');}
+    }
+    async function deleteProfile(name){
+        try{await fetch(API+'/profiles/'+encodeURIComponent(name),{method:'DELETE'});}catch{}
+        toast('Профиль удалён','inf');loadProfiles();
+    }
+
+    // ── Debug ──────────────────────────────────────────────────
+
+
+    // ══════════════════════════════════════════════════════════════
+    // RULE ANALYSIS ENGINE
+    // ══════════════════════════════════════════════════════════════
+
+    let _anlOpen = false;
+
+    // Маппинг: домены/паттерны → geosite имя
+    // Если у пользователя есть правило с таким доменом И geosite уже скачан —
+    // предлагаем заменить отдельные домены на один geosite.
+    const GEO_DOMAIN_MAP = {
+        // YouTube
+        'youtube.com':    'youtube', 'youtu.be':     'youtube', 'ytimg.com':    'youtube',
+        'googlevideo.com':'youtube', 'yt3.ggpht.com':'youtube',
+        // Discord
+        'discord.com':    'discord', 'discord.gg':   'discord', 'discordapp.com':'discord',
+        'discordapp.net': 'discord', 'discord.media':'discord', 'discordcdn.com':'discord',
+        // Instagram
+        'instagram.com':  'instagram','cdninstagram.com':'instagram','fbcdn.net':'instagram',
+        // TikTok
+        'tiktok.com':     'tiktok', 'tiktokv.com':  'tiktok', 'muscdn.com':   'tiktok',
+        // Spotify
+        'spotify.com':    'spotify', 'scdn.co':      'spotify', 'spotifycdn.com':'spotify',
+        // Reddit
+        'reddit.com':     'reddit', 'redd.it':       'reddit', 'redditstatic.com':'reddit',
+        'redditmedia.com':'reddit', 'reddituploads.com':'reddit',
+        // Soundcloud
+        'soundcloud.com': 'soundcloud', 'sndcdn.com':'soundcloud',
+        // Twitter/X
+        'twitter.com':    'twitter', 'x.com':        'twitter', 'twimg.com':    'twitter',
+        't.co':           'twitter',
+        // Facebook
+        'facebook.com':   'facebook','fb.com':       'facebook','fbcdn.net':    'facebook',
+        'fb.me':          'facebook',
+        // Google
+        'google.com':     'google',  'googleapis.com':'google', 'gstatic.com':  'google',
+        'googleusercontent.com':'google','googlesyndication.com':'google',
+        // GitHub
+        'github.com':     'github',  'githubusercontent.com':'github','githubassets.com':'github',
+        // Netflix
+        'netflix.com':    'netflix', 'nflximg.net':  'netflix', 'nflxvideo.net':'netflix',
+        'nflxext.com':    'netflix',
+        // Twitch
+        'twitch.tv':      'twitch',  'twitchapps.com':'twitch', 'jtvnw.net':   'twitch',
+        'twitchsvc.net':  'twitch',
+        // Amazon
+        'amazon.com':     'amazon',  'amazonaws.com':'amazon',  'amazon.co.uk':'amazon',
+        'amazon.de':      'amazon',  'cloudfront.net':'amazon',
+        // Microsoft
+        'microsoft.com':  'microsoft','windows.com': 'microsoft','office.com':  'microsoft',
+        'microsoftonline.com':'microsoft','live.com':'microsoft',
+        // Apple
+        'apple.com':      'apple',   'icloud.com':   'apple',   'mzstatic.com':'apple',
+        'itunes.apple.com':'apple',
+    };
+
+    function analyzeRules() {
+        const issues = [];
+        if (!rules || rules.length === 0) return issues;
+
+        // ── 1. Дубликаты (одинаковое значение) ─────────────────
+        const seen = {};
+        rules.forEach((r, idx) => {
+            const key = r.value.toLowerCase();
+            if (!seen[key]) seen[key] = [];
+            seen[key].push({ idx, rule: r });
+        });
+        for (const [key, arr] of Object.entries(seen)) {
+            if (arr.length < 2) continue;
+            const conflict = arr.some(a => a.rule.action !== arr[0].rule.action);
+            issues.push({
+                type: conflict ? 'conflict' : 'duplicate',
+                severity: conflict ? 'err' : 'warn',
+                title: conflict
+                    ? `⚡ Конфликт: "${key}" имеет разные действия`
+                    : `📋 Дубликат: "${key}" встречается ${arr.length} раза`,
+                desc: arr.map(a => `#${a.idx+1} → ${a.rule.action}`).join(' · '),
+                affected: arr.map(a => a.rule.value),
+                fix: conflict ? null : {
+                    label: `Удалить ${arr.length - 1} лишних`,
+                    cls: 'fix-warn',
+                    action: () => {
+                        const keep = arr[0].rule.value;
+                        const toRemove = arr.slice(1).map(a => a.rule.value);
+                        toRemove.forEach(v => { rules = rules.filter(r => r.value !== v); });
+                        dirty = true; renderRules(); runAnalysis();
+                        toast(`Удалено ${toRemove.length} дублик.`, 'ok');
+                    }
+                }
+            });
+        }
+
+        // ── 2. Правила перекрытые geosite ──────────────────────
+        // Если у пользователя есть geosite:X И отдельные домены из того же сервиса
+        const activeGeosets = new Set(
+            rules.filter(r => r.type === 'geosite').map(r => r.value.replace('geosite:',''))
+        );
+
+        // Группируем домены по geosite-имени
+        const coveredDomains = {};
+        rules.forEach((r, idx) => {
+            if (r.type === 'domain') {
+                const domain = r.value.toLowerCase().replace(/^www\./, '');
+                const geo = GEO_DOMAIN_MAP[domain];
+                if (geo && activeGeosets.has(geo)) {
+                    if (!coveredDomains[geo]) coveredDomains[geo] = [];
+                    coveredDomains[geo].push({ idx, rule: r });
+                }
+            }
+        });
+        for (const [geo, arr] of Object.entries(coveredDomains)) {
+            issues.push({
+                type: 'covered',
+                severity: 'warn',
+                title: `🗂 geosite:${geo} уже охватывает ${arr.length} ваших правил`,
+                desc: arr.map(a => a.rule.value).join(', '),
+                fix: {
+                    label: `Удалить ${arr.length} лишних`,
+                    cls: 'fix-ok',
+                    action: () => {
+                        const toRemove = new Set(arr.map(a => a.rule.value));
+                        rules = rules.filter(r => !toRemove.has(r.value));
+                        dirty = true; renderRules(); runAnalysis();
+                        toast(`Удалено ${arr.length} правил — охвачены geosite:${geo}`, 'ok');
+                    }
+                }
+            });
+        }
+
+        // ── 3. Можно заменить набор доменов на geosite ─────────
+        // Если geosite существует локально, но geosite:X ещё не добавлен как правило
+        if (_geoAvailable) {
+            const geoInRules = activeGeosets; // уже есть как правило
+
+            // Считаем сколько доменов каждого сервиса у пользователя
+            const domainGroups = {};
+            rules.forEach((r) => {
+                if (r.type === 'domain') {
+                    const domain = r.value.toLowerCase().replace(/^www\./, '');
+                    const geo = GEO_DOMAIN_MAP[domain];
+                    if (geo && !geoInRules.has(geo) && _geoAvailable.has(geo)) {
+                        if (!domainGroups[geo]) domainGroups[geo] = { domains: [], actions: new Set() };
+                        domainGroups[geo].domains.push(r);
+                        domainGroups[geo].actions.add(r.action);
+                    }
+                }
+            });
+            for (const [geo, { domains, actions }] of Object.entries(domainGroups)) {
+                if (domains.length < 2) continue; // минимум 2 домена для предложения
+                if (actions.size > 1) continue; // разные действия — не предлагаем
+                const action = [...actions][0];
+                issues.push({
+                    type: 'consolidate',
+                    severity: 'ok',
+                    title: `✨ Заменить ${domains.length} доменов → geosite:${geo}`,
+                    desc: domains.map(d => d.value).join(', ') + ` → один geosite:${geo} (${action})`,
+                    fix: {
+                        label: `Заменить на geosite:${geo}`,
+                        cls: 'fix-ok',
+                        action: () => {
+                            const toRemove = new Set(domains.map(d => d.value));
+                            rules = rules.filter(r => !toRemove.has(r.value));
+                            const geoRule = { type: 'geosite', action, value: 'geosite:' + geo };
+                            if (!rules.some(r => r.value === geoRule.value)) {
+                                smartInsert(geoRule);
+                            }
+                            dirty = true; renderRules(); runAnalysis();
+                            toast(`Заменено на geosite:${geo}`, 'ok');
+                        }
+                    }
+                });
+            }
+        }
+
+        // ── 4. Конфликт proxy + direct/block для одного домена ─
+        // (уже поймано в п.1 через дубликаты с разными action)
+
+        return issues;
+    }
+
+    function runAnalysis(open = false) {
+        const issues = analyzeRules();
+        const wrap = $('anlWrap');
+        const bar  = $('anlBar');
+        const badge = $('anlBadge');
+        const hTitle = $('anlHeaderTitle');
+        const hCount = $('anlHeaderCount');
+        const icon  = $('anlIcon');
+
+        if (!issues.length) {
+            wrap.style.display = 'none';
+            badge.style.display = 'none';
+            return;
+        }
+
+        // Show badge on button
+        badge.textContent = issues.length;
+        badge.style.display = 'flex';
+
+        // Count by severity
+        const errCount  = issues.filter(i => i.severity === 'err').length;
+        const warnCount = issues.filter(i => i.severity === 'warn').length;
+        const okCount   = issues.filter(i => i.severity === 'ok').length;
+
+        hTitle.textContent = 'Анализ правил';
+        if (errCount)  { icon.textContent='🔴'; hCount.style.color='var(--off)'; }
+        else if (warnCount){ icon.textContent='🟡'; hCount.style.color='#ffaa00'; }
+        else           { icon.textContent='🟢'; hCount.style.color='var(--on)'; }
+
+        const parts = [];
+        if (errCount)  parts.push(errCount  + ' конфликт' + (errCount>1?'а':''));
+        if (warnCount) parts.push(warnCount + ' предупр.');
+        if (okCount)   parts.push(okCount   + ' совет');
+        hCount.textContent = parts.join(' · ');
+
+        // Render issues
+        bar.innerHTML = '';
+        issues.forEach(issue => {
+            const el = document.createElement('div');
+            el.className = 'analysis-item';
+            el.innerHTML = `
+                <div class="analysis-body">
+                    <div class="analysis-title anl-${issue.severity}">${issue.title}</div>
+                    <div class="analysis-desc">${esc(issue.desc)}</div>
+                    ${issue.fix ? `<div class="analysis-actions"><button class="analysis-fix ${issue.fix.cls}" data-fix-label="${esc(issue.fix.label)}">${issue.fix.label}</button></div>` : ''}
+                </div>`;
+            if (issue.fix) {
+                el.querySelector('.analysis-fix').addEventListener('click', issue.fix.action);
+            }
+            bar.appendChild(el);
+        });
+
+        wrap.style.display = '';
+        if (open && wrap.classList.contains('collapsed')) toggleAnalysis();
+    }
+
+    function toggleAnalysis() {
+        const wrap = $('anlWrap');
+        const arrow = $('anlToggleArrow');
+        wrap.classList.toggle('collapsed');
+        arrow.textContent = wrap.classList.contains('collapsed') ? '▼' : '▲';
+    }
+
+    // ── Init & polling ─────────────────────────────────────────
     async function init(){
         await fetchStatus();
         await fetchRules();
-        await fetchEvents();
         await fetchProcesses();
-        // Открываем лог по умолчанию
-        $('evBody').className='evlog-body open';
-        $('evChev').className='evlog-chevron open';
-        // Открываем процессы
-        procOpen=true;
-        $('procBody').className='proc-body open';
-        $('procChev').className='proc-chevron open';
+        startStats();  // сразу при запуске, без нажатия test
+        loadGeoAvailable();
     }
     init();
-    setInterval(async()=>{await fetchStatus();if(!dirty)await fetchRules()},POLL);
-    setInterval(fetchEvents,EV_POLL);
-    setInterval(()=>{if(procOpen)fetchProcesses()},5000);
+    setInterval(async()=>{await fetchStatus();if(!dirty)await fetchRules();},POLL);
+    setInterval(fetchStats,2000);
+    setInterval(()=>{if(activeTab==='proc')fetchProcesses();},6000);
+    setInterval(()=>{if(activeTab==='main')fetchConnections();},4000);
 </script>
 </body>
 </html>

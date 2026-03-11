@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -64,6 +65,8 @@ func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
 	s.router.HandleFunc("/api/tun/default", h.handleSetDefault).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/tun/apply", h.handleApply).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/tun/apply/status", h.handleApplyStatus).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/tun/export", h.handleExport).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/tun/import", h.handleImport).Methods("POST", "OPTIONS")
 
 	return h
 }
@@ -275,8 +278,8 @@ func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
 		return
 	}
-	if req.Action != config.ActionProxy && req.Action != config.ActionDirect {
-		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct")
+	if req.Action != config.ActionProxy && req.Action != config.ActionDirect && req.Action != config.ActionBlock {
+		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
 		return
 	}
 
@@ -404,8 +407,22 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig) {
 		return
 	}
 
-	// Запускаем sing-box
-	newManager, err := xray.NewManager(h.xrayConfig)
+	// Запускаем sing-box.
+	// BUG FIX: OnCrash в xrayCfg замыкается на старую переменную xrayManager из run().
+	// После doApply xrayManager не обновляется — OnCrash вызывал бы Start() на старом
+	// (уже остановленном) менеджере. Подменяем OnCrash: читаем актуальный менеджер
+	// из h.server.config.XRayManager который всегда актуален.
+	patchedCfg := h.xrayConfig
+	srv := h.server
+	patchedCfg.OnCrash = func(crashErr error) {
+		srv.configMu.RLock()
+		cur := srv.config.XRayManager
+		srv.configMu.RUnlock()
+		if cur != nil && h.xrayConfig.OnCrash != nil {
+			h.xrayConfig.OnCrash(crashErr)
+		}
+	}
+	newManager, err := xray.NewManager(patchedCfg)
 	if err != nil {
 		h.server.logger.Error("Не удалось запустить sing-box: %v", err)
 		setErr(err.Error())
@@ -444,5 +461,103 @@ func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) 
 		"running":  running,
 		"last_err": lastErr,
 		"last_pid": lastPID,
+	})
+}
+
+// handleExport GET /api/tun/export — скачивает routing.json как файл
+func (h *TunHandlers) handleExport(w http.ResponseWriter, r *http.Request) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	data, err := json.MarshalIndent(&config.RoutingConfig{
+		DefaultAction: h.routing.DefaultAction,
+		Rules:         h.routing.Rules,
+	}, "", "  ")
+	if err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, "marshal error")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="routing.json"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// handleImport POST /api/tun/import — загружает routing.json, валидирует и сохраняет
+// Принимает multipart/form-data с полем "file" или application/json напрямую.
+func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
+	var raw []byte
+
+	contentType := r.Header.Get("Content-Type")
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		// Загрузка через <input type="file">
+		if err := r.ParseMultipartForm(1 << 20); err != nil { // 1 MB max
+			h.server.respondError(w, http.StatusBadRequest, "failed to parse form")
+			return
+		}
+		f, _, err := r.FormFile("file")
+		if err != nil {
+			h.server.respondError(w, http.StatusBadRequest, "field 'file' missing")
+			return
+		}
+		defer f.Close()
+		var err2 error
+		raw, err2 = io.ReadAll(f)
+		if err2 != nil {
+			h.server.respondError(w, http.StatusBadRequest, "failed to read file")
+			return
+		}
+	} else {
+		// Прямая отправка JSON
+		var err error
+		raw, err = io.ReadAll(r.Body)
+		if err != nil {
+			h.server.respondError(w, http.StatusBadRequest, "failed to read body")
+			return
+		}
+	}
+
+	var incoming config.RoutingConfig
+	if err := json.Unmarshal(raw, &incoming); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+
+	// Валидация
+	validActions := map[config.RuleAction]bool{
+		config.ActionProxy:  true,
+		config.ActionDirect: true,
+		config.ActionBlock:  true,
+	}
+	if !validActions[incoming.DefaultAction] {
+		h.server.respondError(w, http.StatusBadRequest, "invalid default_action")
+		return
+	}
+	for i, rule := range incoming.Rules {
+		if rule.Value == "" {
+			h.server.respondError(w, http.StatusBadRequest,
+				fmt.Sprintf("rule[%d]: value is empty", i))
+			return
+		}
+		if !validActions[rule.Action] {
+			h.server.respondError(w, http.StatusBadRequest,
+				fmt.Sprintf("rule[%d]: invalid action %q", i, rule.Action))
+			return
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if err := config.SaveRoutingConfig(routingConfigPath, &incoming); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, "failed to save: "+err.Error())
+		return
+	}
+	h.routing = &incoming
+
+	h.server.respondJSON(w, http.StatusOK, MessageResponse{
+		Success: true,
+		Message: fmt.Sprintf("imported %d rules", len(incoming.Rules)),
 	})
 }

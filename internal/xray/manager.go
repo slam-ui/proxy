@@ -14,30 +14,68 @@ import (
 
 // Config конфигурация менеджера процесса
 type Config struct {
-	ExecutablePath  string
-	ConfigPath      string
-	SecretKeyPath   string    // путь к файлу с VLESS-ключом (secret.key)
-	Args            []string  // дополнительные аргументы перед -c (например: "run")
-	Logger          logger.Logger
+	ExecutablePath string
+	ConfigPath     string
+	SecretKeyPath  string   // путь к файлу с VLESS-ключом (secret.key)
+	Args           []string // дополнительные аргументы перед -c (например: "run")
+	Logger         logger.Logger
 	// SingBoxWriter если задан — stdout и stderr sing-box дополнительно пишутся в этот Writer.
 	// Используется для захвата вывода в event log. Если nil — пишется только в os.Stdout/Stderr.
-	SingBoxWriter   io.Writer
+	SingBoxWriter io.Writer
+	// FileWriter если задан — stderr sing-box дублируется сюда (обычно основной лог-файл).
+	// Это позволяет видеть ошибки запуска sing-box прямо в proxy-client.log.
+	FileWriter io.Writer
+	// OnCrash вызывается если sing-box завершился сам (не через Stop()).
+	// Используется для отключения системного прокси при неожиданном падении процесса.
+	// Вызывается из отдельной горутины — не блокирует monitor().
+	OnCrash func(err error)
 }
 
 // Manager интерфейс для управления процессом
 type Manager interface {
+	// Start запускает (или перезапускает) процесс sing-box.
+	Start() error
 	Stop() error
 	IsRunning() bool
 	GetPID() int
 	Wait() error
+	// LastOutput возвращает последние N байт stderr sing-box.
+	LastOutput() string
+}
+
+// tailWriter захватывает последние maxTail байт вывода (для диагностики краша)
+type tailWriter struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func newTailWriter(max int) *tailWriter { return &tailWriter{max: max, buf: make([]byte, 0, max)} }
+
+func (tw *tailWriter) Write(p []byte) (int, error) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.buf = append(tw.buf, p...)
+	if len(tw.buf) > tw.max {
+		tw.buf = tw.buf[len(tw.buf)-tw.max:]
+	}
+	return len(p), nil
+}
+
+func (tw *tailWriter) String() string {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	return string(tw.buf)
 }
 
 type manager struct {
-	cmd    *exec.Cmd
-	config Config
-	logger logger.Logger
-	mu     sync.RWMutex
-	done   chan struct{} // закрывается когда процесс завершился
+	cmd     *exec.Cmd
+	config  Config
+	logger  logger.Logger
+	mu      sync.RWMutex
+	done    chan struct{} // закрывается когда процесс завершился
+	stopped bool         // true если Stop() уже был вызван (не неожиданный краш)
+	tail    *tailWriter  // последние 4KB stderr для диагностики краша
 }
 
 func NewManager(cfg Config) (Manager, error) {
@@ -51,7 +89,7 @@ func NewManager(cfg Config) (Manager, error) {
 		done:   make(chan struct{}),
 	}
 
-	if err := m.start(); err != nil {
+	if err := m.doStart(); err != nil {
 		return nil, err
 	}
 
@@ -68,8 +106,12 @@ func validateConfig(cfg Config) error {
 	if cfg.Logger == nil {
 		return fmt.Errorf("отсутствует логгер")
 	}
-	if _, err := os.Stat(cfg.ExecutablePath); os.IsNotExist(err) {
+	fi, err := os.Stat(cfg.ExecutablePath)
+	if os.IsNotExist(err) {
 		return fmt.Errorf("исполняемый файл не найден: %s", cfg.ExecutablePath)
+	}
+	if err == nil && fi.Size() == 0 {
+		return fmt.Errorf("файл %s существует но имеет размер 0 байт — замените его реальным sing-box.exe", cfg.ExecutablePath)
 	}
 	if _, err := os.Stat(cfg.ConfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("файл конфигурации не найден: %s", cfg.ConfigPath)
@@ -77,34 +119,87 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-func (m *manager) start() error {
+// Start запускает sing-box процесс (можно вызвать повторно после Stop/краша).
+func (m *manager) Start() error {
+	m.mu.Lock()
+	m.done = make(chan struct{}) // новый канал для нового запуска
+	m.stopped = false
+	m.mu.Unlock()
+	return m.doStart()
+}
+
+func (m *manager) doStart() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// BUG FIX: append(m.config.Args, ...) мутирует исходный слайс если cap > len.
-	// Копируем в новый слайс чтобы гарантировать изоляцию.
 	args := make([]string, 0, len(m.config.Args)+2)
 	args = append(args, m.config.Args...)
 	args = append(args, "-c", m.config.ConfigPath)
 
 	cmd := exec.Command(m.config.ExecutablePath, args...)
-	if m.config.SingBoxWriter != nil {
-		// Дублируем вывод: os.Stdout/Stderr (для консоли) + SingBoxWriter (для event log)
-		cmd.Stdout = io.MultiWriter(os.Stdout, m.config.SingBoxWriter)
-		cmd.Stderr = io.MultiWriter(os.Stderr, m.config.SingBoxWriter)
-	} else {
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+
+	// Hide the sing-box console window.
+	// When proxy-client is built with -H windowsgui, Windows would otherwise
+	// create a separate console window for every child process that is itself
+	// a console application (like sing-box.exe).
+	// CREATE_NO_WINDOW (0x08000000) suppresses that window entirely.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		HideWindow:    true,
 	}
+
+	// Route sing-box output:
+	//   - In windowsgui builds os.Stdout/Stderr are invalid (nil handles) —
+	//     writing to them would panic. We detect this by checking the file stat.
+	//   - In debug/console builds we also tee to os.Stdout so output is visible
+	//     in the terminal alongside the main app logs.
+	// Build writers for stdout and stderr.
+	// Priority: console (if valid) > SingBoxWriter (event log) > FileWriter (log file)
+	// stderr always includes FileWriter so crash reasons appear in proxy-client.log.
+	stdoutOK := isStdoutValid()
+
+	buildWriter := func(includeFile bool) io.Writer {
+		var writers []io.Writer
+		if stdoutOK {
+			writers = append(writers, os.Stdout)
+		}
+		if m.config.SingBoxWriter != nil {
+			writers = append(writers, m.config.SingBoxWriter)
+		}
+		if includeFile && m.config.FileWriter != nil {
+			writers = append(writers, m.config.FileWriter)
+		}
+		switch len(writers) {
+		case 0:
+			return io.Discard
+		case 1:
+			return writers[0]
+		default:
+			return io.MultiWriter(writers...)
+		}
+	}
+
+	cmd.Stdout = buildWriter(false) // stdout: console + event log
+	// stderr: console + event log + file log + tail buffer (для детекции ошибок краша)
+	stderrBase := buildWriter(true)
+	tailBuf := newTailWriter(4096)
+	if stderrBase == io.Discard {
+		cmd.Stderr = tailBuf
+	} else {
+		cmd.Stderr = io.MultiWriter(stderrBase, tailBuf)
+	}
+	// Сохраняем ссылку — она будет скопирована в m.tail после cmd.Start()
+	_ = tailBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("не удалось запустить процесс: %w", err)
 	}
 
 	m.cmd = cmd
+	m.tail = tailBuf // последние 4KB stderr (уже подключён к cmd.Stderr)
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
-	// Единственный вызов Wait — здесь в горутине-мониторе
 	go m.monitor()
 	return nil
 }
@@ -112,11 +207,24 @@ func (m *manager) start() error {
 // monitor — единственное место где вызывается cmd.Wait()
 func (m *manager) monitor() {
 	err := m.cmd.Wait()
-	close(m.done) // сигнализируем всем ждущим
+	close(m.done)
+
+	m.mu.RLock()
+	wasStoppedIntentionally := m.stopped
+	onCrash := m.config.OnCrash
+	m.mu.RUnlock()
+
 	if err != nil {
 		m.logger.Warn("XRay завершился с ошибкой: %v", err)
 	} else {
 		m.logger.Info("Процесс XRay завершён")
+	}
+
+	// BUG FIX: если процесс упал сам (не через Stop()), уведомляем вызывающий код.
+	// До этого исправления: sing-box падал из-за невалидного конфига, системный прокси
+	// оставался включён и указывал на мёртвый порт — весь трафик уходил в никуда.
+	if !wasStoppedIntentionally && onCrash != nil {
+		go onCrash(err)
 	}
 }
 
@@ -128,13 +236,11 @@ func (m *manager) Stop() error {
 	}
 	pid := m.cmd.Process.Pid
 	proc := m.cmd.Process
+	m.stopped = true // помечаем до Kill — monitor() должен увидеть флаг
 	m.mu.Unlock()
 
 	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
 
-	// На Windows os.Interrupt (SIGINT) не поддерживается для дочерних процессов —
-	// Process.Signal всегда возвращает ошибку. Вместо ложного мягкого стопа
-	// ждём завершения через короткий таймаут и затем выполняем Kill.
 	select {
 	case <-m.done:
 		m.logger.Info("Процесс XRay завершился самостоятельно")
@@ -151,6 +257,13 @@ func (m *manager) Stop() error {
 	return nil
 }
 
+func (m *manager) LastOutput() string {
+	if m.tail == nil {
+		return ""
+	}
+	return m.tail.String()
+}
+
 // IsRunning проверяет что процесс реально ещё работает
 func (m *manager) IsRunning() bool {
 	m.mu.RLock()
@@ -160,20 +273,16 @@ func (m *manager) IsRunning() bool {
 		return false
 	}
 
-	// Если канал закрыт — процесс точно завершился
 	select {
 	case <-m.done:
 		return false
 	default:
 	}
 
-	// Уточняем через Windows API: GetExitCodeProcess.
-	// PROCESS_QUERY_LIMITED_INFORMATION (0x1000) работает без полных прав админа.
-	// Если OpenProcess упал — доверяем каналу done: раз не закрыт, процесс жив.
 	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 	handle, err := syscall.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(m.cmd.Process.Pid))
 	if err != nil {
-		return true // нет прав на хэндл, но done открыт → считаем живым
+		return true
 	}
 	defer syscall.CloseHandle(handle)
 
@@ -203,4 +312,15 @@ func (m *manager) Wait() error {
 	m.mu.RUnlock()
 	<-m.done
 	return nil
+}
+
+// isStdoutValid reports whether os.Stdout is a usable file handle.
+// In windowsgui builds (-H windowsgui) Windows does not attach a console,
+// so os.Stdout.Stat() fails — writing to it would panic or silently corrupt.
+func isStdoutValid() bool {
+	if os.Stdout == nil {
+		return false
+	}
+	_, err := os.Stdout.Stat()
+	return err == nil
 }

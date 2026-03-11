@@ -86,8 +86,8 @@ func (e *engine) GetRule(id string) (*Rule, error) {
 		return nil, fmt.Errorf("rule not found: %s", id)
 	}
 
-	copy := *rule
-	return &copy, nil
+	ruleCopy := *rule
+	return &ruleCopy, nil
 }
 
 // UpdateRule обновляет правило
@@ -192,8 +192,8 @@ func (e *engine) Match(processName string) RuleMatch {
 
 	for _, rule := range rules {
 		if e.matcher.Match(rule.Pattern, processName) {
-			copy := *rule
-			return RuleMatch{Matched: true, Rule: &copy}
+			ruleCopy := *rule
+			return RuleMatch{Matched: true, Rule: &ruleCopy}
 		}
 	}
 
