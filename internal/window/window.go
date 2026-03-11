@@ -15,7 +15,6 @@ var (
 	opened   bool
 )
 
-// Win32 / DWM API
 var (
 	user32           = windows.NewLazyDLL("user32.dll")
 	dwmapi           = windows.NewLazyDLL("dwmapi.dll")
@@ -27,60 +26,59 @@ var (
 	dwmSetWindowAttr = dwmapi.NewProc("DwmSetWindowAttribute")
 )
 
-// gwlStyle = -16 как uintptr через bitwise complement.
-// ^uintptr(15) == 0xFFFF...FFF0 (two's complement -16).
-const gwlStyle = ^uintptr(15) // == -16
+// gwlStyle = -16 через bitwise complement: ^uintptr(15) == -16 в two's complement
+const gwlStyle = ^uintptr(15)
 
 const (
-	wsCaption       = uintptr(0x00C00000)
-	wsSysMenu       = uintptr(0x00080000)
+	// Биты стиля окна которые создают заголовок и рамку
+	wsCaption    = uintptr(0x00C00000) // заголовок (белая полоса)
+	wsSysMenu    = uintptr(0x00080000) // системное меню
+	wsThickFrame = uintptr(0x00040000) // рамка изменения размера
+	wsBorder     = uintptr(0x00800000) // тонкая рамка
+
 	swpNomove       = uintptr(0x0002)
 	swpNosize       = uintptr(0x0001)
 	swpNozorder     = uintptr(0x0004)
 	swpFrameChanged = uintptr(0x0020)
-	wmSysCommand    = uintptr(0x0112)
-	scMinimize      = uintptr(0xF020)
-	scMaximize      = uintptr(0xF030)
 
-	// DwmSetWindowAttribute: отключает отрисовку неклиентской области DWM
+	wmSysCommand = uintptr(0x0112)
+	scMinimize   = uintptr(0xF020)
+	scMaximize   = uintptr(0xF030)
+
 	dwmwaNCRenderingPolicy = uintptr(2) // DWMWA_NCRENDERING_POLICY
-	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED
+	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED — DWM не рисует рамку
 )
 
-// dwmMargins для DwmExtendFrameIntoClientArea.
-// {0,0,0,0} — сворачивает DWM-рамку, не добавляя «стекло» по периметру.
 type dwmMargins struct{ Left, Right, Top, Bottom int32 }
 
-// makeFrameless убирает системный заголовок и DWM-рамку без артефактов.
+// makeFrameless полностью убирает системную рамку и заголовок.
 //
-// Три шага:
-//  1. SetWindowLongPtr — снимаем WS_CAPTION | WS_SYSMENU; Win32 перестаёт
-//     резервировать место под заголовок.
-//  2. DwmSetWindowAttribute(DWMWA_NCRENDERING_POLICY, DWMNCRP_DISABLED) —
-//     отключает отрисовку неклиентской области DWM (убирает белую/серую полосу
-//     которую DWM рисует поверх окна независимо от стилей Win32).
-//  3. DwmExtendFrameIntoClientArea({0,0,0,0}) — сворачивает DWM-рамку в ноль.
-//     НЕ {-1,-1,-1,-1}: отрицательные margins включают режим "sheet of glass"
-//     и добавляют рамку по всему периметру.
+// Нужно убрать ВСЕ четыре бита отвечающих за рамки:
+//
+//	WS_CAPTION    — заголовок (белая/серая полоса сверху)
+//	WS_SYSMENU    — системное меню в заголовке
+//	WS_THICKFRAME — рамка изменения размера по периметру
+//	WS_BORDER     — тонкая рамка окна
+//
+// Если убрать только WS_CAPTION, Windows всё равно рисует рамку через
+// WS_THICKFRAME и DWM добавляет тень/border поверх.
 func makeFrameless(hwnd uintptr) {
-	// Шаг 1: убираем Win32 заголовок
 	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
-	style &^= wsCaption | wsSysMenu
+	style &^= wsCaption | wsSysMenu | wsThickFrame | wsBorder
 	setWindowLongPtr.Call(hwnd, gwlStyle, style)
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
 
-	// Шаг 2: отключаем DWM некlientскую отрисовку
+	// Отключаем DWM некlientскую отрисовку — убирает DWM-рамку/тень
 	policy := dwmncrpDisabled
 	dwmSetWindowAttr.Call(hwnd, dwmwaNCRenderingPolicy,
 		uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
 
-	// Шаг 3: сворачиваем DWM рамку в ноль
+	// Сворачиваем DWM рамку в ноль (НЕ -1: отрицательные margins = "sheet of glass")
 	m := dwmMargins{0, 0, 0, 0}
 	dwmExtendFrame.Call(hwnd, uintptr(unsafe.Pointer(&m)))
 }
 
-// Open открывает окно с Web UI. Если окно уже открыто — фокусирует его.
 func Open(url string) {
 	mu.Lock()
 	if opened {
@@ -91,9 +89,6 @@ func Open(url string) {
 	mu.Unlock()
 
 	go func() {
-		// BUG FIX: WebView2 использует COM STA на Windows.
-		// Без LockOSThread Go runtime может перемещать горутину между
-		// OS-потоками, что ломает COM и приводит к зависанию окна ("Не отвечает").
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
@@ -124,8 +119,6 @@ func Open(url string) {
 		hwnd := uintptr(unsafe.Pointer(w.Window()))
 		makeFrameless(hwnd)
 
-		// JS-биндинги для кастомных кнопок управления окном.
-		// Вызов из HTML: await windowMinimize() / windowMaximize() / windowClose()
 		w.Bind("windowMinimize", func() {
 			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
 		})
@@ -141,7 +134,6 @@ func Open(url string) {
 	}()
 }
 
-// Close закрывает окно если оно открыто
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()
