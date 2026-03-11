@@ -15,18 +15,22 @@ var (
 	opened   bool
 )
 
-// Win32 API для управления стилем окна
+// Win32 / DWM API
 var (
 	user32           = windows.NewLazyDLL("user32.dll")
+	dwmapi           = windows.NewLazyDLL("dwmapi.dll")
 	getWindowLongPtr = user32.NewProc("GetWindowLongPtrW")
 	setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
 	setWindowPos     = user32.NewProc("SetWindowPos")
 	sendMessageW     = user32.NewProc("SendMessageW")
+	// DwmExtendFrameIntoClientArea позволяет убрать DWM-рамку полностью.
+	// Без него DWM рисует тонкую светлую полосу сверху даже после снятия WS_CAPTION.
+	dwmExtendFrame = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
 )
 
-// gwlStyle = -16 как uintptr: используем битовый complement вместо отрицательной константы.
-// ^uintptr(15) == 0xFFFF...FFF0, что совпадает с -16 в two's complement.
-// Go запрещает uintptr(-16) как константное выражение, но ^uintptr(15) — валидно.
+// gwlStyle = -16 как uintptr через bitwise complement.
+// ^uintptr(15) == 0xFFFF...FFF0 (two's complement -16).
+// Go запрещает uintptr(-16) как константу, но ^uintptr(15) — валидно.
 const gwlStyle = ^uintptr(15) // == -16
 
 const (
@@ -41,15 +45,29 @@ const (
 	scMaximize      = uintptr(0xF030)
 )
 
-// makeFrameless убирает системный заголовок окна (белую полосу),
-// оставляя тонкую рамку для изменения размера (wsThickFrame сохраняется).
+// dwmMargins для DwmExtendFrameIntoClientArea.
+// Значения -1 говорят DWM полностью не рисовать никакой рамки.
+type dwmMargins struct{ Left, Right, Top, Bottom int32 }
+
+// makeFrameless убирает системный заголовок и DWM-рамку.
+//
+// Двухшаговый процесс:
+//  1. SetWindowLongPtr — снимаем WS_CAPTION и WS_SYSMENU со стиля окна,
+//     чтобы Win32 перестал резервировать место под заголовок.
+//  2. DwmExtendFrameIntoClientArea с margins {-1,-1,-1,-1} — говорим DWM
+//     расширить клиентскую область на весь размер окна и не рисовать свою рамку.
+//     Без этого шага DWM всё равно рисует тонкую светлую полосу сверху.
 func makeFrameless(hwnd uintptr) {
+	// Шаг 1: убираем WS_CAPTION | WS_SYSMENU
 	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
 	style &^= wsCaption | wsSysMenu
 	setWindowLongPtr.Call(hwnd, gwlStyle, style)
-	// SWP_FRAMECHANGED заставляет Windows пересчитать неклиентскую область
 	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
 		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
+
+	// Шаг 2: убираем DWM-рамку через отрицательные margins
+	m := dwmMargins{-1, -1, -1, -1}
+	dwmExtendFrame.Call(hwnd, uintptr(unsafe.Pointer(&m)))
 }
 
 // Open открывает окно с Web UI. Если окно уже открыто — фокусирует его.
@@ -93,12 +111,12 @@ func Open(url string) {
 
 		w.SetSize(960, 640, webview2.HintNone)
 
-		// Убираем системную белую полосу заголовка
+		// Убираем заголовок и DWM-рамку
 		hwnd := uintptr(unsafe.Pointer(w.Window()))
 		makeFrameless(hwnd)
 
-		// Привязываем JS-функции для кастомных кнопок управления окном.
-		// Вызов из HTML: await windowMinimize() / windowClose()
+		// JS-биндинги для кастомных кнопок управления окном.
+		// Вызов из HTML: await windowMinimize() / windowMaximize() / windowClose()
 		w.Bind("windowMinimize", func() {
 			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
 		})
