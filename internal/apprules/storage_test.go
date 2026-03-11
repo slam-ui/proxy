@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -363,6 +364,11 @@ func TestPersistentEngine_UpdateRule_PreservesCreatedAt(t *testing.T) {
 	r, _ := pe.AddRule(newTestRule("old.exe", ActionProxy, 1))
 	originalCreatedAt := r.CreatedAt
 
+	// Гарантируем что time.Now() в UpdateRule вернёт значение строго позже CreatedAt.
+	// Без паузы AddRule и UpdateRule могут получить одинаковый timestamp
+	// (os.timer resolution на Windows ~15ms), и After() вернёт false.
+	time.Sleep(20 * time.Millisecond)
+
 	updated, err := pe.UpdateRule(r.ID, Rule{Pattern: "new.exe", Action: ActionDirect, Priority: 99, Enabled: true})
 	if err != nil {
 		t.Fatalf("UpdateRule: %v", err)
@@ -372,7 +378,8 @@ func TestPersistentEngine_UpdateRule_PreservesCreatedAt(t *testing.T) {
 		t.Errorf("CreatedAt изменился: было %v, стало %v", originalCreatedAt, updated.CreatedAt)
 	}
 	if !updated.UpdatedAt.After(originalCreatedAt) {
-		t.Errorf("UpdatedAt должен быть позже CreatedAt")
+		t.Errorf("UpdatedAt должен быть позже CreatedAt: UpdatedAt=%v, CreatedAt=%v",
+			updated.UpdatedAt, originalCreatedAt)
 	}
 }
 

@@ -92,8 +92,17 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: 0
-        # exit code 3 = vulnerabilities found but not blocking (stdlib CVEs outside our control)
-        run: govulncheck ./... || true
+        # Вывод в JSON чтобы GitHub Actions не парсил текст как error-аннотации.
+        # exit 3 = найдены уязвимости (stdlib CVEs вне нашего контроля) — не блокируем.
+        run: govulncheck -json ./... > govulncheck.json 2>&1 || true
+
+      - name: Upload govulncheck report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govulncheck-report
+          path: govulncheck.json
+          retention-days: 5
 
   gosec:
     needs: build
