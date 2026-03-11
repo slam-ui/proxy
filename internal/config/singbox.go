@@ -10,11 +10,12 @@ import (
 const TunInterfaceName = "tun0"
 
 type SingBoxConfig struct {
-	Log       SBLog        `json:"log"`
-	DNS       SBDNS        `json:"dns"`
-	Inbounds  []SBInbound  `json:"inbounds"`
-	Outbounds []SBOutbound `json:"outbounds"`
-	Route     SBRoute      `json:"route"`
+	Log          SBLog          `json:"log"`
+	DNS          SBDNS          `json:"dns"`
+	Experimental SBExperimental `json:"experimental"`
+	Inbounds     []SBInbound    `json:"inbounds"`
+	Outbounds    []SBOutbound   `json:"outbounds"`
+	Route        SBRoute        `json:"route"`
 }
 
 type SBLog struct {
@@ -89,6 +90,17 @@ type SBRuleSet struct {
 	Path   string `json:"path"`
 }
 
+// SBExperimental включает Clash-совместимый API для статистики трафика и соединений.
+// Доступен на 127.0.0.1:9090 — используется нашим бэкендом для /api/stats и /api/connections.
+type SBExperimental struct {
+	ClashAPI SBClashAPI `json:"clash_api"`
+}
+
+type SBClashAPI struct {
+	ExternalController string `json:"external_controller"`
+	Secret             string `json:"secret"`
+}
+
 type SBRoute struct {
 	Rules                 []SBRouteRule `json:"rules,omitempty"`
 	RuleSet               []SBRuleSet   `json:"rule_set,omitempty"`
@@ -122,16 +134,18 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 	}
 
 	cfg := &SingBoxConfig{
-		Log: SBLog{Level: "info"},
+		Log: SBLog{Level: "warn"},  // info floods the log with every DNS query
+		Experimental: SBExperimental{
+			ClashAPI: SBClashAPI{
+				ExternalController: "127.0.0.1:9090",
+				Secret:             "",
+			},
+		},
 		DNS: SBDNS{
 			Servers: []SBDNSServer{
 				{Tag: "remote", Type: "tls", Server: "8.8.8.8", ServerPort: 853},
-				// "direct-dns" — быстрый UDP-резолвер для direct-трафика.
-				// Намеренно НЕ называется "local": он идёт на 1.1.1.1:53, а не на системный DNS.
 				{Tag: "direct-dns", Type: "udp", Server: "1.1.1.1", ServerPort: 53},
 			},
-			// DNS для HTTP-inbound резолвится через direct-dns, чтобы direct-трафик
-			// не утекал через удалённый DoT-сервер.
 			Rules: []SBDNSRule{
 				{Inbound: []string{"http-in"}, Server: "direct-dns"},
 			},
@@ -170,6 +184,15 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 			{Type: "block", Tag: "block"},
 		},
 		Route: buildRoute(routingCfg),
+	}
+
+	// Проверяем что все geosite .bin файлы существуют до записи конфига.
+	// buildRoute уже добавил их в RuleSet — проверяем существование здесь,
+	// пока ещё можем вернуть error (cfg формируется в памяти, файл ещё не записан).
+	for _, rs := range cfg.Route.RuleSet {
+		if _, statErr := os.Stat(rs.Path); os.IsNotExist(statErr) {
+			return fmt.Errorf("файл geosite не найден: %s — скачайте его в приложении", rs.Path)
+		}
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -282,11 +305,12 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 	for _, tag := range allTags {
 		if !seen[tag] {
 			seen[tag] = true
+			path := tag + ".bin"
 			ruleSets = append(ruleSets, SBRuleSet{
 				Type:   "local",
 				Tag:    tag,
 				Format: "binary",
-				Path:   tag + ".bin",
+				Path:   path,
 			})
 		}
 	}

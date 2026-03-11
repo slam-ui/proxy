@@ -30,6 +30,11 @@ type Config struct {
 	ConfigPath    string
 	Logger        logger.Logger
 	EventLog      *eventlog.Log // может быть nil — тогда /api/events недоступен
+	// QuitChan если задан — закрывается при вызове POST /api/quit,
+	// что запускает graceful shutdown всего приложения (аналог кнопки "Выход" в трее).
+	QuitChan chan struct{}
+	// SilentPaths — пути которые не нужно логировать (polling endpoints)
+	SilentPaths []string
 }
 
 // Server HTTP API сервер
@@ -89,8 +94,23 @@ func (s *Server) setupRoutes() {
 	api.HandleFunc("/proxy/disable", s.handleProxyDisable).Methods("POST", "OPTIONS")
 	api.HandleFunc("/proxy/toggle", s.handleProxyToggle).Methods("POST", "OPTIONS")
 	api.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
+	api.HandleFunc("/quit", s.handleQuit).Methods("POST", "OPTIONS")
 	api.HandleFunc("/events", s.handleEvents).Methods("GET", "OPTIONS")
 	api.HandleFunc("/events/clear", s.handleEventsClear).Methods("POST", "OPTIONS")
+}
+
+// SetupFeatureRoutes регистрирует профили, диагностику и статистику.
+// Вызывать после NewServer, до FinalizeRoutes.
+func (s *Server) SetupFeatureRoutes() {
+	SetupProfileRoutes(s)
+	SetupDiagRoutes(s)
+	// Geosite endpoints
+	api := s.router.PathPrefix("/api").Subrouter()
+	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")
+	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST")
+	// Polling-эндпоинты которые не нужно логировать
+	s.addSilentPath("/api/stats")
+	s.addSilentPath("/api/connections")
 }
 
 // FinalizeRoutes регистрирует статику — вызывать после всех других маршрутов
@@ -231,6 +251,22 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// handleQuit POST /api/quit — инициирует graceful shutdown всего приложения
+func (s *Server) handleQuit(w http.ResponseWriter, _ *http.Request) {
+	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "shutting down", Success: true})
+	if s.config.QuitChan != nil {
+		// Закрываем в отдельной горутине: сначала нужно отправить ответ клиенту
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			select {
+			case <-s.config.QuitChan: // already closed
+			default:
+				close(s.config.QuitChan)
+			}
+		}()
+	}
+}
+
 // respondJSON отправляет JSON ответ
 func (s *Server) respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -259,18 +295,27 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// addSilentPath добавляет путь в список без логирования (polling endpoints)
+func (s *Server) addSilentPath(path string) {
+	// silentPaths живёт внутри loggingMiddleware-замыкания — добавляем через отдельный список
+	s.config.SilentPaths = append(s.config.SilentPaths, path)
+}
+
 // loggingMiddleware логирует HTTP запросы.
 // Частые polling-эндпоинты и статика не логируются — иначе флудят stdout
 // вместе с логами sing-box и могут блокировать запись в буфер.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	// Эндпоинты которые поллятся каждую секунду — не логируем
-	silentPaths := map[string]bool{
-		"/api/status":           true,
-		"/api/health":           true,
-		"/api/tun/apply/status": true,
-		"/api/events":           true,
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		silentPaths := map[string]bool{
+			"/api/status":           true,
+			"/api/health":           true,
+			"/api/tun/apply/status": true,
+			"/api/events":           true,
+		}
+		for _, p := range s.config.SilentPaths {
+			silentPaths[p] = true
+		}
 		if silentPaths[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return

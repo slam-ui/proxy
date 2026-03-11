@@ -34,21 +34,24 @@ type Log struct {
 	events  []Event
 	maxSize int
 	counter int
+	// head — индекс самого старого элемента (для кольцевого буфера)
+	head int
+	// size — текущее число заполненных слотов
+	size int
 }
 
 // New создаёт буфер на maxSize событий
 func New(maxSize int) *Log {
-	cap0 := maxSize
-	if cap0 > 64 {
-		cap0 = 64
-	}
 	return &Log{
 		maxSize: maxSize,
-		events:  make([]Event, 0, cap0),
+		events:  make([]Event, maxSize),
 	}
 }
 
-// Add добавляет событие; старые вытесняются при переполнении
+// Add добавляет событие; старые вытесняются при переполнении.
+// BUG FIX: прежняя реализация делала copy(l.events, l.events[1:]) — O(n) сдвиг
+// при каждом добавлении. При высокой частоте логирования (вывод sing-box)
+// это создавало заметный CPU-спайк. Теперь используется O(1) кольцевой буфер.
 func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 	msg := format
 	if len(args) > 0 {
@@ -67,11 +70,14 @@ func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 		Message:   msg,
 	}
 
-	l.events = append(l.events, e)
-	if len(l.events) > l.maxSize {
-		// Сдвигаем: удаляем самое старое событие
-		copy(l.events, l.events[1:])
-		l.events = l.events[:l.maxSize]
+	if l.size < l.maxSize {
+		// Буфер не полон: пишем в следующий свободный слот
+		l.events[(l.head+l.size)%l.maxSize] = e
+		l.size++
+	} else {
+		// Буфер полон: перезаписываем самый старый элемент
+		l.events[l.head] = e
+		l.head = (l.head + 1) % l.maxSize
 	}
 }
 
@@ -81,7 +87,8 @@ func (l *Log) GetSince(since int) []Event {
 	defer l.mu.RUnlock()
 
 	result := make([]Event, 0)
-	for _, e := range l.events {
+	for i := 0; i < l.size; i++ {
+		e := l.events[(l.head+i)%l.maxSize]
 		if e.ID > since {
 			result = append(result, e)
 		}
@@ -100,7 +107,8 @@ func (l *Log) GetLatestID() int {
 func (l *Log) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.events = l.events[:0]
+	l.head = 0
+	l.size = 0
 }
 
 // ─── Logger adapter ──────────────────────────────────────────────────────────

@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
+	"syscall"
+	"unsafe"
 	"io"
 	"log"
 	"os"
@@ -11,11 +14,13 @@ import (
 	"runtime/debug"
 	"time"
 
+	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/notification"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
@@ -42,10 +47,59 @@ func openLogFile() (*os.File, error) {
 		exe = "."
 	}
 	logPath := filepath.Join(filepath.Dir(exe), logFile)
-	return os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	// O_TRUNC: каждый запуск начинает чистый лог — только текущая сессия.
+	return os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
 }
 
 func main() {
+	// ── Переходим в папку с .exe ─────────────────────────────────────────────
+	// Все пути в проекте относительные: "./sing-box.exe", "routing.json" и т.д.
+	// Они резолвятся относительно РАБОЧЕЙ ДИРЕКТОРИИ, а не папки с .exe.
+	// При запуске двойным кликом с рабочего стола cwd = Desktop → файлы не найдены
+	// → приложение падает мгновенно, лог пуст.
+	if exe, err := os.Executable(); err == nil {
+		_ = os.Chdir(filepath.Dir(exe))
+	}
+
+	// Единственный экземпляр — именованный мьютекс Windows.
+	// Предотвращает двойной запуск (конфликт портов 8080 и 10807).
+	mutex, err := createSingleInstanceMutex("Global\\ProxyClientSingleInstance")
+	if err != nil {
+		os.Exit(0) // уже запущен — тихо выходим
+	}
+	defer syscall.CloseHandle(mutex)
+
+	// TUN-интерфейс требует прав администратора.
+	// Если запущены без прав — перезапускаемся через UAC.
+	if !isRunningAsAdmin() {
+		exePath, _ := os.Executable()
+		// BUG FIX: Start-Process — это cmdlet PowerShell, а не аргументы exe.
+		// Старый вариант передавал "-FilePath" как отдельный аргумент powershell.exe,
+		// что вызывало "The term 'Start-Process' is not recognized" при путях с пробелами.
+		// Теперь весь вызов передаётся как единая строка -Command.
+		psCmd := fmt.Sprintf(`Start-Process -FilePath '%s' -Verb RunAs`,
+			strings.ReplaceAll(exePath, "'", "''")) // экранируем одиночные кавычки
+		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", psCmd)
+		_ = cmd.Start()
+		os.Exit(0)
+	}
+
+	// ── Ранняя защита от паники — до открытия нормального лога ───────────────
+	// Если что-то падает между Chdir и первой записью в лог, эта горутина
+	// перехватывает панику и пишет её в отдельный файл crash.log.
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("[%s] EARLY PANIC: %v\n%s\n",
+				time.Now().Format("2006-01-02 15:04:05"), r, debug.Stack())
+			if f, err := os.OpenFile("crash.log",
+				os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {
+				_, _ = f.WriteString(msg)
+				_ = f.Close()
+			}
+			panic(r) // re-panic чтобы нормальный recover тоже сработал
+		}
+	}()
+
 	// ── Открываем файл лога ДО всего остального ──────────────────────────────
 	// Если приложение падает раньше чем поднимается UI или API,
 	// proxy-client.log содержит полную причину.
@@ -57,10 +111,27 @@ func main() {
 		defer func() { _ = lf.Sync(); _ = lf.Close() }()
 	}
 
-	// Весь вывод — и в консоль, и в файл
-	var output io.Writer = os.Stdout
-	if lf != nil {
+	// Весь вывод — в файл, и в консоль если она доступна.
+	// В режиме -H windowsgui дескриптор stdout невалиден: запись в os.Stdout
+	// вызывает panic ещё до первой строки лога — файл остаётся пустым.
+	// Проверяем доступность stdout через Stat() перед тем как включать его в вывод.
+	// В режиме -H windowsgui os.Stdout невалиден: запись в него — panic.
+	// Проверяем через Stat(): если возвращает ошибку — stdout недоступен.
+	stdoutOK := false
+	if os.Stdout != nil {
+		_, errStat := os.Stdout.Stat() // (FileInfo, error) — берём error
+		stdoutOK = errStat == nil
+	}
+	var output io.Writer
+	switch {
+	case lf != nil && stdoutOK:
 		output = io.MultiWriter(os.Stdout, lf)
+	case lf != nil:
+		output = lf // windowsgui: только в файл
+	case stdoutOK:
+		output = os.Stdout
+	default:
+		output = io.Discard
 	}
 
 	// ── Перехватываем panic — пишем стектрейс в лог до выхода ───────────────
@@ -103,6 +174,17 @@ func run(output io.Writer) error {
 	evLog := eventlog.New(500)
 	mainLogger := eventlog.NewLogger(appLogger, evLog, "main")
 
+	// Детектор аномалий: следит за event log и при ошибках/крашах
+	// сохраняет диагностический файл anomaly-YYYY-MM-DD_HH-MM-SS_<kind>.log
+	// рядом с .exe — чтобы можно было разобрать что случилось без открытия приложения.
+	exeDir := "."
+	if exe, err := os.Executable(); err == nil {
+		exeDir = filepath.Dir(exe)
+	}
+	anomalyDetector := anomalylog.New(evLog, exeDir)
+	anomalyDetector.Start()
+	defer anomalyDetector.Stop()
+
 	mainLogger.Info("Запуск прокси-клиента...")
 
 	// Адаптеры для дочерних компонентов
@@ -117,10 +199,20 @@ func run(output io.Writer) error {
 		Override: "<local>",
 	}
 
-	// 2. Очистка старого TUN перед запуском
-	exec.Command("netsh", "interface", "delete", "interface", config.TunInterfaceName).Run() //nolint:errcheck
-
-	// 3. Запускаем sing-box
+	// 2–3. Убиваем осиротевший sing-box, затем сбрасываем wintun kernel driver.
+	//
+	// Суть проблемы "Cannot create a file when that file already exists":
+	//   wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
+	//   Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
+	//   остаётся жить пока Windows GC его не соберёт (может занять 10–30 секунд).
+	//
+	// Единственный надёжный способ — остановить сам wintun kernel driver (sc stop wintun).
+	// Это сразу освобождает ВСЕ его kernel-объекты.
+	// sing-box автоматически запустит драйвер снова когда ему понадобится.
+	killOrphanSingBox(mainLogger)
+	// Небольшая пауза чтобы процесс успел закрыть свои хэндлы до sc stop
+	time.Sleep(1 * time.Second)
+	removeStaleTunAdapterWithRetry(mainLogger)
 	mainLogger.Info("Запуск sing-box...")
 	routingCfg, err := config.LoadRoutingConfig("routing.json")
 	if err != nil {
@@ -128,19 +220,75 @@ func run(output io.Writer) error {
 		routingCfg = config.DefaultRoutingConfig()
 	}
 	if err := config.GenerateSingBoxConfig(secretFile, "config.singbox.json", routingCfg); err != nil {
+		// Проверяем: возможно secret.key не заполнен (остался плейсхолдер)
+		secretData, readErr := os.ReadFile(secretFile)
+		if readErr != nil || len(secretData) == 0 {
+			return fmt.Errorf("файл %s не найден или пуст — вставьте вашу VLESS-ссылку", secretFile)
+		}
+		// Проверка на незаполненный плейсхолдер (все строки начинаются с #)
+		allComments := true
+		for _, line := range strings.Split(strings.TrimSpace(string(secretData)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				allComments = false
+				break
+			}
+		}
+		if allComments {
+			return fmt.Errorf("файл %s содержит только комментарии — вставьте вашу VLESS-ссылку (vless://...)", secretFile)
+		}
 		mainLogger.Warn("Не удалось сгенерировать sing-box конфиг: %v", err)
 		mainLogger.Warn("Sing-box будет запущен с СУЩЕСТВУЮЩИМ конфигом")
 	}
 
+	// xrayManager объявляем заранее чтобы OnCrash мог ссылаться на него (closure).
+	var xrayManager xray.Manager
 	xrayCfg := xray.Config{
 		ExecutablePath: "./sing-box.exe",
 		ConfigPath:     "config.singbox.json",
 		SecretKeyPath:  secretFile,
-		Args:           []string{"run"},
+		Args:           []string{"run", "--disable-color"},  // suppress ANSI color codes in log file
 		Logger:         xrayLogger,
 		SingBoxWriter:  eventlog.NewLineWriter(evLog, "sing-box", eventlog.LevelInfo),
+		FileWriter:     output, // sing-box stderr → proxy-client.log (crash reasons visible)
+		// BUG FIX: если sing-box падает сам (например из-за невалидного конфига),
+		// отключаем системный прокси — иначе весь трафик уходит в мёртвый порт.
+		OnCrash: func(crashErr error) {
+			// Детектируем специфическую ошибку wintun kernel-объекта.
+			// "Cannot create a file when that file already exists" означает что
+			// предыдущий wintun\Device\WINTUN0 ещё не освобождён ядром ОС.
+			// Kernel GC занимает 15-30 секунд — ждём и перезапускаем автоматически.
+			output := xrayManager.LastOutput()
+			isTunConflict := strings.Contains(output, "Cannot create a file when that file already exists") ||
+				strings.Contains(output, "configure tun interface")
+			if isTunConflict {
+				mainLogger.Warn("Detected wintun conflict — ждём 20с освобождения kernel-объекта и перезапускаем...")
+				notification.Send("Proxy", "Перезапуск TUN через 20 секунд...")
+				time.Sleep(20 * time.Second)
+				mainLogger.Info("Перезапуск sing-box после wintun GC...")
+				if startErr := xrayManager.Start(); startErr != nil {
+					mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
+					notification.Send("Proxy — ошибка", "Не удалось перезапустить. Откройте приложение.")
+					proxyManager.Disable() //nolint
+					tray.SetEnabled(false)
+				} else {
+					mainLogger.Info("sing-box успешно перезапущен (PID: %d)", xrayManager.GetPID())
+					notification.Send("Proxy", "Перезапущен успешно ✓")
+				}
+				return
+			}
+			// Другие ошибки — не перезапускаем, уведомляем пользователя
+			mainLogger.Error("sing-box упал неожиданно (%v) — отключаем системный прокси", crashErr)
+			notification.Send("Proxy — ошибка", "sing-box упал. Проверьте лог и перезапустите.")
+			if disableErr := proxyManager.Disable(); disableErr != nil {
+				mainLogger.Error("Не удалось отключить прокси после краша sing-box: %v", disableErr)
+			} else {
+				tray.SetEnabled(false)
+				mainLogger.Warn("Системный прокси отключён из-за краша sing-box. Проверьте routing.json и перезапустите.")
+			}
+		},
 	}
-	xrayManager, err := xray.NewManager(xrayCfg)
+	xrayManager, err = xray.NewManager(xrayCfg)
 	if err != nil {
 		return fmt.Errorf("не удалось запустить sing-box: %w", err)
 	}
@@ -182,6 +330,8 @@ func run(output io.Writer) error {
 	}
 
 	// 6. API сервер
+	quit := make(chan struct{})
+
 	apiServer := api.NewServer(api.Config{
 		ListenAddress: apiListenAddress,
 		XRayManager:   xrayManager,
@@ -189,8 +339,10 @@ func run(output io.Writer) error {
 		ConfigPath:    runtimeFile,
 		Logger:        mainLogger,
 		EventLog:      evLog,
+		QuitChan:      quit, // POST /api/quit closes this → graceful shutdown
 	})
 	apiServer.SetupTunRoutes(xrayCfg)
+	apiServer.SetupFeatureRoutes()
 	if rulesEngine != nil && processMonitor != nil && processLauncher != nil {
 		apiServer.SetupAppProxyRoutes(rulesEngine, processMonitor, processLauncher)
 	}
@@ -223,7 +375,6 @@ func run(output io.Writer) error {
 	}()
 
 	mainLogger.Info("Инициализация завершена")
-	quit := make(chan struct{})
 
 	// 7. Открываем окно только когда ОБА условия выполнены:
 	//    а) трей полностью инициализирован (WaitReady)
@@ -248,6 +399,7 @@ func run(output io.Writer) error {
 			} else {
 				tray.SetEnabled(true)
 				mainLogger.Info("Прокси включён через трей")
+				notification.Send("Proxy", "Прокси включён ✓")
 			}
 		},
 		OnDisable: func() {
@@ -256,6 +408,7 @@ func run(output io.Writer) error {
 			} else {
 				tray.SetEnabled(false)
 				mainLogger.Info("Прокси отключён через трей")
+				notification.Send("Proxy", "Прокси отключён")
 			}
 		},
 		OnQuit: func() {
@@ -281,10 +434,167 @@ func run(output io.Writer) error {
 	if err := xrayManager.Stop(); err != nil {
 		mainLogger.Error("Ошибка при остановке sing-box: %v", err)
 	}
+	// Убираем TUN адаптер при выходе — иначе wintun остаётся в системе
+	mainLogger.Info("Очистка TUN адаптера при выходе...")
+	shutdownTUN(mainLogger)
 	if err := proxyManager.Disable(); err != nil {
 		mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
 
 	mainLogger.Info("Работа завершена корректно")
 	return nil
+}
+
+// killOrphanSingBox убивает все запущенные экземпляры sing-box.exe.
+// Нужно при старте: если предыдущий proxy-client завершился аварийно,
+// sing-box остаётся в памяти и занимает порт — новый запуск падает с
+// "bind: Only one usage of each socket address".
+func killOrphanSingBox(log logger.Logger) {
+	snap, err := createToolhelp32Snapshot()
+	if err != nil {
+		return
+	}
+	defer syscall.CloseHandle(snap)
+
+	type entry32 struct {
+		Size              uint32
+		CntUsage          uint32
+		ProcessID         uint32
+		DefaultHeapID     uintptr
+		ModuleID          uint32
+		CntThreads        uint32
+		ParentProcessID   uint32
+		PriorityClassBase int32
+		Flags             uint32
+		ExeFile           [syscall.MAX_PATH]uint16
+	}
+
+	var e entry32
+	e.Size = uint32(unsafe.Sizeof(e))
+
+	procProcess32First := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32FirstW")
+	procProcess32Next := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32NextW")
+
+	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
+	for ret != 0 {
+		name := syscall.UTF16ToString(e.ExeFile[:])
+		if strings.EqualFold(name, "sing-box.exe") {
+			if proc, err := os.FindProcess(int(e.ProcessID)); err == nil {
+				log.Info("Завершаем осиротевший sing-box (PID: %d)", e.ProcessID)
+				_ = proc.Kill()
+			}
+		}
+		ret, _, _ = procProcess32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
+	}
+}
+
+func createToolhelp32Snapshot() (syscall.Handle, error) {
+	kernel32 := syscall.MustLoadDLL("kernel32.dll")
+	create := kernel32.MustFindProc("CreateToolhelp32Snapshot")
+	const TH32CS_SNAPPROCESS = 0x00000002
+	h, _, err := create.Call(TH32CS_SNAPPROCESS, 0)
+	if h == uintptr(syscall.InvalidHandle) {
+		return syscall.InvalidHandle, err
+	}
+	return syscall.Handle(h), nil
+}
+
+// isRunningAsAdmin возвращает true если процесс запущен с правами администратора.
+// Используется для проверки перед запуском sing-box (TUN требует прав админа).
+func isRunningAsAdmin() bool {
+	// Пробуем открыть \\\\.\\PHYSICALDRIVE0 — доступно только администраторам
+	f, err := os.Open("\\\\.\\PHYSICALDRIVE0")
+	if err == nil {
+		_ = f.Close()
+		return true
+	}
+	return false
+}
+
+// createSingleInstanceMutex создаёт именованный мьютекс Windows.
+// Возвращает ошибку если мьютекс уже занят (другой экземпляр запущен).
+func createSingleInstanceMutex(name string) (syscall.Handle, error) {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	createMutex := kernel32.NewProc("CreateMutexW")
+
+	namePtr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, err
+	}
+
+	h, _, lastErr := createMutex.Call(0, 0, uintptr(unsafe.Pointer(namePtr)))
+	if h == 0 {
+		return 0, lastErr
+	}
+
+	const ERROR_ALREADY_EXISTS = 183
+	if lastErr == syscall.Errno(ERROR_ALREADY_EXISTS) {
+		_ = syscall.CloseHandle(syscall.Handle(h))
+		return 0, fmt.Errorf("already running")
+	}
+
+	return syscall.Handle(h), nil
+}
+
+// stopWintunDriver останавливает wintun kernel driver через Service Control Manager.
+//
+// Корень проблемы "Cannot create a file when that file already exists":
+//   wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
+//   Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
+//   остаётся жить пока Windows GC его не соберёт (10-30 секунд, непредсказуемо).
+//
+// sc stop wintun → kernel driver выгружается → ВСЕ его объекты освобождаются немедленно.
+// sing-box автоматически перезапустит драйвер при следующем создании TUN-интерфейса.
+func removeStaleTunAdapterWithRetry(log logger.Logger) {
+	runHidden := func(name string, args ...string) (string, error) {
+		cmd := exec.Command(name, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			CreationFlags: 0x08000000,
+			HideWindow:    true,
+		}
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+
+	// Шаг 1: sc stop wintun — единственный способ гарантированно освободить kernel-объект.
+	// SilentlyContinue / -ErrorAction не нужны — работаем напрямую с SCM.
+	out, err := runHidden("sc", "stop", "wintun")
+	if err != nil {
+		// Драйвер не запущен — это нормально при первом запуске
+		log.Info("wintun driver не запущен (%s) — первый запуск или уже остановлен", strings.ReplaceAll(out, "\n", " "))
+	} else {
+		log.Info("wintun driver: отправлена команда остановки")
+		// Ждём STOP_PENDING → STOPPED (SCM может занять до 5 секунд)
+		for i := 0; i < 10; i++ {
+			time.Sleep(500 * time.Millisecond)
+			status, _ := runHidden("sc", "query", "wintun")
+			if strings.Contains(status, "STOPPED") {
+				log.Info("wintun driver остановлен (STOPPED)")
+				break
+			}
+		}
+	}
+
+	// Шаг 2: убрать сетевой адаптер из Device Manager (эстетика — чтобы не засорял список)
+	ps := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
+	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", ps)
+
+	log.Info("TUN cleanup завершён")
+}
+
+
+// shutdownTUN останавливает wintun и удаляет tun0 адаптер при завершении приложения.
+// В отличие от removeStaleTunAdapterWithRetry не ждёт полного STOP — просто отправляет команду.
+func shutdownTUN(log logger.Logger) {
+	run := func(name string, args ...string) {
+		cmd := exec.Command(name, args...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		_ = cmd.Run()
+	}
+	// Остановить wintun kernel driver
+	run("sc", "stop", "wintun")
+	// Удалить сетевой адаптер
+	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		"Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue")
+	log.Info("TUN shutdown отправлен")
 }

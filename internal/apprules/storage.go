@@ -175,7 +175,13 @@ func (pe *PersistentEngine) EnableRule(id string) error {
 	if err := pe.engine.EnableRule(id); err != nil {
 		return err
 	}
-	return pe.storage.Save(pe.engine.ListRules())
+	// BUG FIX: при ошибке сохранения откатываем изменение в памяти,
+	// иначе in-memory состояние расходится с файлом до следующего рестарта.
+	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+		_ = pe.engine.DisableRule(id) // откат
+		return fmt.Errorf("failed to save rules: %w", err)
+	}
+	return nil
 }
 
 // DisableRule отключает правило с сохранением
@@ -186,7 +192,13 @@ func (pe *PersistentEngine) DisableRule(id string) error {
 	if err := pe.engine.DisableRule(id); err != nil {
 		return err
 	}
-	return pe.storage.Save(pe.engine.ListRules())
+	// BUG FIX: при ошибке сохранения откатываем изменение в памяти,
+	// иначе in-memory состояние расходится с файлом до следующего рестарта.
+	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+		_ = pe.engine.EnableRule(id) // откат
+		return fmt.Errorf("failed to save rules: %w", err)
+	}
+	return nil
 }
 
 // loadRules загружает правила из storage, сохраняя оригинальные ID
