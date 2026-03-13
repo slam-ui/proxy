@@ -373,6 +373,16 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig) {
 		}
 	}
 
+	// BUG FIX: ждём освобождения wintun kernel objects ДО удаления TUN адаптера.
+	// Windows держит kernel device object ~15с после остановки sing-box.
+	// Remove-NetAdapter/netsh убирают запись из сетевого стека немедленно,
+	// но kernel object остаётся — новый sing-box упадёт с FATAL[0015].
+	// Фиксированный wait 17с (WARN[0010] → FATAL[0015] = 15с, +2с запас).
+	const wintunReleaseWait = 17 * time.Second
+	h.server.logger.Info("Ожидаем освобождения wintun kernel objects (%v)...", wintunReleaseWait)
+	time.Sleep(wintunReleaseWait)
+	h.server.logger.Info("wintun handles освобождены")
+
 	// Удаляем TUN интерфейс.
 	// BUG FIX: exec без таймаута мог зависнуть навсегда если netsh ждал
 	// освобождения интерфейса (например при проблемах с правами). Теперь
