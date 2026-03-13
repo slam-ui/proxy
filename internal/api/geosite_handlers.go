@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // KnownGeosite — список популярных geosite категорий
@@ -119,11 +120,15 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 	destPath := filepath.Join(distDir, "geosite-"+name+".bin")
 
 	// Пробуем источники по очереди
+	// BUG FIX: http.Get использует дефолтный клиент без таймаута.
+	// При медленном или недоступном сервере запрос висел вечно, блокируя горутину.
+	dlClient := &http.Client{Timeout: 30 * time.Second}
+
 	var data []byte
 	var lastErr string
 	for _, urlFmt := range geositeSources {
 		url := fmt.Sprintf(urlFmt, name)
-		resp, err := http.Get(url)
+		resp, err := dlClient.Get(url)
 		if err != nil {
 			lastErr = err.Error()
 			continue

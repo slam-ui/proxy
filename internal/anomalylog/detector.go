@@ -198,6 +198,8 @@ func (d *Detector) writeFile(kind AnomalyKind, anomalies []eventlog.Event) {
 	defer func() { _ = f.Sync(); _ = f.Close() }()
 
 	if isNew {
+		// UTF-8 BOM — без него Windows Notepad открывает как ANSI (кракозябры)
+		_, _ = f.Write([]byte{0xEF, 0xBB, 0xBF})
 		// Заголовок файла
 		fmt.Fprintf(f, "╔══════════════════════════════════════════════════════════╗\n")
 		fmt.Fprintf(f, "║  ANOMALY LOG — %s\n", d.sessionTS.Format("2006-01-02 15:04:05"))

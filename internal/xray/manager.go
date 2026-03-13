@@ -200,13 +200,20 @@ func (m *manager) doStart() error {
 	m.tail = tailBuf // последние 4KB stderr (уже подключён к cmd.Stderr)
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
-	go m.monitor()
+	// BUG FIX: захватываем локальную ссылку на cmd до запуска горутины.
+	// monitor() не может читать m.cmd напрямую — это data race:
+	// Start() может вызваться из OnCrash (отдельная горутина) и перезаписать
+	// m.cmd пока старый monitor() ещё не вернулся из Wait().
+	// Локальная переменная cmdRef гарантирует что каждый monitor() ждёт
+	// именно свой процесс, независимо от последующих переприсвоений m.cmd.
+	cmdRef := cmd
+	go m.monitor(cmdRef)
 	return nil
 }
 
 // monitor — единственное место где вызывается cmd.Wait()
-func (m *manager) monitor() {
-	err := m.cmd.Wait()
+func (m *manager) monitor(cmd *exec.Cmd) {
+	err := cmd.Wait()
 	close(m.done)
 
 	m.mu.RLock()

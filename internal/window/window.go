@@ -1,6 +1,8 @@
-package window
+﻿package window
 
 import (
+	"encoding/json"
+	"os"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -16,75 +18,95 @@ var (
 )
 
 var (
-	user32           = windows.NewLazyDLL("user32.dll")
-	dwmapi           = windows.NewLazyDLL("dwmapi.dll")
-	getWindowLongPtr = user32.NewProc("GetWindowLongPtrW")
-	setWindowLongPtr = user32.NewProc("SetWindowLongPtrW")
-	setWindowPos     = user32.NewProc("SetWindowPos")
-	sendMessageW     = user32.NewProc("SendMessageW")
-	getSystemMetrics = user32.NewProc("GetSystemMetrics")
-	dwmSetWindowAttr = dwmapi.NewProc("DwmSetWindowAttribute")
-	dwmExtendFrame   = dwmapi.NewProc("DwmExtendFrameIntoClientArea")
+	user32             = windows.NewLazyDLL("user32.dll")
+	dwmAPI             = windows.NewLazyDLL("dwmapi.dll")
+	setWindowPos       = user32.NewProc("SetWindowPos")
+	getWindowRect      = user32.NewProc("GetWindowRect")
+	postMessageW       = user32.NewProc("PostMessageW")
+	getWindowPlacement = user32.NewProc("GetWindowPlacement")
+	getAncestor        = user32.NewProc("GetAncestor")
+	dwmSetAttr         = dwmAPI.NewProc("DwmSetWindowAttribute")
 )
-
-// gwlStyle = -16 через bitwise complement: ^uintptr(15) == -16 в two's complement
-const gwlStyle = ^uintptr(15)
 
 const (
-	// Убираем только заголовок — WS_THICKFRAME оставляем для resize!
-	wsCaption = uintptr(0x00C00000) // заголовок (белая полоса)
-	wsSysMenu = uintptr(0x00080000) // системное меню
-	// wsThickFrame НЕ убираем — он даёт resize по краям окна
+	swpNozorder      = 0x0004
+	swpNoActivate    = 0x0010
+	wmSysCommand     = 0x0112
+	wmClose          = 0x0010
+	scMinimize       = 0xF020
+	scMaximize       = 0xF030
+	scRestore        = 0xF120
+	showStateMaximized = 3
 
-	swpNomove       = uintptr(0x0002)
-	swpNosize       = uintptr(0x0001)
-	swpNozorder     = uintptr(0x0004)
-	swpFrameChanged = uintptr(0x0020)
-
-	wmSysCommand = uintptr(0x0112)
-	scMinimize   = uintptr(0xF020)
-	scMaximize   = uintptr(0xF030)
-
-	// DWM: отключаем отрисовку неклиентской области (белая полоса от DWM)
-	dwmwaNCRenderingPolicy = uintptr(2) // DWMWA_NCRENDERING_POLICY
-	dwmncrpDisabled        = uintptr(1) // DWMNCRP_DISABLED
-
-	// GetSystemMetrics индексы
-	smCxScreen = uintptr(0) // ширина экрана
-	smCyScreen = uintptr(1) // высота экрана
+	// DWM атрибуты для стилизации нативного заголовка
+	dwmwaImmersiveDarkMode = 20 // BOOL: 1 = тёмный режим
+	dwmwaCaptionColor      = 35 // COLORREF: цвет полосы заголовка
+	dwmwaTextColor         = 36 // COLORREF: цвет текста заголовка
+	dwmwaBorderColor       = 34 // COLORREF: цвет рамки
 )
 
-type dwmMargins struct{ Left, Right, Top, Bottom int32 }
-
-// makeFrameless убирает заголовок, оставляя resize по краям.
-//
-// Убираем только WS_CAPTION и WS_SYSMENU.
-// WS_THICKFRAME ОСТАВЛЯЕМ — он нужен для resize окна мышью.
-// Белая полоса от DWM убирается через DwmSetWindowAttribute(DWMNCRP_DISABLED).
-func makeFrameless(hwnd uintptr) {
-	style, _, _ := getWindowLongPtr.Call(hwnd, gwlStyle)
-	style &^= wsCaption | wsSysMenu
-	setWindowLongPtr.Call(hwnd, gwlStyle, style)
-	setWindowPos.Call(hwnd, 0, 0, 0, 0, 0,
-		swpNomove|swpNosize|swpNozorder|swpFrameChanged)
-
-	// Отключаем DWM неклиентскую отрисовку — убирает белую полосу сверху
-	policy := dwmncrpDisabled
-	dwmSetWindowAttr.Call(hwnd, dwmwaNCRenderingPolicy,
-		uintptr(unsafe.Pointer(&policy)), unsafe.Sizeof(policy))
-
-	// Сворачиваем DWM рамку в ноль (0 = убрать, -1 = "sheet of glass" — не то)
-	m := dwmMargins{0, 0, 0, 0}
-	dwmExtendFrame.Call(hwnd, uintptr(unsafe.Pointer(&m)))
+// colorref конвертирует #RRGGBB в Windows COLORREF (0x00BBGGRR).
+func colorref(r, g, b uint32) uint32 {
+	return b<<16 | g<<8 | r
 }
 
-// screenSize возвращает размер основного монитора
-func screenSize() (int, int) {
-	w, _, _ := getSystemMetrics.Call(smCxScreen)
-	h, _, _ := getSystemMetrics.Call(smCyScreen)
-	return int(w), int(h)
+// applyDarkTitle красит нативный заголовок под цветовую схему приложения.
+func applyDarkTitle(hwnd uintptr) {
+	// Тёмный режим (убирает белый фон системных кнопок)
+	dark := uint32(1)
+	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+
+	// --surface: #13131e → COLORREF
+	capColor := colorref(0x13, 0x13, 0x1e)
+	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+
+	// Текст заголовка: #6a6a8a (--muted2), ненавязчивый
+	textColor := colorref(0x6a, 0x6a, 0x8a)
+	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+
+	// Рамка: #1f1f30 (--border)
+	borderColor := colorref(0x1f, 0x1f, 0x30)
+	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 }
 
+// windowState — позиция и размер окна между запусками.
+type windowState struct {
+	X, Y, Width, Height int32
+}
+
+const statePath = "window_state.json"
+
+func loadState() (windowState, bool) {
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return windowState{}, false
+	}
+	var s windowState
+	if json.Unmarshal(data, &s) != nil {
+		return windowState{}, false
+	}
+	if s.Width < 400 || s.Height < 300 {
+		return windowState{}, false
+	}
+	return s, true
+}
+
+func saveState(hwnd uintptr) {
+	var r [4]int32
+	getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
+	s := windowState{X: r[0], Y: r[1], Width: r[2] - r[0], Height: r[3] - r[1]}
+	data, _ := json.Marshal(s)
+	_ = os.WriteFile(statePath, data, 0644)
+}
+
+func isZoomed(hwnd uintptr) bool {
+	var wp [12]uint32
+	wp[0] = uint32(unsafe.Sizeof(wp))
+	getWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp[0])))
+	return wp[2] == showStateMaximized
+}
+
+// Open открывает окно с Web UI.
 func Open(url string) {
 	mu.Lock()
 	if opened {
@@ -95,7 +117,6 @@ func Open(url string) {
 	mu.Unlock()
 
 	go func() {
-		// BUG FIX: WebView2 использует COM STA — LockOSThread обязателен
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
@@ -121,46 +142,50 @@ func Open(url string) {
 		instance = w
 		mu.Unlock()
 
-		// Размер окна: экран минус отступ 60px с каждой стороны
-		sw, sh := screenSize()
-		margin := 60
-		winW := sw - margin*2
-		winH := sh - margin*2
-		if winW < 800 {
-			winW = 800
+		childHwnd := uintptr(unsafe.Pointer(w.Window()))
+		rootHwnd, _, _ := getAncestor.Call(childHwnd, 2) // GA_ROOT
+		if rootHwnd == 0 {
+			rootHwnd = childHwnd
 		}
-		if winH < 600 {
-			winH = 600
+
+		// Красим нативный заголовок под UI — НЕ убираем wsCaption,
+		// чтобы Windows сам обрабатывал перетаскивание.
+		applyDarkTitle(rootHwnd)
+
+		// Восстанавливаем позицию из прошлой сессии.
+		if s, ok := loadState(); ok {
+			setWindowPos.Call(rootHwnd, 0,
+				uintptr(s.X), uintptr(s.Y),
+				uintptr(s.Width), uintptr(s.Height),
+				swpNozorder|swpNoActivate)
+		} else {
+			w.SetSize(960, 640, webview2.HintNone)
 		}
-		w.SetSize(winW, winH, webview2.HintNone)
 
-		hwnd := uintptr(unsafe.Pointer(w.Window()))
-		makeFrameless(hwnd)
-
-		// Центрируем окно на экране
-		x := (sw - winW) / 2
-		y := (sh - winH) / 2
-		setWindowPos.Call(hwnd, 0,
-			uintptr(x), uintptr(y), uintptr(winW), uintptr(winH),
-			swpNozorder|swpFrameChanged)
-
-		// JS-биндинги для кастомных кнопок в HTML
-		// Вызов: await windowMinimize() / windowMaximize() / windowClose()
+		// JS биндинги для кастомных кнопок в HTML
+		// (нативные кнопки заголовка тоже работают параллельно)
 		w.Bind("windowMinimize", func() {
-			sendMessageW.Call(hwnd, wmSysCommand, scMinimize, 0)
+			postMessageW.Call(rootHwnd, wmSysCommand, scMinimize, 0)
 		})
 		w.Bind("windowMaximize", func() {
-			sendMessageW.Call(hwnd, wmSysCommand, scMaximize, 0)
+			if isZoomed(rootHwnd) {
+				postMessageW.Call(rootHwnd, wmSysCommand, scRestore, 0)
+			} else {
+				postMessageW.Call(rootHwnd, wmSysCommand, scMaximize, 0)
+			}
 		})
 		w.Bind("windowClose", func() {
-			w.Terminate()
+			postMessageW.Call(rootHwnd, wmClose, 0, 0)
 		})
 
 		w.Navigate(url)
 		w.Run()
+
+		saveState(rootHwnd)
 	}()
 }
 
+// Close закрывает окно если оно открыто.
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()

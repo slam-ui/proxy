@@ -3,16 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
-	"strings"
-	"syscall"
-	"unsafe"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
@@ -20,8 +20,8 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
-	"proxyclient/internal/notification"
 	"proxyclient/internal/netutil"
+	"proxyclient/internal/notification"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/tray"
@@ -188,8 +188,8 @@ func run(output io.Writer) error {
 	mainLogger.Info("Запуск прокси-клиента...")
 
 	// Адаптеры для дочерних компонентов
-	proxyLogger   := eventlog.NewLogger(appLogger, evLog, "proxy")
-	xrayLogger    := eventlog.NewLogger(appLogger, evLog, "xray")
+	proxyLogger := eventlog.NewLogger(appLogger, evLog, "proxy")
+	xrayLogger := eventlog.NewLogger(appLogger, evLog, "xray")
 	monitorLogger := eventlog.NewLogger(appLogger, evLog, "monitor")
 
 	// 1. Прокси-менеджер
@@ -209,9 +209,14 @@ func run(output io.Writer) error {
 	// Единственный надёжный способ — остановить сам wintun kernel driver (sc stop wintun).
 	// Это сразу освобождает ВСЕ его kernel-объекты.
 	// sing-box автоматически запустит драйвер снова когда ему понадобится.
-	killOrphanSingBox(mainLogger)
-	// Небольшая пауза чтобы процесс успел закрыть свои хэндлы до sc stop
-	time.Sleep(1 * time.Second)
+	// Убиваем orphan sing-box если есть.
+	// Если он был — ждём освобождения kernel objects ДО Remove-NetAdapter:
+	// Remove-NetAdapter убирает адаптер из Get-NetAdapter немедленно,
+	// но kernel object живёт ещё ~15с. Ждать нужно ДО удаления, не после.
+	orphanKilled := killOrphanSingBox(mainLogger)
+	if orphanKilled {
+		waitForWintunRelease(mainLogger)
+	}
 	removeStaleTunAdapterWithRetry(mainLogger)
 	mainLogger.Info("Запуск sing-box...")
 	routingCfg, err := config.LoadRoutingConfig("routing.json")
@@ -247,7 +252,7 @@ func run(output io.Writer) error {
 		ExecutablePath: "./sing-box.exe",
 		ConfigPath:     "config.singbox.json",
 		SecretKeyPath:  secretFile,
-		Args:           []string{"run", "--disable-color"},  // suppress ANSI color codes in log file
+		Args:           []string{"run", "--disable-color"}, // suppress ANSI color codes in log file
 		Logger:         xrayLogger,
 		SingBoxWriter:  eventlog.NewLineWriter(evLog, "sing-box", eventlog.LevelInfo),
 		FileWriter:     output, // sing-box stderr → proxy-client.log (crash reasons visible)
@@ -445,14 +450,20 @@ func run(output io.Writer) error {
 	return nil
 }
 
-// killOrphanSingBox убивает все запущенные экземпляры sing-box.exe.
-// Нужно при старте: если предыдущий proxy-client завершился аварийно,
-// sing-box остаётся в памяти и занимает порт — новый запуск падает с
-// "bind: Only one usage of each socket address".
-func killOrphanSingBox(log logger.Logger) {
+// killOrphanSingBox убивает все sing-box.exe кроме текущего.
+// Возвращает true если хотя бы один процесс был убит —
+// вызывающий код должен подождать освобождения wintun handles.
+func killOrphanSingBox(log logger.Logger) bool {
+	return killProcessesByName("sing-box.exe", log)
+}
+
+// killProcessesByName убивает все процессы с указанным именем.
+// Вынесена отдельно для тестируемости: тесты вызывают с реальным именем
+// тестового subprocess вместо "sing-box.exe".
+func killProcessesByName(targetName string, log logger.Logger) bool {
 	snap, err := createToolhelp32Snapshot()
 	if err != nil {
-		return
+		return false
 	}
 	defer syscall.CloseHandle(snap)
 
@@ -475,17 +486,21 @@ func killOrphanSingBox(log logger.Logger) {
 	procProcess32First := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32FirstW")
 	procProcess32Next := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32NextW")
 
+	selfPID := uint32(os.Getpid())
+	killed := false
 	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	for ret != 0 {
 		name := syscall.UTF16ToString(e.ExeFile[:])
-		if strings.EqualFold(name, "sing-box.exe") {
+		if strings.EqualFold(name, targetName) && e.ProcessID != selfPID {
 			if proc, err := os.FindProcess(int(e.ProcessID)); err == nil {
-				log.Info("Завершаем осиротевший sing-box (PID: %d)", e.ProcessID)
+				log.Info("Завершаем осиротевший процесс %s (PID: %d)", targetName, e.ProcessID)
 				_ = proc.Kill()
+				killed = true
 			}
 		}
 		ret, _, _ = procProcess32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	}
+	return killed
 }
 
 func createToolhelp32Snapshot() (syscall.Handle, error) {
@@ -539,12 +554,26 @@ func createSingleInstanceMutex(name string) (syscall.Handle, error) {
 // stopWintunDriver останавливает wintun kernel driver через Service Control Manager.
 //
 // Корень проблемы "Cannot create a file when that file already exists":
-//   wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
-//   Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
-//   остаётся жить пока Windows GC его не соберёт (10-30 секунд, непредсказуемо).
+//
+//	wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
+//	Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
+//	остаётся жить пока Windows GC его не соберёт (10-30 секунд, непредсказуемо).
 //
 // sc stop wintun → kernel driver выгружается → ВСЕ его объекты освобождаются немедленно.
 // sing-box автоматически перезапустит драйвер при следующем создании TUN-интерфейса.
+// waitForWintunRelease ждёт освобождения wintun kernel objects после остановки sing-box.
+//
+// После Remove-NetAdapter адаптер исчезает из Get-NetAdapter немедленно,
+// но kernel object ещё удерживается ~15с. Polling через Get-NetAdapter
+// фундаментально сломан — он всегда видит "нет" после Remove-NetAdapter.
+// Правильное решение: фиксированный sleep 17с (15с + 2с запас).
+func waitForWintunRelease(log logger.Logger) {
+	const waitDur = 22 * time.Second
+	log.Info("Ожидаем освобождения wintun kernel objects (%v)...", waitDur)
+	time.Sleep(waitDur)
+	log.Info("wintun handles освобождены, продолжаем")
+}
+
 func removeStaleTunAdapterWithRetry(log logger.Logger) {
 	runHidden := func(name string, args ...string) (string, error) {
 		cmd := exec.Command(name, args...)
@@ -581,7 +610,6 @@ func removeStaleTunAdapterWithRetry(log logger.Logger) {
 
 	log.Info("TUN cleanup завершён")
 }
-
 
 // shutdownTUN останавливает wintun и удаляет tun0 адаптер при завершении приложения.
 // В отличие от removeStaleTunAdapterWithRetry не ждёт полного STOP — просто отправляет команду.
