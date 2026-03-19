@@ -27,8 +27,16 @@ func waitFile(t *testing.T, dir, substr string, timeout time.Duration) string {
 	for time.Now().Before(deadline) {
 		entries, _ := os.ReadDir(dir)
 		for _, e := range entries {
-			if strings.Contains(e.Name(), substr) {
-				return filepath.Join(dir, e.Name())
+			if !strings.Contains(e.Name(), substr) {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			// Ждём пока файл полностью записан: должен содержать секцию АНОМАЛИЯ.
+			// Без этой проверки тест читает файл раньше чем writeFile() завершает запись
+			// (race: файл создан → waitFile возвращает → os.ReadFile читает неполный файл).
+			data, err := os.ReadFile(path)
+			if err == nil && strings.Contains(string(data), "АНОМАЛИЯ") {
+				return path
 			}
 		}
 		time.Sleep(50 * time.Millisecond)
