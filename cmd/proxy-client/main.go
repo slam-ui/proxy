@@ -33,11 +33,17 @@ import (
 const (
 	secretFile       = "secret.key"
 	runtimeFile      = "config.runtime.json"
-	appRulesFile     = "app_rules.json"
 	logFile          = "proxy-client.log"
 	apiListenAddress = ":8080"
-	webUIURL         = "http://localhost:8080"
-	shutdownTimeout  = 10 * time.Second
+)
+
+// dataDir — папка с данными приложения (geosite .bin, routing.json, app_rules.json).
+// Должна совпадать с config.DataDir.
+const (
+	dataDir         = config.DataDir
+	appRulesFile    = dataDir + "/app_rules.json"
+	webUIURL        = "http://localhost:8080"
+	shutdownTimeout = 10 * time.Second
 )
 
 // openLogFile открывает файл лога в режиме append|create рядом с exe.
@@ -223,7 +229,7 @@ func run(output io.Writer) error {
 	wintun.RemoveStaleTunAdapter(mainLogger)
 	wintun.PollUntilFree(mainLogger, config.TunInterfaceName)
 	mainLogger.Info("Запуск sing-box...")
-	routingCfg, err := config.LoadRoutingConfig("routing.json")
+	routingCfg, err := config.LoadRoutingConfig(dataDir + "/routing.json")
 	if err != nil {
 		mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
 		routingCfg = config.DefaultRoutingConfig()
@@ -308,7 +314,7 @@ func run(output io.Writer) error {
 				mainLogger.Error("Не удалось отключить прокси после краша sing-box: %v", disableErr)
 			} else {
 				tray.SetEnabled(false)
-				mainLogger.Warn("Системный прокси отключён из-за краша sing-box. Проверьте routing.json и перезапустите.")
+				mainLogger.Warn("Системный прокси отключён из-за краша sing-box. Проверьте data/routing.json и перезапустите.")
 			}
 		},
 	}

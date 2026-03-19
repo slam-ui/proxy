@@ -19,7 +19,7 @@ import (
 	"github.com/gorilla/mux"
 )
 
-const routingConfigPath = "routing.json"
+var routingConfigPath = config.DataDir + "/routing.json"
 
 // applyState хранит состояние последнего применения правил
 type applyState struct {

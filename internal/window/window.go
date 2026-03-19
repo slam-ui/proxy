@@ -1,4 +1,4 @@
-﻿package window
+package window
 
 import (
 	"encoding/json"
@@ -22,6 +22,7 @@ var (
 	dwmAPI             = windows.NewLazyDLL("dwmapi.dll")
 	setWindowPos       = user32.NewProc("SetWindowPos")
 	getWindowRect      = user32.NewProc("GetWindowRect")
+	showWindow         = user32.NewProc("ShowWindow")
 	postMessageW       = user32.NewProc("PostMessageW")
 	getWindowPlacement = user32.NewProc("GetWindowPlacement")
 	getAncestor        = user32.NewProc("GetAncestor")
@@ -29,42 +30,34 @@ var (
 )
 
 const (
-	swpNozorder      = 0x0004
-	swpNoActivate    = 0x0010
-	wmSysCommand     = 0x0112
-	wmClose          = 0x0010
-	scMinimize       = 0xF020
-	scMaximize       = 0xF030
-	scRestore        = 0xF120
+	swpNozorder    = 0x0004
+	swpNoActivate  = 0x0010
+	swpShowWindow  = 0x0040
+	wmSysCommand   = 0x0112
+	wmClose        = 0x0010
+	scMinimize     = 0xF020
+	scMaximize     = 0xF030
+	scRestore      = 0xF120
+	swShow         = 5  // ShowWindow: show at current pos/size
+	swRestore      = 9  // ShowWindow: restore from minimized/maximized
 	showStateMaximized = 3
 
 	// DWM атрибуты для стилизации нативного заголовка
-	dwmwaImmersiveDarkMode = 20 // BOOL: 1 = тёмный режим
-	dwmwaCaptionColor      = 35 // COLORREF: цвет полосы заголовка
-	dwmwaTextColor         = 36 // COLORREF: цвет текста заголовка
-	dwmwaBorderColor       = 34 // COLORREF: цвет рамки
+	dwmwaImmersiveDarkMode = 20
+	dwmwaCaptionColor      = 35
+	dwmwaTextColor         = 36
+	dwmwaBorderColor       = 34
 )
 
-// colorref конвертирует #RRGGBB в Windows COLORREF (0x00BBGGRR).
-func colorref(r, g, b uint32) uint32 {
-	return b<<16 | g<<8 | r
-}
+func colorref(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
 
-// applyDarkTitle красит нативный заголовок под цветовую схему приложения.
 func applyDarkTitle(hwnd uintptr) {
-	// Тёмный режим (убирает белый фон системных кнопок)
 	dark := uint32(1)
 	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
-
-	// --surface: #13131e → COLORREF
 	capColor := colorref(0x13, 0x13, 0x1e)
 	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
-
-	// Текст заголовка: #6a6a8a (--muted2), ненавязчивый
 	textColor := colorref(0x6a, 0x6a, 0x8a)
 	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
-
-	// Рамка: #1f1f30 (--border)
 	borderColor := colorref(0x1f, 0x1f, 0x30)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 }
@@ -107,6 +100,7 @@ func isZoomed(hwnd uintptr) bool {
 }
 
 // Open открывает окно с Web UI.
+// При повторном вызове (через трей) создаёт новое окно с сохранёнными размерами.
 func Open(url string) {
 	mu.Lock()
 	if opened {
@@ -148,22 +142,24 @@ func Open(url string) {
 			rootHwnd = childHwnd
 		}
 
-		// Красим нативный заголовок под UI — НЕ убираем wsCaption,
-		// чтобы Windows сам обрабатывал перетаскивание.
 		applyDarkTitle(rootHwnd)
 
-		// Восстанавливаем позицию из прошлой сессии.
+		// Устанавливаем размер/позицию ДО Navigate и ДО первого показа окна.
+		// Без этого пользователь видит вспышку: окно появляется с дефолтным
+		// размером, потом мгновенно перепрыгивает на сохранённый.
 		if s, ok := loadState(); ok {
+			// SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW — перемещаем
+			// и показываем атомарно, без промежуточного дефолтного состояния.
 			setWindowPos.Call(rootHwnd, 0,
 				uintptr(s.X), uintptr(s.Y),
 				uintptr(s.Width), uintptr(s.Height),
-				swpNozorder|swpNoActivate)
+				swpNozorder|swpShowWindow)
 		} else {
+			// Первый запуск: дефолт 960×640, показываем в центре экрана.
 			w.SetSize(960, 640, webview2.HintNone)
+			showWindow.Call(rootHwnd, swShow)
 		}
 
-		// JS биндинги для кастомных кнопок в HTML
-		// (нативные кнопки заголовка тоже работают параллельно)
 		w.Bind("windowMinimize", func() {
 			postMessageW.Call(rootHwnd, wmSysCommand, scMinimize, 0)
 		})
@@ -181,11 +177,12 @@ func Open(url string) {
 		w.Navigate(url)
 		w.Run()
 
+		// w.Run() вернулся — окно закрыто. Сохраняем текущий размер/позицию.
 		saveState(rootHwnd)
 	}()
 }
 
-// Close закрывает окно если оно открыто.
+// Close принудительно закрывает окно (вызывается при выходе из приложения).
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()

@@ -9,6 +9,10 @@ import (
 
 const TunInterfaceName = "tun0"
 
+// DataDir — папка для данных приложения (geosite .bin файлы, routing.json, app_rules.json).
+// Располагается рядом с .exe, изолирует рабочие файлы от системных.
+const DataDir = "data"
+
 type SingBoxConfig struct {
 	Log          SBLog          `json:"log"`
 	DNS          SBDNS          `json:"dns"`
@@ -305,7 +309,7 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 	for _, tag := range allTags {
 		if !seen[tag] {
 			seen[tag] = true
-			path := tag + ".bin"
+			path := DataDir + "/" + tag + ".bin"
 			ruleSets = append(ruleSets, SBRuleSet{
 				Type:   "local",
 				Tag:    tag,

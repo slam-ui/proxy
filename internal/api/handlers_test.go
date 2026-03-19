@@ -18,11 +18,11 @@ import (
 
 type stubXray struct{ running bool }
 
-func (s *stubXray) Start() error     { return nil }
-func (s *stubXray) Stop() error      { return nil }
-func (s *stubXray) IsRunning() bool  { return s.running }
-func (s *stubXray) GetPID() int      { return 0 }
-func (s *stubXray) Wait() error      { return nil }
+func (s *stubXray) Start() error       { return nil }
+func (s *stubXray) Stop() error        { return nil }
+func (s *stubXray) IsRunning() bool    { return s.running }
+func (s *stubXray) GetPID() int        { return 0 }
+func (s *stubXray) Wait() error        { return nil }
 func (s *stubXray) LastOutput() string { return "" }
 
 // ─── mock proxy.Manager ───────────────────────────────────────────────────
@@ -42,6 +42,10 @@ func (p *stubProxy) GetConfig() proxy.Config       { return proxy.Config{} }
 func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 	t.Helper()
 	dir := t.TempDir()
+	// Создаём data/ внутри tmpDir — routingConfigPath = "data/routing.json"
+	if err := os.MkdirAll(dir+"/"+config.DataDir, 0755); err != nil {
+		t.Fatalf("MkdirAll data/: %v", err)
+	}
 	old, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
@@ -49,9 +53,9 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 
 	srv := NewServer(Config{
 		ListenAddress: ":0",
-		XRayManager:  &stubXray{running: true},
-		ProxyManager: &stubProxy{},
-		Logger:       &logger.NoOpLogger{},
+		XRayManager:   &stubXray{running: true},
+		ProxyManager:  &stubProxy{},
+		Logger:        &logger.NoOpLogger{},
 	})
 	// xray.Config нужен TunHandlers только для doApply; в unit-тестах правил не вызываем.
 	h := srv.SetupTunRoutes(xray.Config{})
@@ -81,7 +85,7 @@ func getJSON(t *testing.T, handler http.Handler, path string) *httptest.Response
 
 func TestHandleHealth(t *testing.T) {
 	srv := NewServer(Config{
-		XRayManager: &stubXray{},
+		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
 	})
