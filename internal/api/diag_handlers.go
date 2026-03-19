@@ -38,9 +38,12 @@ type trafficSnapshot struct {
 }
 
 type trafficStore struct {
-	mu      sync.RWMutex
-	current trafficSnapshot
-	lastOK  time.Time
+	mu           sync.RWMutex
+	current      trafficSnapshot
+	lastOK       time.Time
+	sessionUpB   int64
+	sessionDnB   int64
+	sessionStart time.Time
 }
 
 var trafficCollector = &trafficStore{}
@@ -48,6 +51,9 @@ var trafficCollector = &trafficStore{}
 var diagOnce sync.Once
 
 func (ts *trafficStore) run() {
+	ts.mu.Lock()
+	ts.sessionStart = time.Now()
+	ts.mu.Unlock()
 	for {
 		ts.connect()
 		time.Sleep(3 * time.Second)
@@ -83,6 +89,12 @@ func (ts *trafficStore) get() (trafficSnapshot, bool) {
 	defer ts.mu.RUnlock()
 	ok := !ts.lastOK.IsZero() && time.Since(ts.lastOK) < 10*time.Second
 	return ts.current, ok
+}
+
+func (ts *trafficStore) getSessionTotals() (upB, dnB int64, dur float64) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.sessionUpB, ts.sessionDnB, time.Since(ts.sessionStart).Seconds()
 }
 
 // ── Per-outbound speed via cumulative delta ───────────────────────────────────
@@ -163,8 +175,12 @@ func (ct *connSpeedTracker) tick() {
 		}
 		dUp := c.Upload - prev.upload
 		dDn := c.Download - prev.download
-		if dUp < 0 { dUp = 0 }
-		if dDn < 0 { dDn = 0 }
+		if dUp < 0 {
+			dUp = 0
+		}
+		if dDn < 0 {
+			dDn = 0
+		}
 
 		ob := c.effectiveOutbound()
 		sp := newSpeeds[ob]
@@ -213,14 +229,17 @@ func (ct *connSpeedTracker) getSpeeds() (proxyUp, proxyDn, dirUp, dirDn int64) {
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 type StatsResponse struct {
-	Up      int64 `json:"up"`
-	Down    int64 `json:"down"`
-	ProxyUp int64 `json:"proxy_up"`
-	ProxyDn int64 `json:"proxy_dn"`
-	DirUp   int64 `json:"direct_up"`
-	DirDn   int64 `json:"direct_dn"`
-	Active  int   `json:"active_connections"`
-	OK      bool  `json:"ok"`
+	Up      int64   `json:"up"`
+	Down    int64   `json:"down"`
+	ProxyUp int64   `json:"proxy_up"`
+	ProxyDn int64   `json:"proxy_dn"`
+	DirUp   int64   `json:"direct_up"`
+	DirDn   int64   `json:"direct_dn"`
+	Active  int     `json:"active_connections"`
+	OK      bool    `json:"ok"`
+	SessUpB int64   `json:"sess_up_bytes"`
+	SessDnB int64   `json:"sess_dn_bytes"`
+	SessSec float64 `json:"sess_duration_sec"`
 }
 
 func handleStats(w http.ResponseWriter, _ *http.Request) {
@@ -232,6 +251,7 @@ func handleStats(w http.ResponseWriter, _ *http.Request) {
 		Active: int(connTracker.active.Load()),
 	}
 	resp.ProxyUp, resp.ProxyDn, resp.DirUp, resp.DirDn = connTracker.getSpeeds()
+	resp.SessUpB, resp.SessDnB, resp.SessSec = trafficCollector.getSessionTotals()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -294,7 +314,7 @@ func fetchConnectionsData() ([]clashConn, error) {
 func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 	conns, err := fetchConnectionsData()
 	snap, snapOK := trafficCollector.get()
-	
+
 	connTracker.mu.RLock()
 	speeds := make(map[string]interface{})
 	for k, v := range connTracker.speeds {
@@ -306,7 +326,9 @@ func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 	// Первые 5 соединений для диагностики
 	sample := []map[string]interface{}{}
 	for i, c := range conns {
-		if i >= 5 { break }
+		if i >= 5 {
+			break
+		}
 		sample = append(sample, map[string]interface{}{
 			"id":       c.ID,
 			"outbound": c.Outbound,
@@ -314,21 +336,26 @@ func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 			"download": c.Download,
 			"host":     c.Metadata.Host,
 			"proc":     c.Metadata.ProcessPath,
-			"chains":  c.Chains,
-			"rule":    c.Rule,
+			"chains":   c.Chains,
+			"rule":     c.Rule,
 			"network":  c.Metadata.Network,
 		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"traffic_snap":      snap,
-		"traffic_snap_ok":   snapOK,
+		"traffic_snap":       snap,
+		"traffic_snap_ok":    snapOK,
 		"speeds_by_outbound": speeds,
-		"prev_count":        prevCount,
-		"total_conns":       len(conns),
-		"err":               func() string { if err != nil { return err.Error() }; return "" }(),
-		"sample_conns":      sample,
+		"prev_count":         prevCount,
+		"total_conns":        len(conns),
+		"err": func() string {
+			if err != nil {
+				return err.Error()
+			}
+			return ""
+		}(),
+		"sample_conns": sample,
 	})
 }
 

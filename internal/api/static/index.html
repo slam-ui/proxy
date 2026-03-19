@@ -52,17 +52,26 @@
         .theme-sm:hover{border-color:var(--border2);color:var(--text)}
 
 
+        /* ── Toggle ─── */
+        .toggle-sw{position:relative;display:inline-block;width:36px;height:20px;flex-shrink:0}
+        .toggle-sw input{opacity:0;width:0;height:0;position:absolute}
+        .toggle-track{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:var(--border2);border-radius:20px;transition:.2s}
+        .toggle-track:before{position:absolute;content:"";height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+        .toggle-sw input:checked+.toggle-track{background:var(--accent)}
+        .toggle-sw input:checked+.toggle-track:before{transform:translateX(16px)}
         /* ── Stats strip ─── */
-        .stats-strip{display:flex;align-items:center;background:var(--surface2);border-bottom:1px solid var(--border);padding:6px 14px;gap:0;flex-shrink:0;font-family:'JetBrains Mono',monospace;cursor:default}
+        .stats-strip{display:flex;flex-direction:column;background:var(--surface2);border-bottom:1px solid var(--border);flex-shrink:0;font-family:'JetBrains Mono',monospace;cursor:default}
+        .ss-row{display:flex;align-items:center;padding:4px 14px;gap:0}
+        .ss-row+.ss-row{border-top:1px solid var(--border);padding-top:3px;padding-bottom:3px}
         .sc{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}
         .sc-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-        .sc-vals{display:flex;gap:6px;align-items:center}
-        .sc-up{font-size:12px;font-weight:700;color:#7c6cff;font-family:'JetBrains Mono',monospace}
-        .sc-dn{font-size:12px;font-weight:700;color:#00e676;font-family:'JetBrains Mono',monospace}
-        .sc-arr{font-size:8px;opacity:.5}
-        .ss-sep{width:1px;background:var(--border);align-self:stretch;margin:0 10px}
-        .ss-ip{font-size:9px;color:var(--muted2);padding:0 8px;white-space:nowrap}
-        .ss-test{background:none;border:1px solid var(--border);border-radius:3px;padding:3px 8px;font-size:9px;color:var(--muted2);cursor:pointer;transition:all .2s;white-space:nowrap}
+        .sc-vals{display:flex;gap:4px;align-items:baseline}
+        .sc-up{font-size:11px;font-weight:700;color:#7c6cff;font-family:'JetBrains Mono',monospace}
+        .sc-dn{font-size:11px;font-weight:700;color:#00e676;font-family:'JetBrains Mono',monospace}
+        .sc-arr{font-size:8px;opacity:.4}
+        .ss-sep{width:1px;background:var(--border);align-self:stretch;margin:0 8px}
+        .ss-ip{font-size:9px;color:var(--muted2);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
+        .ss-test{background:none;border:1px solid var(--border);border-radius:3px;padding:2px 7px;font-size:9px;color:var(--muted2);cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
         .ss-test:hover{border-color:var(--accent);color:var(--accent)}
         .ss-offline{font-size:9px;color:var(--muted);margin-left:4px}
 
@@ -268,33 +277,40 @@
         </div>
     </div>
 
-    <!-- Stats strip -->
+    <!-- Stats strip: 2 rows, fits compact 540px window -->
     <div class="stats-strip" id="statsStrip">
-        <div class="sc">
-            <span class="sc-lbl">proxy</span>
-            <div class="sc-vals">
-                <span class="sc-arr">↑</span><span class="sc-up" id="stPrU">—</span>
-                <span class="sc-arr">↓</span><span class="sc-dn" id="stPrD">—</span>
+        <!-- Row 1: realtime speeds -->
+        <div class="ss-row">
+            <div class="sc">
+                <span class="sc-lbl">proxy</span>
+                <div class="sc-vals"><span class="sc-arr">↑</span><span class="sc-up" id="stPrU">—</span><span class="sc-arr">↓</span><span class="sc-dn" id="stPrD">—</span></div>
+            </div>
+            <div class="ss-sep"></div>
+            <div class="sc">
+                <span class="sc-lbl">direct</span>
+                <div class="sc-vals"><span class="sc-arr">↑</span><span class="sc-up" id="stDiU">—</span><span class="sc-arr">↓</span><span class="sc-dn" id="stDiD">—</span></div>
+            </div>
+            <div class="ss-sep"></div>
+            <div class="sc">
+                <span class="sc-lbl">total</span>
+                <div class="sc-vals"><span class="sc-arr">↑</span><span class="sc-up" id="stToU">—</span><span class="sc-arr">↓</span><span class="sc-dn" id="stToD">—</span></div>
             </div>
         </div>
-        <div class="ss-sep"></div>
-        <div class="sc">
-            <span class="sc-lbl">direct</span>
-            <div class="sc-vals">
-                <span class="sc-arr">↑</span><span class="sc-up" id="stDiU">—</span>
-                <span class="sc-arr">↓</span><span class="sc-dn" id="stDiD">—</span>
+        <!-- Row 2: session totals + IP + test -->
+        <div class="ss-row">
+            <div class="sc" style="flex:none;min-width:0">
+                <span class="sc-lbl">сессия ↑</span>
+                <span class="sc-up" id="sessUp" style="font-size:10px">0B</span>
             </div>
-        </div>
-        <div class="ss-sep"></div>
-        <div class="sc">
-            <span class="sc-lbl">total</span>
-            <div class="sc-vals">
-                <span class="sc-arr">↑</span><span class="sc-up" id="stToU">—</span>
-                <span class="sc-arr">↓</span><span class="sc-dn" id="stToD">—</span>
+            <div class="ss-sep"></div>
+            <div class="sc" style="flex:none;min-width:0">
+                <span class="sc-lbl">сессия ↓</span>
+                <span class="sc-dn" id="sessDn" style="font-size:10px">0B</span>
             </div>
+            <div style="flex:1"></div>
+            <span class="ss-ip" id="ssIP">—</span>
+            <button class="ss-test" onclick="runDiagTest()" id="ssTestBtn">⚡</button>
         </div>
-        <span class="ss-ip" id="ssIP">—</span>
-        <button class="ss-test" onclick="runDiagTest()" id="ssTestBtn">⚡</button>
     </div>
 
     <!-- Tabs -->
@@ -439,6 +455,13 @@
     <!-- TAB: Профили -->
     <div class="tab-content" id="tc-settings">
         <div class="section">
+            <div class="sec-title"><div class="sec-dot"></div>Система</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0 8px">
+                <span style="font-size:12px;color:var(--text)">Автозапуск при входе в Windows</span>
+                <label class="toggle-sw"><input type="checkbox" id="autorunChk" onchange="setAutorun(this.checked)"><span class="toggle-track"></span></label>
+            </div>
+        </div>
+        <div class="section">
             <div class="sec-title"><div class="sec-dot"></div>Профили правил</div>
             <div class="prof-list" id="profList">
                 <div class="prof-empty">Нет сохранённых профилей</div>
@@ -495,7 +518,7 @@
             $('tc-'+t).className='tab-content'+(t===name?' active':'');
         });
         if(name==='proc'&&procData.length===0)fetchProcesses();
-        if(name==='settings')loadProfiles();
+        if(name==='settings'){loadProfiles();loadSettings();}
     }
 
     // ── Proxy render ───────────────────────────────────────────
@@ -583,6 +606,7 @@
         t.textContent=text;t.className='toast '+type+' show';
         tt=setTimeout(()=>t.className='toast',2800);
     }
+    const showToast=toast; // alias
 
     // ── Stats ──────────────────────────────────────────────────
     let statsInterval=null;
@@ -611,6 +635,7 @@
             $('stDiD').textContent=fmtBytes(j.direct_dn);
             $('stToU').textContent=fmtBytes(j.up);
             $('stToD').textContent=fmtBytes(j.down);
+            if(j.sess_up_bytes!=null){$('sessUp').textContent=fmtBytesTotal(j.sess_up_bytes);$('sessDn').textContent=fmtBytesTotal(j.sess_dn_bytes);}
             if(j.active_connections!==undefined&&$('connCount'))
                 $('connCount').textContent=j.active_connections+' активных';
         }catch{}
@@ -1074,6 +1099,8 @@
     }
 
     // ── Profiles ───────────────────────────────────────────────
+    async function loadSettings(){try{const r=await fetch(API+'/settings');if(!r.ok)return;const j=await r.json();const chk=$('autorunChk');if(chk)chk.checked=!!j.autorun;}catch(e){}}
+    async function setAutorun(val){try{await fetch(API+'/settings/autorun',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:val})});showToast(val?'Автозапуск включён':'Автозапуск выключен');}catch(e){showToast('Ошибка','error');}}
     async function loadProfiles(){
         try{
             const r=await fetch(API+'/profiles');if(!r.ok)return;

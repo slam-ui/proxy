@@ -231,9 +231,26 @@ func buildTUN() SBInbound {
 	}
 }
 
+// privateIPRanges — локальные и служебные диапазоны которые никогда не должны
+// проксироваться. Аналог bypass-list в Clash Verge, Hiddify, Mihomo Party.
+// Без этого: LAN-устройства недоступны, локальный DNS ломается.
+var privateIPRanges = []string{
+	"127.0.0.0/8",    // localhost
+	"10.0.0.0/8",     // LAN class A
+	"172.16.0.0/12",  // LAN class B
+	"192.168.0.0/16", // LAN class C
+	"169.254.0.0/16", // link-local
+	"::1/128",        // IPv6 loopback
+	"fc00::/7",       // IPv6 unique local
+	"fe80::/10",      // IPv6 link-local
+}
+
 func buildRoute(routingCfg *RoutingConfig) SBRoute {
 	rules := []SBRouteRule{
 		{Protocol: "dns", Action: "hijack-dns"},
+		// Локальные адреса всегда напрямую — LAN, loopback, link-local.
+		// Это стандарт во всех proxy-клиентах (Clash Verge, Hiddify, Mihomo Party).
+		{IPCIDR: privateIPRanges, Outbound: "direct"},
 	}
 
 	var proxyProcs, directProcs, blockProcs []string

@@ -18,13 +18,32 @@ package wintun
 import (
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"proxyclient/internal/logger"
 )
+
+// scErrRe извлекает числовой код ошибки из вывода sc.exe
+var scErrRe = regexp.MustCompile(`\b(\d{4,5})\b`)
+
+// cleanSCOutput очищает вывод sc.exe от кракозябров (Windows-1251 в UTF-8 контексте).
+// Вместо кириллического сообщения оставляет только числовой код ошибки.
+func cleanSCOutput(raw string) string {
+	if utf8.ValidString(raw) {
+		// Уже валидный UTF-8 — убираем лишние пробелы и возвраты каретки
+		return strings.TrimSpace(strings.ReplaceAll(raw, "\r", ""))
+	}
+	// Невалидный UTF-8 (CP1251 на русских Windows) — извлекаем только код ошибки
+	if m := scErrRe.FindString(raw); m != "" {
+		return "error " + m
+	}
+	return "запрос не принят"
+}
 
 const (
 	StopFile     = "wintun_stopped_at" // файл с timestamp последней остановки
@@ -42,7 +61,7 @@ func RecordStop() {
 // minGap — минимальное время между остановкой sing-box и следующим стартом.
 // Даже если netsh говорит что интерфейс свободен, wintun kernel-объект
 // \Device\WINTUN-{GUID} может ещё жить. minGap гарантирует Windows GC.
-const minGap = 20 * time.Second
+const minGap = 35 * time.Second
 
 // PollUntilFree обеспечивает два условия перед запуском sing-box:
 //  1. Минимальный gap 60с от последней остановки (timestamp из StopFile).
@@ -120,7 +139,7 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 	out, err := runHidden("sc", "stop", "wintun")
 	if err != nil {
 		log.Info("wintun driver не запущен (%s) — первый запуск или уже остановлен",
-			strings.ReplaceAll(out, "\n", " "))
+			cleanSCOutput(out))
 	} else {
 		log.Info("wintun driver: отправлена команда остановки")
 		// Ждём STOP_PENDING → STOPPED (до 5 секунд)
