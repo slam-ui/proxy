@@ -49,7 +49,14 @@ func openLogFile() (*os.File, error) {
 	}
 	logPath := filepath.Join(filepath.Dir(exe), logFile)
 	// O_TRUNC: каждый запуск начинает чистый лог — только текущая сессия.
-	return os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+	// UTF-8 BOM — без него Windows Блокнот открывает файл как ANSI → кракозябры.
+	// Записываем в начало файла: Go записывает UTF-8, BOM говорит Notepad об этом.
+	_, _ = f.Write([]byte{0xEF, 0xBB, 0xBF})
+	return f, nil
 }
 
 func main() {
