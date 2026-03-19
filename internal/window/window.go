@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"github.com/jchv/go-webview2"
@@ -22,27 +23,24 @@ var (
 	dwmAPI             = windows.NewLazyDLL("dwmapi.dll")
 	setWindowPos       = user32.NewProc("SetWindowPos")
 	getWindowRect      = user32.NewProc("GetWindowRect")
-	showWindow         = user32.NewProc("ShowWindow")
 	postMessageW       = user32.NewProc("PostMessageW")
 	getWindowPlacement = user32.NewProc("GetWindowPlacement")
 	getAncestor        = user32.NewProc("GetAncestor")
+	isWindow           = user32.NewProc("IsWindow")
 	dwmSetAttr         = dwmAPI.NewProc("DwmSetWindowAttribute")
 )
 
 const (
-	swpNozorder    = 0x0004
-	swpNoActivate  = 0x0010
-	swpShowWindow  = 0x0040
-	wmSysCommand   = 0x0112
-	wmClose        = 0x0010
-	scMinimize     = 0xF020
-	scMaximize     = 0xF030
-	scRestore      = 0xF120
-	swShow         = 5  // ShowWindow: show at current pos/size
-	swRestore      = 9  // ShowWindow: restore from minimized/maximized
+	swpNozorder        = 0x0004
+	swpNoActivate      = 0x0010
+	swpNoSize          = 0x0001
+	wmSysCommand       = 0x0112
+	wmClose            = 0x0010
+	scMinimize         = 0xF020
+	scMaximize         = 0xF030
+	scRestore          = 0xF120
 	showStateMaximized = 3
 
-	// DWM атрибуты для стилизации нативного заголовка
 	dwmwaImmersiveDarkMode = 20
 	dwmwaCaptionColor      = 35
 	dwmwaTextColor         = 36
@@ -62,7 +60,7 @@ func applyDarkTitle(hwnd uintptr) {
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 }
 
-// windowState — позиция и размер окна между запусками.
+// windowState хранит позицию и размер окна.
 type windowState struct {
 	X, Y, Width, Height int32
 }
@@ -84,10 +82,28 @@ func loadState() (windowState, bool) {
 	return s, true
 }
 
-func saveState(hwnd uintptr) {
+// readRect читает текущие размеры/позицию окна через GetWindowRect.
+// Возвращает false если hwnd невалиден или окно свёрнуто.
+func readRect(hwnd uintptr) (windowState, bool) {
+	// Проверяем что hwnd валиден
+	ok, _, _ := isWindow.Call(hwnd)
+	if ok == 0 {
+		return windowState{}, false
+	}
 	var r [4]int32
-	getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
-	s := windowState{X: r[0], Y: r[1], Width: r[2] - r[0], Height: r[3] - r[1]}
+	ret, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
+	if ret == 0 {
+		return windowState{}, false
+	}
+	w := r[2] - r[0]
+	h := r[3] - r[1]
+	if w < 400 || h < 300 {
+		return windowState{}, false // свёрнуто или ошибка
+	}
+	return windowState{X: r[0], Y: r[1], Width: w, Height: h}, true
+}
+
+func writeState(s windowState) {
 	data, _ := json.Marshal(s)
 	_ = os.WriteFile(statePath, data, 0644)
 }
@@ -100,7 +116,6 @@ func isZoomed(hwnd uintptr) bool {
 }
 
 // Open открывает окно с Web UI.
-// При повторном вызове (через трей) создаёт новое окно с сохранёнными размерами.
 func Open(url string) {
 	mu.Lock()
 	if opened {
@@ -144,21 +159,46 @@ func Open(url string) {
 
 		applyDarkTitle(rootHwnd)
 
-		// Устанавливаем размер/позицию ДО Navigate и ДО первого показа окна.
-		// Без этого пользователь видит вспышку: окно появляется с дефолтным
-		// размером, потом мгновенно перепрыгивает на сохранённый.
+		// Применяем сохранённую позицию/размер.
+		// SetWindowPos с SWP_NOZORDER|SWP_NOACTIVATE — без показа окна,
+		// потому что WebView2 сам покажет окно при Navigate/Run.
 		if s, ok := loadState(); ok {
-			// SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW — перемещаем
-			// и показываем атомарно, без промежуточного дефолтного состояния.
 			setWindowPos.Call(rootHwnd, 0,
 				uintptr(s.X), uintptr(s.Y),
 				uintptr(s.Width), uintptr(s.Height),
-				swpNozorder|swpShowWindow)
+				swpNozorder|swpNoActivate)
 		} else {
-			// Первый запуск: дефолт 960×640, показываем в центре экрана.
 			w.SetSize(960, 640, webview2.HintNone)
-			showWindow.Call(rootHwnd, swShow)
 		}
+
+		// Горутина периодически сохраняет позицию пока окно живо.
+		// Это гарантирует актуальное состояние независимо от способа закрытия:
+		// кнопка X в заголовке, windowClose из JS, или Terminate().
+		// Интервал 2с — минимальная нагрузка, достаточная точность.
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					if s, ok := readRect(rootHwnd); ok {
+						writeState(s)
+					}
+				}
+			}
+		}()
+
+		// windowClose из JS сохраняет состояние прямо перед закрытием
+		// (на случай если periodic ещё не успел сохранить последнее положение).
+		w.Bind("windowClose", func() {
+			if s, ok := readRect(rootHwnd); ok {
+				writeState(s)
+			}
+			postMessageW.Call(rootHwnd, wmClose, 0, 0)
+		})
 
 		w.Bind("windowMinimize", func() {
 			postMessageW.Call(rootHwnd, wmSysCommand, scMinimize, 0)
@@ -170,15 +210,18 @@ func Open(url string) {
 				postMessageW.Call(rootHwnd, wmSysCommand, scMaximize, 0)
 			}
 		})
-		w.Bind("windowClose", func() {
-			postMessageW.Call(rootHwnd, wmClose, 0, 0)
-		})
 
 		w.Navigate(url)
 		w.Run()
 
-		// w.Run() вернулся — окно закрыто. Сохраняем текущий размер/позицию.
-		saveState(rootHwnd)
+		// Останавливаем горутину сохранения.
+		close(done)
+
+		// Финальное сохранение: пробуем прочитать позицию пока hwnd ещё может быть валиден.
+		// Если hwnd уже уничтожен — readRect вернёт false и мы не затрём хорошее значение.
+		if s, ok := readRect(rootHwnd); ok {
+			writeState(s)
+		}
 	}()
 }
 
