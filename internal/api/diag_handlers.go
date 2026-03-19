@@ -80,6 +80,12 @@ func (ts *trafficStore) connect() {
 		ts.mu.Lock()
 		ts.current = snap
 		ts.lastOK = time.Now()
+		// BUG FIX: sing-box /traffic отдаёт bytes/sec текущей скорости, а не накопленный total.
+		// Накапливаем суммарный трафик сессии умножая скорость на интервал опроса (~1с).
+		// Точнее было бы использовать /connections cumulative bytes, но это требует
+		// отдельного парсинга. Текущий подход достаточен для отображения порядка величин.
+		ts.sessionUpB += snap.Up
+		ts.sessionDnB += snap.Down
 		ts.mu.Unlock()
 	}
 }

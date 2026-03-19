@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"proxyclient/internal/config"
 	"strings"
 	"time"
 )
@@ -21,25 +23,25 @@ type KnownGeosite struct {
 // Только подтверждённые имена из SagerNet/sing-geosite
 var knownGeosites = []KnownGeosite{
 	// Уже есть у пользователя (100% рабочие)
-	{Name: "youtube",    Description: "YouTube"},
-	{Name: "discord",    Description: "Discord"},
-	{Name: "instagram",  Description: "Instagram"},
-	{Name: "tiktok",     Description: "TikTok"},
-	{Name: "spotify",    Description: "Spotify"},
-	{Name: "reddit",     Description: "Reddit"},
+	{Name: "youtube", Description: "YouTube"},
+	{Name: "discord", Description: "Discord"},
+	{Name: "instagram", Description: "Instagram"},
+	{Name: "tiktok", Description: "TikTok"},
+	{Name: "spotify", Description: "Spotify"},
+	{Name: "reddit", Description: "Reddit"},
 	{Name: "soundcloud", Description: "SoundCloud"},
 	// Стандартные имена из v2fly/domain-list-community (основа sing-geosite)
-	{Name: "google",     Description: "Google сервисы"},
-	{Name: "github",     Description: "GitHub"},
-	{Name: "twitter",    Description: "Twitter / X"},
-	{Name: "facebook",   Description: "Facebook"},
-	{Name: "netflix",    Description: "Netflix"},
-	{Name: "twitch",     Description: "Twitch"},
-	{Name: "amazon",     Description: "Amazon"},
-	{Name: "microsoft",  Description: "Microsoft"},
-	{Name: "apple",      Description: "Apple"},
-	{Name: "cn",         Description: "Китайские сайты"},
-	{Name: "geolocation-!cn",  Description: "Не-Китайские сайты"},
+	{Name: "google", Description: "Google сервисы"},
+	{Name: "github", Description: "GitHub"},
+	{Name: "twitter", Description: "Twitter / X"},
+	{Name: "facebook", Description: "Facebook"},
+	{Name: "netflix", Description: "Netflix"},
+	{Name: "twitch", Description: "Twitch"},
+	{Name: "amazon", Description: "Amazon"},
+	{Name: "microsoft", Description: "Microsoft"},
+	{Name: "apple", Description: "Apple"},
+	{Name: "cn", Description: "Китайские сайты"},
+	{Name: "geolocation-!cn", Description: "Не-Китайские сайты"},
 	{Name: "category-ads-all", Description: "Реклама (все)"},
 }
 
@@ -63,8 +65,7 @@ type GeositeListResponse struct {
 }
 
 func (s *Server) handleGeositeList(w http.ResponseWriter, r *http.Request) {
-	exeDir, _ := os.Executable()
-	distDir := filepath.Dir(exeDir)
+	// BUG FIX: файлы geosite хранятся в data/ подпапке (config.DataDir)
 
 	knownNames := map[string]bool{}
 	for _, kg := range knownGeosites {
@@ -74,7 +75,7 @@ func (s *Server) handleGeositeList(w http.ResponseWriter, r *http.Request) {
 	items := make([]GeositeInfo, 0, len(knownGeosites))
 	for _, kg := range knownGeosites {
 		info := GeositeInfo{Name: kg.Name}
-		binPath := filepath.Join(distDir, "geosite-"+kg.Name+".bin")
+		binPath := filepath.Join(config.DataDir, "geosite-"+kg.Name+".bin")
 		if fi, err := os.Stat(binPath); err == nil {
 			info.Available = true
 			info.FileSize = fi.Size()
@@ -83,14 +84,16 @@ func (s *Server) handleGeositeList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Добавляем локальные файлы которых нет в known list
-	entries, _ := filepath.Glob(filepath.Join(distDir, "geosite-*.bin"))
+	entries, _ := filepath.Glob(filepath.Join(config.DataDir, "geosite-*.bin"))
 	for _, path := range entries {
 		base := filepath.Base(path)
 		name := strings.TrimPrefix(strings.TrimSuffix(base, ".bin"), "geosite-")
 		if !knownNames[name] {
 			fi, _ := os.Stat(path)
 			sz := int64(0)
-			if fi != nil { sz = fi.Size() }
+			if fi != nil {
+				sz = fi.Size()
+			}
 			items = append(items, GeositeInfo{Name: name, Available: true, FileSize: sz})
 		}
 	}
@@ -115,9 +118,14 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exeDir, _ := os.Executable()
-	distDir := filepath.Dir(exeDir)
-	destPath := filepath.Join(distDir, "geosite-"+name+".bin")
+	// BUG FIX: файлы geosite должны сохраняться в data/ подпапке,
+	// именно оттуда config/singbox.go читает пути при генерации конфига.
+	// Ранее файлы сохранялись в корень дистрибутива → скачанные geosite никогда не работали.
+	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
+		http.Error(w, `{"error":"не удалось создать data/ директорию"}`, http.StatusInternalServerError)
+		return
+	}
+	destPath := filepath.Join(config.DataDir, "geosite-"+name+".bin")
 
 	// Пробуем источники по очереди
 	// BUG FIX: http.Get использует дефолтный клиент без таймаута.

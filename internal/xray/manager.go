@@ -234,14 +234,21 @@ func (m *manager) doStart() error {
 	m.tail = tailBuf
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
-	go m.monitor()
+	// BUG FIX: передаём cmd и done как локальные переменные в monitor().
+	// Если Start() вызывается пока старый monitor() ещё работает,
+	// m.cmd и m.done перезаписываются. Без локальных копий:
+	//   old monitor(): m.cmd.Wait() вернулся → close(m.done) где m.done уже НОВЫЙ канал
+	//   new monitor(): process exits → close(NEW m.done) → PANIC: close of closed channel
+	localDone := m.done
+	go m.monitor(cmd, localDone)
 	return nil
 }
 
 // monitor — единственное место где вызывается cmd.Wait().
-func (m *manager) monitor() {
-	err := m.cmd.Wait()
-	close(m.done)
+// Принимает локальные копии cmd и done чтобы избежать data race с Start().
+func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
+	err := cmd.Wait()
+	close(done)
 
 	m.mu.RLock()
 	wasStoppedIntentionally := m.stopped

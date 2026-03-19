@@ -31,6 +31,17 @@ import (
 	"proxyclient/internal/xray"
 )
 
+// Кэшируем Win32 прокси на уровне пакета: MustLoadDLL/MustFindProc
+// вызываются один раз при старте вместо каждого вызова killProcessesByName.
+// MustLoadDLL паникует если DLL не найдена — для kernel32 это невозможно на Windows,
+// но вызов в loop создаёт лишние syscall и GC давление.
+var (
+	kern32             = syscall.MustLoadDLL("kernel32.dll")
+	procProcess32First = kern32.MustFindProc("Process32FirstW")
+	procProcess32Next  = kern32.MustFindProc("Process32NextW")
+	procCreateSnapshot = kern32.MustFindProc("CreateToolhelp32Snapshot")
+)
+
 const (
 	secretFile       = "secret.key"
 	runtimeFile      = "config.runtime.json"
@@ -232,6 +243,16 @@ func run(output io.Writer) error {
 	}
 	wintun.RemoveStaleTunAdapter(mainLogger)
 	wintun.PollUntilFree(mainLogger, config.TunInterfaceName)
+	// BUG FIX: удаляем осиротевший .pending конфиг при старте.
+	// Если приложение было убито во время doApply (между Rename и запуском процесса),
+	// config.singbox.json.pending остаётся на диске и может быть случайно прочитан.
+	if pendingPath := "config.singbox.json.pending"; func() bool {
+		_, err := os.Stat(pendingPath)
+		return err == nil
+	}() {
+		_ = os.Remove(pendingPath)
+		mainLogger.Info("Удалён осиротевший .pending конфиг от предыдущего запуска")
+	}
 	mainLogger.Info("Запуск sing-box...")
 	routingCfg, err := config.LoadRoutingConfig(dataDir + "/routing.json")
 	if err != nil {
@@ -438,7 +459,9 @@ func run(output io.Writer) error {
 			}
 			cmd := exec.Command("powershell", "-WindowStyle", "Hidden",
 				"-NonInteractive", "-Command",
-				"Set-Clipboard -Value '"+addr+"'")
+				// BUG FIX: экранируем одиночные кавычки в адресе
+				// чтобы предотвратить инъекцию PowerShell команд.
+				"Set-Clipboard -Value '"+strings.ReplaceAll(addr, "'", "''")+("'"))
 			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 			_ = cmd.Run()
 		},
@@ -529,8 +552,7 @@ func killProcessesByName(targetName string, log logger.Logger) bool {
 	var e entry32
 	e.Size = uint32(unsafe.Sizeof(e))
 
-	procProcess32First := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32FirstW")
-	procProcess32Next := syscall.MustLoadDLL("kernel32.dll").MustFindProc("Process32NextW")
+	// Используем кэшированные package-level прокси (см. var блок выше)
 
 	selfPID := uint32(os.Getpid())
 	killed := false
@@ -550,10 +572,8 @@ func killProcessesByName(targetName string, log logger.Logger) bool {
 }
 
 func createToolhelp32Snapshot() (syscall.Handle, error) {
-	kernel32 := syscall.MustLoadDLL("kernel32.dll")
-	create := kernel32.MustFindProc("CreateToolhelp32Snapshot")
 	const TH32CS_SNAPPROCESS = 0x00000002
-	h, _, err := create.Call(TH32CS_SNAPPROCESS, 0)
+	h, _, err := procCreateSnapshot.Call(TH32CS_SNAPPROCESS, 0)
 	if h == uintptr(syscall.InvalidHandle) {
 		return syscall.InvalidHandle, err
 	}
