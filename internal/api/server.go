@@ -104,6 +104,7 @@ func (s *Server) setupRoutes() {
 func (s *Server) SetupFeatureRoutes() {
 	SetupProfileRoutes(s)
 	SetupDiagRoutes(s)
+	SetupSettingsRoutes(s)
 	// Geosite endpoints
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")

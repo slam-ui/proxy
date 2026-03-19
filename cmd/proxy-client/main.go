@@ -17,6 +17,7 @@ import (
 	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
 	"proxyclient/internal/apprules"
+	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
@@ -200,6 +201,9 @@ func run(output io.Writer) error {
 	defer anomalyDetector.Stop()
 
 	mainLogger.Info("Запуск прокси-клиента...")
+	if autorun.IsEnabled() {
+		mainLogger.Info("Автозапуск: включён")
+	}
 
 	// Адаптеры для дочерних компонентов
 	proxyLogger := eventlog.NewLogger(appLogger, evLog, "proxy")
@@ -419,9 +423,24 @@ func run(output io.Writer) error {
 	}()
 
 	// 8. Трей блокирует main goroutine (требование Windows COM STA)
+	// Передаём адрес прокси в трей для отображения и копирования
+	tray.SetProxyAddr(proxyConfig.Address)
+
 	tray.Run(tray.Callbacks{
 		OnOpen: func() {
 			window.Open(webUIURL)
+		},
+		OnCopyAddr: func(addr string) {
+			// Копируем адрес прокси в буфер обмена через PowerShell
+			// (без лишних зависимостей — работает на всех Windows)
+			if addr == "" {
+				return
+			}
+			cmd := exec.Command("powershell", "-WindowStyle", "Hidden",
+				"-NonInteractive", "-Command",
+				"Set-Clipboard -Value '"+addr+"'")
+			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+			_ = cmd.Run()
 		},
 		OnEnable: func() {
 			if err := proxyManager.Enable(proxyConfig); err != nil {
