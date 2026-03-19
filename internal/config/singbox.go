@@ -134,7 +134,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 	}
 
 	cfg := &SingBoxConfig{
-		Log: SBLog{Level: "warn"},  // info floods the log with every DNS query
+		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
 		Experimental: SBExperimental{
 			ClashAPI: SBClashAPI{
 				ExternalController: "127.0.0.1:9090",

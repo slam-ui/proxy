@@ -1,13 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 
 	"github.com/gorilla/mux"
@@ -320,16 +319,38 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 	copy(snapshot.Rules, h.routing.Rules)
 	h.mu.RUnlock()
 
+	// FIX: pre-validate конфиг до запуска горутины.
+	// Аналог nekoray BuildConfig — строит конфиг в памяти и возвращает ошибку
+	// ДО любых деструктивных действий. Sing-box продолжает работать если конфиг плохой.
+	tmpConfigPath := h.xrayConfig.ConfigPath + ".pending"
+	if err := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, tmpConfigPath, snapshot); err != nil {
+		// Проверяем: если geosite файла нет — предупреждаем но продолжаем со старым конфигом
+		if _, statErr := os.Stat(h.xrayConfig.ConfigPath); statErr != nil {
+			// Старого конфига нет — критично, отменяем
+			h.apply.mu.Lock()
+			h.apply.running = false
+			h.apply.lastErr = err.Error()
+			h.apply.mu.Unlock()
+			h.server.respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Geosite не найден, но старый конфиг есть — логируем и используем его
+		h.server.logger.Warn("pre-validate конфига не прошла (%v) — применим с существующим конфигом", err)
+		_ = os.Remove(tmpConfigPath) // убираем неполный tmp
+		tmpConfigPath = ""           // сигнал doApply: использовать существующий конфиг
+	}
+
 	h.server.respondJSON(w, http.StatusAccepted, map[string]interface{}{
 		"message": "применение запущено",
 		"rules":   len(snapshot.Rules),
 	})
 
-	go h.doApply(snapshot)
+	go h.doApply(snapshot, tmpConfigPath)
 }
 
-// doApply выполняет перезапуск sing-box в фоновой горутине
-func (h *TunHandlers) doApply(snapshot *config.RoutingConfig) {
+// doApply выполняет перезапуск sing-box в фоновой горутине.
+// tmpConfigPath — путь к предварительно сгенерированному конфигу (или "" если использовать существующий).
+func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath string) {
 	setErr := func(err string) {
 		h.apply.mu.Lock()
 		h.apply.lastErr = err
@@ -373,48 +394,25 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig) {
 		}
 	}
 
-	// BUG FIX: ждём освобождения wintun kernel objects ДО удаления TUN адаптера.
-	// Windows держит kernel device object ~15с после остановки sing-box.
-	// Remove-NetAdapter/netsh убирают запись из сетевого стека немедленно,
-	// но kernel object остаётся — новый sing-box упадёт с FATAL[0015].
-	// Фиксированный wait 17с (WARN[0010] → FATAL[0015] = 15с, +2с запас).
-	const wintunReleaseWait = 17 * time.Second
-	h.server.logger.Info("Ожидаем освобождения wintun kernel objects (%v)...", wintunReleaseWait)
-	time.Sleep(wintunReleaseWait)
-	h.server.logger.Info("wintun handles освобождены")
+	// Записываем timestamp + активный polling до реального освобождения wintun.
+	// Используем пакет internal/wintun — единственная точка определения логики.
+	wintun.RecordStop()
+	wintun.RemoveStaleTunAdapter(h.server.logger)
+	wintun.PollUntilFree(h.server.logger, config.TunInterfaceName)
 
-	// Удаляем TUN интерфейс.
-	// BUG FIX: exec без таймаута мог зависнуть навсегда если netsh ждал
-	// освобождения интерфейса (например при проблемах с правами). Теперь
-	// ограничиваем 5 секундами и логируем результат.
-	time.Sleep(500 * time.Millisecond)
-	if data, err := os.ReadFile(h.xrayConfig.ConfigPath); err == nil {
-		var cfg config.SingBoxConfig
-		if json.Unmarshal(data, &cfg) == nil {
-			for _, inbound := range cfg.Inbounds {
-				if inbound.Type == "tun" && inbound.InterfaceName != "" {
-					netshCtx, netshCancel := context.WithTimeout(context.Background(), 5*time.Second)
-					out, netshErr := exec.CommandContext(netshCtx,
-						"C:\\Windows\\System32\\netsh.exe",
-						"interface", "delete", "interface", inbound.InterfaceName,
-					).CombinedOutput()
-					netshCancel()
-					if netshErr != nil {
-						h.server.logger.Warn("netsh delete interface: %v (output: %s)", netshErr, strings.TrimSpace(string(out)))
-					} else {
-						h.server.logger.Info("netsh: интерфейс %s удалён", inbound.InterfaceName)
-					}
-					break
-				}
-			}
+	// Применяем предварительно сгенерированный конфиг (или оставляем существующий).
+	// Конфиг уже был проверен в handleApply ДО остановки sing-box — здесь просто
+	// переименовываем .pending → рабочий файл. Это гарантирует атомарную замену.
+	if tmpConfigPath != "" {
+		if err := os.Rename(tmpConfigPath, h.xrayConfig.ConfigPath); err != nil {
+			h.server.logger.Error("Не удалось применить конфиг: %v", err)
+			_ = os.Remove(tmpConfigPath)
+			setErr(err.Error())
+			return
 		}
-	}
-
-	// Генерируем конфиг
-	if err := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, h.xrayConfig.ConfigPath, snapshot); err != nil {
-		h.server.logger.Error("Не удалось сгенерировать конфиг: %v", err)
-		setErr(err.Error())
-		return
+		h.server.logger.Info("Конфиг sing-box обновлён")
+	} else {
+		h.server.logger.Warn("Конфиг не обновлялся — применяем с существующим")
 	}
 
 	// Запускаем sing-box.

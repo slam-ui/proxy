@@ -10,15 +10,29 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Пирамида CI:
+#   build          — компиляция (gate для всего остального)
+#   test           — unit-тесты с race detector
+#   staticcheck    — статический анализ Go
+#   gosec          — SAST: уязвимости в коде → SARIF → GitHub Security
+#   sast           — Semgrep: дополнительный SAST
+#   codeql         — CodeQL: глубокий SAST (fixes "Code scanning configuration error")
+#   dependency-scan — govulncheck: CVE в зависимостях
+#   gitleaks       — утечка секретов в git-истории
+#   license-check  — проверка лицензий зависимостей
+# ──────────────────────────────────────────────────────────────────────────────
+
 jobs:
+
+  # ── 1. BUILD (gate) ──────────────────────────────────────────────────────────
   build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
@@ -44,121 +58,68 @@ jobs:
             -o proxy-client.exe \
             ./cmd/proxy-client
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: proxy-client-windows
           path: proxy-client.exe
           retention-days: 5
 
-  sast:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Semgrep Security Scan
-        run: semgrep scan --config=p/golang --sarif --output=semgrep.sarif
-        continue-on-error: true
-
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: semgrep.sarif
-        if: always()
-
-  dependency-scan:
+  # ── 2. UNIT TESTS ────────────────────────────────────────────────────────────
+  # Unit-тесты с race detector. Запускаем только Linux-совместимые пакеты.
+  # cmd/proxy-client и tray/window/notification пропускаем — они //go:build windows.
+  test:
+    name: Unit Tests
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run unit tests with race detector
+        run: |
+          go test -race -timeout=120s \
+            ./internal/anomalylog/... \
+            ./internal/api/... \
+            ./internal/apprules/... \
+            ./internal/config/... \
+            ./internal/eventlog/... \
+            ./internal/logger/... \
+            ./internal/proxy/...
 
-      - name: Run govulncheck (Windows target)
-        env:
-          GOOS: windows
-          GOARCH: amd64
-          CGO_ENABLED: 0
-        # Вывод в JSON чтобы GitHub Actions не парсил текст как error-аннотации.
-        # exit 3 = найдены уязвимости (stdlib CVEs вне нашего контроля) — не блокируем.
-        run: govulncheck -json ./... > govulncheck.json 2>&1 || true
+      - name: Generate coverage report
+        run: |
+          go test -timeout=120s \
+            -coverprofile=coverage.out \
+            -covermode=atomic \
+            ./internal/anomalylog/... \
+            ./internal/api/... \
+            ./internal/apprules/... \
+            ./internal/config/... \
+            ./internal/eventlog/... \
+            ./internal/logger/... \
+            ./internal/proxy/...
+          go tool cover -func=coverage.out | tail -1
 
-      - name: Upload govulncheck report
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: govulncheck-report
-          path: govulncheck.json
+          name: coverage-report
+          path: coverage.out
           retention-days: 5
 
-  gosec:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: true
-
-      - name: Run gosec
-        uses: securego/gosec@master
-        with:
-          args: -no-fail -fmt sarif -out gosec.sarif ./...
-
-      - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: gosec.sarif
-        if: always()
-
-  gitleaks:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+  # ── 3. STATIC ANALYSIS ───────────────────────────────────────────────────────
   staticcheck:
+    name: Staticcheck
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
@@ -173,15 +134,172 @@ jobs:
           CGO_ENABLED: 0
         run: staticcheck ./...
 
-  license-check:
+  # ── 4. GOSEC ─────────────────────────────────────────────────────────────────
+  # SAST: command injection, path traversal, weak crypto, hardcoded secrets.
+  # Результат → SARIF → GitHub Security → Code scanning alerts.
+  gosec:
+    name: Gosec SAST
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Run gosec
+        uses: securego/gosec@v2.21.4
+        with:
+          # G304: file path from variable — намеренно (os.ReadFile с путями конфигов)
+          # G306: file permissions 0644 — намеренно для лог-файлов
+          args: >-
+            -no-fail
+            -exclude=G304,G306
+            -fmt sarif
+            -out gosec.sarif
+            ./...
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec.sarif
+        if: always()
+
+  # ── 5. SEMGREP ───────────────────────────────────────────────────────────────
+  # Дополнительный SAST: паттерны специфичные для Go.
+  sast:
+    name: Semgrep SAST
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Run Semgrep
+        run: semgrep scan --config=p/golang --sarif --output=semgrep.sarif
+        continue-on-error: true
+
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+        if: always()
+
+  # ── 6. CODEQL ────────────────────────────────────────────────────────────────
+  # GitHub CodeQL — исправляет "Code scanning configuration error" на Security вкладке.
+  # Data flow analysis: taint tracking, injection, path traversal.
+  codeql:
+    name: CodeQL Analysis
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Build for CodeQL
+        # CodeQL требует нативную компиляцию (без кросс-компиляции под Windows)
+        run: go build ./...
+        continue-on-error: true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:go"
+
+  # ── 7. DEPENDENCY SCAN ───────────────────────────────────────────────────────
+  # govulncheck: CVE в зависимостях (только реально вызываемый код).
+  dependency-scan:
+    name: Dependency Scan
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck (Windows target)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        # exit 3 = уязвимости найдены (stdlib CVEs вне контроля) — не блокируем.
+        run: govulncheck -json ./... > govulncheck.json 2>&1 || true
+
+      - name: Print vulnerabilities summary
+        if: always()
+        run: |
+          python3 -c "
+          import json
+          lines = open('govulncheck.json').readlines()
+          vulns = [json.loads(l) for l in lines if l.strip() and 'finding' in l]
+          print(f'Total findings: {len(vulns)}')
+          for v in vulns[:5]:
+              f = v.get('finding', {})
+              print(f\"  {f.get('osv','?')}\")
+          " 2>/dev/null || echo "No vulnerabilities or parse error"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: govulncheck-report
+          path: govulncheck.json
+          retention-days: 5
+
+  # ── 8. SECRET SCANNING ───────────────────────────────────────────────────────
+  # Gitleaks: API ключи, пароли, токены во всей git-истории.
+  gitleaks:
+    name: Secret Scan
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Полная история для сканирования всех коммитов
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── 9. LICENSE CHECK ─────────────────────────────────────────────────────────
+  license-check:
+    name: License Check
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
@@ -189,7 +307,7 @@ jobs:
       - name: Install go-licenses
         run: go install github.com/google/go-licenses@latest
 
-      - name: Check licenses
+      - name: Check licenses (Windows target)
         env:
           GOOS: windows
           GOARCH: amd64

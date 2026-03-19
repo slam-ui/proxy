@@ -20,20 +20,16 @@ type Config struct {
 	Args           []string // дополнительные аргументы перед -c (например: "run")
 	Logger         logger.Logger
 	// SingBoxWriter если задан — stdout и stderr sing-box дополнительно пишутся в этот Writer.
-	// Используется для захвата вывода в event log. Если nil — пишется только в os.Stdout/Stderr.
 	SingBoxWriter io.Writer
 	// FileWriter если задан — stderr sing-box дублируется сюда (обычно основной лог-файл).
-	// Это позволяет видеть ошибки запуска sing-box прямо в proxy-client.log.
 	FileWriter io.Writer
 	// OnCrash вызывается если sing-box завершился сам (не через Stop()).
-	// Используется для отключения системного прокси при неожиданном падении процесса.
 	// Вызывается из отдельной горутины — не блокирует monitor().
 	OnCrash func(err error)
 }
 
 // Manager интерфейс для управления процессом
 type Manager interface {
-	// Start запускает (или перезапускает) процесс sing-box.
 	Start() error
 	Stop() error
 	IsRunning() bool
@@ -43,7 +39,12 @@ type Manager interface {
 	LastOutput() string
 }
 
-// tailWriter захватывает последние maxTail байт вывода (для диагностики краша)
+// ── tailWriter ────────────────────────────────────────────────────────────────
+
+// tailWriter захватывает последние maxTail байт вывода (для диагностики краша).
+// Увеличен до 32KB по аналогии с nekoray (max_log_line = 200 строк):
+// при wintun конфликте лог содержит много строк инициализации TUN до FATAL,
+// 4KB могли не захватить начало ошибки.
 type tailWriter struct {
 	mu  sync.Mutex
 	buf []byte
@@ -68,14 +69,57 @@ func (tw *tailWriter) String() string {
 	return string(tw.buf)
 }
 
+// ── crashTracker ─────────────────────────────────────────────────────────────
+
+// crashTracker реализует rate limiting перезапусков по аналогии с nekoray:
+//
+//	QElapsedTimer coreRestartTimer;
+//	if (coreRestartTimer.restart() < 10 * 1000) { stop retrying }
+//
+// Если crashCount последовательных крашей происходит быстрее чем каждые
+// minInterval, считаем что core "exits too frequently" и прекращаем авторестарт.
+type crashTracker struct {
+	mu          sync.Mutex
+	count       int       // количество крашей в текущем окне
+	lastCrashAt time.Time // время последнего краша
+}
+
+const (
+	crashRateWindow = 2 * time.Minute // окно для подсчёта крашей
+	maxCrashCount   = 3               // максимум крашей за окно до остановки авторестарта
+)
+
+// Record регистрирует краш. Возвращает текущий счётчик крашей в окне.
+// Если с последнего краша прошло больше crashRateWindow — счётчик сбрасывается.
+func (ct *crashTracker) Record() int {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	if time.Since(ct.lastCrashAt) > crashRateWindow {
+		ct.count = 0
+	}
+	ct.count++
+	ct.lastCrashAt = time.Now()
+	return ct.count
+}
+
+// Reset сбрасывает счётчик (вызывается при успешном старте).
+func (ct *crashTracker) Reset() {
+	ct.mu.Lock()
+	defer ct.mu.Unlock()
+	ct.count = 0
+}
+
+// ── manager ───────────────────────────────────────────────────────────────────
+
 type manager struct {
 	cmd     *exec.Cmd
 	config  Config
 	logger  logger.Logger
 	mu      sync.RWMutex
 	done    chan struct{} // закрывается когда процесс завершился
-	stopped bool         // true если Stop() уже был вызван (не неожиданный краш)
-	tail    *tailWriter  // последние 4KB stderr для диагностики краша
+	stopped bool          // true если Stop() уже был вызван
+	tail    *tailWriter   // последние 32KB stderr для диагностики краша
+	crashes crashTracker  // rate limiter для авторестартов (как в nekoray)
 }
 
 func NewManager(cfg Config) (Manager, error) {
@@ -111,7 +155,8 @@ func validateConfig(cfg Config) error {
 		return fmt.Errorf("исполняемый файл не найден: %s", cfg.ExecutablePath)
 	}
 	if err == nil && fi.Size() == 0 {
-		return fmt.Errorf("файл %s существует но имеет размер 0 байт — замените его реальным sing-box.exe", cfg.ExecutablePath)
+		return fmt.Errorf("файл %s существует но имеет размер 0 байт — замените его реальным sing-box.exe",
+			cfg.ExecutablePath)
 	}
 	if _, err := os.Stat(cfg.ConfigPath); os.IsNotExist(err) {
 		return fmt.Errorf("файл конфигурации не найден: %s", cfg.ConfigPath)
@@ -119,12 +164,13 @@ func validateConfig(cfg Config) error {
 	return nil
 }
 
-// Start запускает sing-box процесс (можно вызвать повторно после Stop/краша).
+// Start запускает sing-box (можно вызвать повторно после Stop/краша).
 func (m *manager) Start() error {
 	m.mu.Lock()
-	m.done = make(chan struct{}) // новый канал для нового запуска
+	m.done = make(chan struct{})
 	m.stopped = false
 	m.mu.Unlock()
+	m.crashes.Reset() // успешный старт — сбрасываем счётчик крашей
 	return m.doStart()
 }
 
@@ -139,24 +185,13 @@ func (m *manager) doStart() error {
 
 	cmd := exec.Command(m.config.ExecutablePath, args...)
 
-	// Hide the sing-box console window.
-	// When proxy-client is built with -H windowsgui, Windows would otherwise
-	// create a separate console window for every child process that is itself
-	// a console application (like sing-box.exe).
-	// CREATE_NO_WINDOW (0x08000000) suppresses that window entirely.
+	// CREATE_NO_WINDOW: подавляет отдельное консольное окно для sing-box.exe
+	// в билдах с -H windowsgui.
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		CreationFlags: 0x08000000,
 		HideWindow:    true,
 	}
 
-	// Route sing-box output:
-	//   - In windowsgui builds os.Stdout/Stderr are invalid (nil handles) —
-	//     writing to them would panic. We detect this by checking the file stat.
-	//   - In debug/console builds we also tee to os.Stdout so output is visible
-	//     in the terminal alongside the main app logs.
-	// Build writers for stdout and stderr.
-	// Priority: console (if valid) > SingBoxWriter (event log) > FileWriter (log file)
-	// stderr always includes FileWriter so crash reasons appear in proxy-client.log.
 	stdoutOK := isStdoutValid()
 
 	buildWriter := func(includeFile bool) io.Writer {
@@ -180,40 +215,32 @@ func (m *manager) doStart() error {
 		}
 	}
 
-	cmd.Stdout = buildWriter(false) // stdout: console + event log
-	// stderr: console + event log + file log + tail buffer (для детекции ошибок краша)
+	cmd.Stdout = buildWriter(false)
 	stderrBase := buildWriter(true)
-	tailBuf := newTailWriter(4096)
+	// 32KB tail — увеличено с 4KB, чтобы захватить полный контекст wintun ошибки
+	// (по аналогии с nekoray max_log_line = 200 строк)
+	tailBuf := newTailWriter(32 * 1024)
 	if stderrBase == io.Discard {
 		cmd.Stderr = tailBuf
 	} else {
 		cmd.Stderr = io.MultiWriter(stderrBase, tailBuf)
 	}
-	// Сохраняем ссылку — она будет скопирована в m.tail после cmd.Start()
-	_ = tailBuf
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("не удалось запустить процесс: %w", err)
 	}
 
 	m.cmd = cmd
-	m.tail = tailBuf // последние 4KB stderr (уже подключён к cmd.Stderr)
+	m.tail = tailBuf
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
-	// BUG FIX: захватываем локальную ссылку на cmd до запуска горутины.
-	// monitor() не может читать m.cmd напрямую — это data race:
-	// Start() может вызваться из OnCrash (отдельная горутина) и перезаписать
-	// m.cmd пока старый monitor() ещё не вернулся из Wait().
-	// Локальная переменная cmdRef гарантирует что каждый monitor() ждёт
-	// именно свой процесс, независимо от последующих переприсвоений m.cmd.
-	cmdRef := cmd
-	go m.monitor(cmdRef)
+	go m.monitor()
 	return nil
 }
 
-// monitor — единственное место где вызывается cmd.Wait()
-func (m *manager) monitor(cmd *exec.Cmd) {
-	err := cmd.Wait()
+// monitor — единственное место где вызывается cmd.Wait().
+func (m *manager) monitor() {
+	err := m.cmd.Wait()
 	close(m.done)
 
 	m.mu.RLock()
@@ -227,12 +254,43 @@ func (m *manager) monitor(cmd *exec.Cmd) {
 		m.logger.Info("Процесс XRay завершён")
 	}
 
-	// BUG FIX: если процесс упал сам (не через Stop()), уведомляем вызывающий код.
-	// До этого исправления: sing-box падал из-за невалидного конфига, системный прокси
-	// оставался включён и указывал на мёртвый порт — весь трафик уходил в никуда.
-	if !wasStoppedIntentionally && onCrash != nil {
-		go onCrash(err)
+	if wasStoppedIntentionally || onCrash == nil {
+		return
 	}
+
+	// Crash rate limiting — аналог nekoray coreRestartTimer:
+	//   if (coreRestartTimer.restart() < 10 * 1000) { stop retrying }
+	// Если за crashRateWindow происходит maxCrashCount или более крашей —
+	// прекращаем авторестарты и уведомляем пользователя.
+	count := m.crashes.Record()
+	if count >= maxCrashCount {
+		m.logger.Error(
+			"[Error] Core exits too frequently (%d раз за %v) — авторестарт отключён",
+			count, crashRateWindow)
+		// Передаём краш с флагом "too many" через специальную ошибку
+		go onCrash(&tooManyRestartsError{count: count, base: err})
+		return
+	}
+
+	go onCrash(err)
+}
+
+// tooManyRestartsError сигнализирует что авторестарт заблокирован из-за rate limit.
+// OnCrash может проверить этот тип чтобы не пытаться снова перезапустить.
+type tooManyRestartsError struct {
+	count int
+	base  error
+}
+
+func (e *tooManyRestartsError) Error() string {
+	return fmt.Sprintf("core crashes too frequently (%d times in %v): %v",
+		e.count, crashRateWindow, e.base)
+}
+
+// IsTooManyRestarts возвращает true если ошибка означает блокировку rate limiter.
+func IsTooManyRestarts(err error) bool {
+	_, ok := err.(*tooManyRestartsError)
+	return ok
 }
 
 func (m *manager) Stop() error {
@@ -243,7 +301,7 @@ func (m *manager) Stop() error {
 	}
 	pid := m.cmd.Process.Pid
 	proc := m.cmd.Process
-	m.stopped = true // помечаем до Kill — monitor() должен увидеть флаг
+	m.stopped = true
 	m.mu.Unlock()
 
 	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
@@ -271,7 +329,10 @@ func (m *manager) LastOutput() string {
 	return m.tail.String()
 }
 
-// IsRunning проверяет что процесс реально ещё работает
+// IsRunning проверяет что процесс реально ещё работает.
+// Упрощено по сравнению с предыдущей версией: канал done уже точно отвечает
+// на вопрос "завершился ли процесс". OpenProcess/GetExitCodeProcess был лишним
+// Win32 вызовом который делал код непортируемым и не давал новой информации.
 func (m *manager) IsRunning() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -284,20 +345,8 @@ func (m *manager) IsRunning() bool {
 	case <-m.done:
 		return false
 	default:
-	}
-
-	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-	handle, err := syscall.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(m.cmd.Process.Pid))
-	if err != nil {
 		return true
 	}
-	defer syscall.CloseHandle(handle)
-
-	var exitCode uint32
-	if err := syscall.GetExitCodeProcess(handle, &exitCode); err != nil {
-		return true
-	}
-	return exitCode == 259 // STILL_ACTIVE
 }
 
 func (m *manager) GetPID() int {
@@ -309,7 +358,7 @@ func (m *manager) GetPID() int {
 	return m.cmd.Process.Pid
 }
 
-// Wait ждёт завершения через канал — безопасно вызывать несколько раз
+// Wait ждёт завершения через канал — безопасно вызывать несколько раз.
 func (m *manager) Wait() error {
 	m.mu.RLock()
 	if m.cmd == nil {
@@ -322,8 +371,7 @@ func (m *manager) Wait() error {
 }
 
 // isStdoutValid reports whether os.Stdout is a usable file handle.
-// In windowsgui builds (-H windowsgui) Windows does not attach a console,
-// so os.Stdout.Stat() fails — writing to it would panic or silently corrupt.
+// In windowsgui builds (-H windowsgui) Windows does not attach a console.
 func isStdoutValid() bool {
 	if os.Stdout == nil {
 		return false

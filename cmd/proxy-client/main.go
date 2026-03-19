@@ -26,6 +26,7 @@ import (
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/tray"
 	"proxyclient/internal/window"
+	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 )
 
@@ -199,25 +200,21 @@ func run(output io.Writer) error {
 		Override: "<local>",
 	}
 
-	// 2–3. Убиваем осиротевший sing-box, затем сбрасываем wintun kernel driver.
+	// 2–3. Убиваем осиротевший sing-box и ждём освобождения wintun kernel-объекта.
 	//
-	// Суть проблемы "Cannot create a file when that file already exists":
+	// Проблема "Cannot create a file when that file already exists":
 	//   wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
-	//   Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
-	//   остаётся жить пока Windows GC его не соберёт (может занять 10–30 секунд).
+	//   Объект живёт после смерти sing-box ещё 30-60 секунд (Windows GC асинхронный).
+	//   sc stop wintun не работает — sing-box грузит wintun.dll напрямую, без SCM.
 	//
-	// Единственный надёжный способ — остановить сам wintun kernel driver (sc stop wintun).
-	// Это сразу освобождает ВСЕ его kernel-объекты.
-	// sing-box автоматически запустит драйвер снова когда ему понадобится.
-	// Убиваем orphan sing-box если есть.
-	// Если он был — ждём освобождения kernel objects ДО Remove-NetAdapter:
-	// Remove-NetAdapter убирает адаптер из Get-NetAdapter немедленно,
-	// но kernel object живёт ещё ~15с. Ждать нужно ДО удаления, не после.
-	orphanKilled := killOrphanSingBox(mainLogger)
-	if orphanKilled {
-		waitForWintunRelease(mainLogger)
+	// РЕШЕНИЕ: после Remove-NetAdapter опрашиваем TCP/IP стек через netsh каждые 500мс.
+	// Как только интерфейс исчезает из netsh — wintun kernel-объект освобождён.
+	// Максимальный timeout — 70с. Обычно занимает < 5с если адаптер уже удалён.
+	if killOrphanSingBox(mainLogger) {
+		wintun.RecordStop()
 	}
-	removeStaleTunAdapterWithRetry(mainLogger)
+	wintun.RemoveStaleTunAdapter(mainLogger)
+	wintun.PollUntilFree(mainLogger, config.TunInterfaceName)
 	mainLogger.Info("Запуск sing-box...")
 	routingCfg, err := config.LoadRoutingConfig("routing.json")
 	if err != nil {
@@ -259,6 +256,16 @@ func run(output io.Writer) error {
 		// BUG FIX: если sing-box падает сам (например из-за невалидного конфига),
 		// отключаем системный прокси — иначе весь трафик уходит в мёртвый порт.
 		OnCrash: func(crashErr error) {
+			// Rate limiting — аналог nekoray coreRestartTimer.
+			// Если ≥3 краша за 2 минуты — прекращаем авторестарты (core exits too frequently).
+			if xray.IsTooManyRestarts(crashErr) {
+				mainLogger.Error("[Error] Core exits too frequently — авторестарт отключён")
+				notification.Send("Proxy — ошибка", "Частые сбои sing-box. Откройте приложение.")
+				proxyManager.Disable() //nolint
+				tray.SetEnabled(false)
+				return
+			}
+
 			// Детектируем специфическую ошибку wintun kernel-объекта.
 			// "Cannot create a file when that file already exists" означает что
 			// предыдущий wintun\Device\WINTUN0 ещё не освобождён ядром ОС.
@@ -267,9 +274,14 @@ func run(output io.Writer) error {
 			isTunConflict := strings.Contains(output, "Cannot create a file when that file already exists") ||
 				strings.Contains(output, "configure tun interface")
 			if isTunConflict {
-				mainLogger.Warn("Detected wintun conflict — ждём 20с освобождения kernel-объекта и перезапускаем...")
-				notification.Send("Proxy", "Перезапуск TUN через 20 секунд...")
-				time.Sleep(20 * time.Second)
+				// sing-box упал из-за wintun конфликта.
+				// Не ждём фиксированное время — активно опрашиваем TCP/IP стек.
+				// Remove-NetAdapter + polling до реального исчезновения интерфейса.
+				wintun.RecordStop()
+				mainLogger.Warn("Detected wintun conflict — ждём освобождения wintun kernel-объекта...")
+				notification.Send("Proxy", "Перезапуск TUN...")
+				wintun.RemoveStaleTunAdapter(mainLogger)
+				wintun.PollUntilFree(mainLogger, config.TunInterfaceName)
 				mainLogger.Info("Перезапуск sing-box после wintun GC...")
 				if startErr := xrayManager.Start(); startErr != nil {
 					mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
@@ -439,9 +451,11 @@ func run(output io.Writer) error {
 	if err := xrayManager.Stop(); err != nil {
 		mainLogger.Error("Ошибка при остановке sing-box: %v", err)
 	}
+	// Фиксируем время остановки.
+	wintun.RecordStop()
 	// Убираем TUN адаптер при выходе — иначе wintun остаётся в системе
 	mainLogger.Info("Очистка TUN адаптера при выходе...")
-	shutdownTUN(mainLogger)
+	wintun.Shutdown(mainLogger)
 	if err := proxyManager.Disable(); err != nil {
 		mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
@@ -549,80 +563,4 @@ func createSingleInstanceMutex(name string) (syscall.Handle, error) {
 	}
 
 	return syscall.Handle(h), nil
-}
-
-// stopWintunDriver останавливает wintun kernel driver через Service Control Manager.
-//
-// Корень проблемы "Cannot create a file when that file already exists":
-//
-//	wintun создаёт именованный kernel-объект \Device\WINTUN-{GUID}.
-//	Remove-NetAdapter убирает только запись в Device Manager — kernel-объект
-//	остаётся жить пока Windows GC его не соберёт (10-30 секунд, непредсказуемо).
-//
-// sc stop wintun → kernel driver выгружается → ВСЕ его объекты освобождаются немедленно.
-// sing-box автоматически перезапустит драйвер при следующем создании TUN-интерфейса.
-// waitForWintunRelease ждёт освобождения wintun kernel objects после остановки sing-box.
-//
-// После Remove-NetAdapter адаптер исчезает из Get-NetAdapter немедленно,
-// но kernel object ещё удерживается ~15с. Polling через Get-NetAdapter
-// фундаментально сломан — он всегда видит "нет" после Remove-NetAdapter.
-// Правильное решение: фиксированный sleep 17с (15с + 2с запас).
-func waitForWintunRelease(log logger.Logger) {
-	const waitDur = 22 * time.Second
-	log.Info("Ожидаем освобождения wintun kernel objects (%v)...", waitDur)
-	time.Sleep(waitDur)
-	log.Info("wintun handles освобождены, продолжаем")
-}
-
-func removeStaleTunAdapterWithRetry(log logger.Logger) {
-	runHidden := func(name string, args ...string) (string, error) {
-		cmd := exec.Command(name, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			CreationFlags: 0x08000000,
-			HideWindow:    true,
-		}
-		out, err := cmd.CombinedOutput()
-		return strings.TrimSpace(string(out)), err
-	}
-
-	// Шаг 1: sc stop wintun — единственный способ гарантированно освободить kernel-объект.
-	// SilentlyContinue / -ErrorAction не нужны — работаем напрямую с SCM.
-	out, err := runHidden("sc", "stop", "wintun")
-	if err != nil {
-		// Драйвер не запущен — это нормально при первом запуске
-		log.Info("wintun driver не запущен (%s) — первый запуск или уже остановлен", strings.ReplaceAll(out, "\n", " "))
-	} else {
-		log.Info("wintun driver: отправлена команда остановки")
-		// Ждём STOP_PENDING → STOPPED (SCM может занять до 5 секунд)
-		for i := 0; i < 10; i++ {
-			time.Sleep(500 * time.Millisecond)
-			status, _ := runHidden("sc", "query", "wintun")
-			if strings.Contains(status, "STOPPED") {
-				log.Info("wintun driver остановлен (STOPPED)")
-				break
-			}
-		}
-	}
-
-	// Шаг 2: убрать сетевой адаптер из Device Manager (эстетика — чтобы не засорял список)
-	ps := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
-	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", ps)
-
-	log.Info("TUN cleanup завершён")
-}
-
-// shutdownTUN останавливает wintun и удаляет tun0 адаптер при завершении приложения.
-// В отличие от removeStaleTunAdapterWithRetry не ждёт полного STOP — просто отправляет команду.
-func shutdownTUN(log logger.Logger) {
-	run := func(name string, args ...string) {
-		cmd := exec.Command(name, args...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
-		_ = cmd.Run()
-	}
-	// Остановить wintun kernel driver
-	run("sc", "stop", "wintun")
-	// Удалить сетевой адаптер
-	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		"Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue")
-	log.Info("TUN shutdown отправлен")
 }
