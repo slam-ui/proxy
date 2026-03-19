@@ -39,8 +39,16 @@ func RecordStop() {
 	_ = os.WriteFile(StopFile, data, 0644)
 }
 
-// PollUntilFree опрашивает TCP/IP стек Windows через netsh каждые PollInterval.
-// Возвращается когда интерфейс ifName исчезает из стека или по PollTimeout.
+// minGap — минимальное время между остановкой sing-box и следующим стартом.
+// Даже если netsh говорит что интерфейс свободен, wintun kernel-объект
+// \Device\WINTUN-{GUID} может ещё жить. minGap гарантирует Windows GC.
+const minGap = 20 * time.Second
+
+// PollUntilFree обеспечивает два условия перед запуском sing-box:
+//  1. Минимальный gap 60с от последней остановки (timestamp из StopFile).
+//     Даже если netsh говорит "интерфейс не найден", kernel-объект может жить.
+//     Это исправляет краш FATAL[0015] при быстром перезапуске.
+//  2. Активный polling через netsh — ждём пока tun0 исчезнет из TCP/IP стека.
 //
 // Почему netsh, а не Get-NetAdapter:
 //
@@ -48,9 +56,24 @@ func RecordStop() {
 //	адаптер там исчезает немедленно, но kernel-объект ещё жив.
 //	netsh держит ссылку дольше и отпускает её синхронно с kernel GC.
 func PollUntilFree(log logger.Logger, ifName string) {
-	// Проверяем сразу — если уже свободен, без задержки
+	// Шаг 1: минимальный gap от последней остановки.
+	// Даже если netsh говорит "свободен" — ждём чтобы Windows GC успел
+	// освободить kernel-объект \Device\WINTUN-{GUID}.
+	if data, err := os.ReadFile(StopFile); err == nil {
+		if ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
+			elapsed := time.Since(time.Unix(0, ns))
+			if wait := minGap - elapsed; wait > 0 {
+				log.Info("wintun: прошло %v с последней остановки — ждём ещё %v (min gap %v)...",
+					elapsed.Round(time.Second), wait.Round(time.Second), minGap)
+				time.Sleep(wait)
+				log.Info("wintun: min gap выдержан — проверяем TCP/IP стек")
+			}
+		}
+	}
+
+	// Шаг 2: polling по TCP/IP стеку.
 	if !InterfaceExists(ifName) {
-		log.Info("wintun: интерфейс %s не найден — сразу готов", ifName)
+		log.Info("wintun: интерфейс %s не найден в TCP/IP стеке — готов", ifName)
 		return
 	}
 
