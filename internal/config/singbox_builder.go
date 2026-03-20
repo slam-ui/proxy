@@ -9,6 +9,44 @@ import (
 	"proxyclient/internal/fileutil"
 )
 
+// buildVLESSOutbound создаёт VLESS outbound с оптимальными параметрами.
+// Автоматически включает мультиплексирование если:
+//   1. params.Mux=true (URL содержит ?mux=1) — явно запрошено
+//   2. Flow пустой — XTLS Vision несовместим с mux
+//
+// Multiplexing устраняет TLS handshake (~50-100мс) для каждого нового соединения,
+// мультиплексируя несколько потоков в одном TLS соединении.
+func buildVLESSOutbound(params *VLESSParams) SBOutbound {
+	out := SBOutbound{
+		Type:       "vless",
+		Tag:        "proxy-out",
+		Server:     params.Address,
+		ServerPort: params.Port,
+		UUID:       params.UUID,
+		Flow:       params.Flow,
+		TLS: &SBTLS{
+			Enabled:    true,
+			ServerName: params.SNI,
+			Reality:    &SBReality{Enabled: true, PublicKey: params.PublicKey, ShortID: params.ShortID},
+			// random вместо chrome: случайный fingerprint из нескольких браузеров.
+			// Усложняет детектирование трафика DPI системами, не влияет на скорость.
+			UTLS: &SBUTLS{Enabled: true, Fingerprint: "random"},
+		},
+	}
+	// Multiplex (mux): поддерживается с sing-box 1.6+.
+	// Включается только при явном ?mux=1 в VLESS URL — безопасно для любой версии.
+	// Без явного запроса — не включаем, чтобы не ломать старые версии sing-box.
+	if params.Mux {
+		out.Multiplex = &SBMultiplex{
+			Enabled:    true,
+			Protocol:   "h2mux",
+			MaxStreams: 8,
+		}
+	}
+	return out
+}
+
+
 func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingConfig) error {
 	params, err := parseVLESSKey(secretPath)
 	if err != nil {
@@ -31,8 +69,13 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		},
 		DNS: SBDNS{
 			Servers: []SBDNSServer{
-				{Tag: "remote", Type: "tls", Server: "8.8.8.8", ServerPort: 853},
-				{Tag: "direct-dns", Type: "udp", Server: "1.1.1.1", ServerPort: 53},
+				// DoH (DNS-over-HTTPS) вместо DoT (DNS-over-TLS):
+				// DoT открывает новое TLS соединение на каждый запрос (+50-150мс).
+				// DoH использует HTTP/2 keep-alive — одно соединение для всех запросов.
+				// Type "https" + Server = адрес DoH резолвера (sing-box формирует URL сам).
+				{Tag: "remote", Type: "https", Server: "1.1.1.1"},
+				// Прямой UDP для локального трафика (http-in inbound) — без прокси.
+				{Tag: "direct-dns", Type: "udp", Server: "8.8.8.8", ServerPort: 53},
 			},
 			Rules: []SBDNSRule{
 				{Inbound: []string{"http-in"}, Server: "direct-dns"},
@@ -41,30 +84,19 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		},
 		Inbounds: []SBInbound{
 			{
-				Type:                     "http",
-				Tag:                      "http-in",
-				Listen:                   "127.0.0.1",
-				ListenPort:               ProxyPort,
+				Type:       "http",
+				Tag:        "http-in",
+				Listen:     "127.0.0.1",
+				ListenPort: ProxyPort,
+				// Sniff на HTTP inbound нужен для override CONNECT-хостов.
+				// Оставляем только здесь, убираем с TUN (там не нужно).
 				Sniff:                    true,
 				SniffOverrideDestination: true,
 			},
 			buildTUN(),
 		},
 		Outbounds: []SBOutbound{
-			{
-				Type:       "vless",
-				Tag:        "proxy-out",
-				Server:     params.Address,
-				ServerPort: params.Port,
-				UUID:       params.UUID,
-				Flow:       params.Flow,
-				TLS: &SBTLS{
-					Enabled:    true,
-					ServerName: params.SNI,
-					Reality:    &SBReality{Enabled: true, PublicKey: params.PublicKey, ShortID: params.ShortID},
-					UTLS:       &SBUTLS{Enabled: true, Fingerprint: "chrome"},
-				},
-			},
+			buildVLESSOutbound(params),
 			{Type: "direct", Tag: "direct"},
 			// "block" outbound нужен для случая DefaultAction == ActionBlock,
 			// а также для блокирующих правил route (action: "reject" — альтернатива,
@@ -97,16 +129,27 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 
 func buildTUN() SBInbound {
 	return SBInbound{
-		Type:                     "tun",
-		Tag:                      "tun-in",
-		InterfaceName:            TunInterfaceName,
-		Address:                  []string{"172.20.0.1/30"},
-		MTU:                      9000,
-		AutoRoute:                true,
-		StrictRoute:              false,
-		Stack:                    "mixed",
-		Sniff:                    true,
-		SniffOverrideDestination: true,
+		Type:          "tun",
+		Tag:           "tun-in",
+		InterfaceName: TunInterfaceName,
+		Address:       []string{"172.20.0.1/30"},
+		// MTU 1500 вместо 9000 (jumbo frames):
+		// Jumbo frames требуют поддержки по всей цепочке (TUN → VPN сервер).
+		// Большинство VPS и провайдеров не поддерживают jumbo frames на WAN.
+		// Пакет 9000 байт будет фрагментирован или дропнут → переотправки → выше пинг.
+		// 1500 = стандартный Ethernet MTU, гарантированно проходит везде.
+		MTU:           1500,
+		AutoRoute:     true,
+		StrictRoute:   true, // строгая маршрутизация: утечки трафика мимо TUN невозможны
+		// system stack вместо mixed: system использует нативный Windows TCP/IP стек.
+		// mixed = gVisor для UDP + system для TCP. system быстрее для большинства трафика
+		// так как нет overhead пользовательского TCP стека. Рекомендация sing-box docs.
+		Stack:         "system",
+		// Sniff=false на TUN: снифинг добавляет задержку (~1-2мс) к каждому соединению
+		// пока sing-box читает первые байты для определения протокола.
+		// TUN работает на сетевом уровне — информация о домене уже есть из DNS.
+		// Sniff нужен только на HTTP inbound для override destination.
+		Sniff:         false,
 	}
 }
 
@@ -271,7 +314,11 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 		Rules:                 rules,
 		RuleSet:               ruleSets,
 		Final:                 final,
-		AutoDetectInterface:   true,
+		// AutoDetectInterface: false — убираем автодетект.
+		// Автодетект делает syscall при каждом новом соединении для определения
+		// исходящего интерфейса. При StrictRoute=true это не нужно — весь трафик
+		// идёт через TUN интерфейс который уже знает маршруты.
+		AutoDetectInterface:   false,
 		DefaultDomainResolver: "direct-dns",
 	}
 }

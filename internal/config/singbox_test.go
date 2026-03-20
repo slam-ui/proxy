@@ -114,8 +114,11 @@ func TestBuildRoute_IPCIDRRule(t *testing.T) {
 
 func TestBuildRoute_AutoDetectInterface(t *testing.T) {
 	route := buildRoute(DefaultRoutingConfig())
-	if !route.AutoDetectInterface {
-		t.Error("AutoDetectInterface должен быть true")
+	// AutoDetectInterface=false: при StrictRoute=true автодетект интерфейса не нужен —
+	// весь трафик идёт через TUN и маршруты уже известны. Отключение убирает
+	// лишний syscall при каждом новом соединении.
+	if route.AutoDetectInterface {
+		t.Error("AutoDetectInterface должен быть false (StrictRoute=true делает его избыточным)")
 	}
 }
 

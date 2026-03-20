@@ -134,11 +134,15 @@ func (s *Server) FinalizeRoutes() {
 // Start запускает HTTP сервер
 func (s *Server) Start(ctx context.Context) error {
 	s.httpServer = &http.Server{
-		Addr:         s.config.ListenAddress,
-		Handler:      s.router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:    s.config.ListenAddress,
+		Handler: s.router,
+		// ReadHeaderTimeout вместо ReadTimeout: читаем только заголовки с таймаутом.
+		// ReadTimeout обрывал бы streaming эндпоинты (/traffic от sing-box).
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		// IdleTimeout 120с: UI поллит каждые 2-3с — keep-alive устраняет TCP
+		// handshake для каждого polling запроса (~1мс экономия × 30 req/min).
+		IdleTimeout: 120 * time.Second,
 	}
 
 	errChan := make(chan error, 1)

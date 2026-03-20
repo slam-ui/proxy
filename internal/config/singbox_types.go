@@ -37,6 +37,7 @@ type SBDNSRule struct {
 	Server  string   `json:"server"`
 }
 
+
 type SBInbound struct {
 	Type                     string   `json:"type"`
 	Tag                      string   `json:"tag"`
@@ -52,14 +53,26 @@ type SBInbound struct {
 	Stack                    string   `json:"stack,omitempty"`
 }
 
+// SBMultiplex конфигурация мультиплексирования соединений.
+// Multiplex позволяет нескольким потокам данных использовать одно TLS соединение,
+// устраняя overhead нового TLS хендшейка (~50-100мс) для каждого соединения.
+// ВАЖНО: работает только если сервер поддерживает mux (sing-box / xray с mux).
+type SBMultiplex struct {
+	Enabled    bool   `json:"enabled"`
+	Protocol   string `json:"protocol,omitempty"` // "smux" | "yamux" | "h2mux"
+	MaxStreams  int    `json:"max_streams,omitempty"`
+	Padding    bool   `json:"padding,omitempty"`
+}
+
 type SBOutbound struct {
-	Type       string `json:"type"`
-	Tag        string `json:"tag"`
-	Server     string `json:"server,omitempty"`
-	ServerPort int    `json:"server_port,omitempty"`
-	UUID       string `json:"uuid,omitempty"`
-	Flow       string `json:"flow,omitempty"`
-	TLS        *SBTLS `json:"tls,omitempty"`
+	Type       string       `json:"type"`
+	Tag        string       `json:"tag"`
+	Server     string       `json:"server,omitempty"`
+	ServerPort int          `json:"server_port,omitempty"`
+	UUID       string       `json:"uuid,omitempty"`
+	Flow       string       `json:"flow,omitempty"`
+	TLS        *SBTLS       `json:"tls,omitempty"`
+	Multiplex  *SBMultiplex `json:"multiplex,omitempty"`
 }
 
 type SBTLS struct {

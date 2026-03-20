@@ -17,6 +17,7 @@ type VLESSParams struct {
 	PublicKey string
 	ShortID   string
 	Flow      string
+	Mux       bool // true если URL содержит ?mux=1 или ?multiplex=1
 }
 
 // parseVLESSKey читает и парсит VLESS URL из файла
@@ -59,6 +60,10 @@ func parseVLESSKey(secretPath string) (*VLESSParams, error) {
 
 	queryParams := parsedURL.Query()
 
+	muxParam := queryParams.Get("mux")
+	if muxParam == "" {
+		muxParam = queryParams.Get("multiplex")
+	}
 	return &VLESSParams{
 		Address:   parsedURL.Hostname(),
 		Port:      port,
@@ -67,6 +72,7 @@ func parseVLESSKey(secretPath string) (*VLESSParams, error) {
 		PublicKey: queryParams.Get("pbk"),
 		ShortID:   queryParams.Get("sid"),
 		Flow:      queryParams.Get("flow"),
+		Mux:       muxParam == "1" || muxParam == "true",
 	}, nil
 }
 

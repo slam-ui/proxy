@@ -1454,10 +1454,23 @@
         loadGeoAvailable();
     }
     init();
-    setInterval(async()=>{await fetchStatus();if(!dirty)await fetchRules();},POLL);
-    setInterval(fetchStats,2000);
-    setInterval(()=>{if(activeTab==='proc')fetchProcesses();},6000);
-    setInterval(()=>{if(activeTab==='main')fetchConnections();},4000);
+    // Polling с учётом видимости вкладки:
+    // если вкладка браузера скрыта — прекращаем polling чтобы не тратить ресурсы.
+    function isVisible() { return !document.hidden; }
+
+    setInterval(async()=>{
+        if(!isVisible()) return;
+        await fetchStatus();
+        if(!dirty) await fetchRules();
+    }, POLL);
+    setInterval(()=>{ if(isVisible()) fetchStats(); }, 3000);
+    setInterval(()=>{ if(isVisible() && activeTab==='proc') fetchProcesses(); }, 8000);
+    setInterval(()=>{ if(isVisible() && activeTab==='main') fetchConnections(); }, 5000);
+
+    // При возврате на вкладку — немедленно обновляем данные.
+    document.addEventListener('visibilitychange', ()=>{
+        if(!document.hidden){ fetchStatus(); fetchStats(); }
+    });
 </script>
 </body>
 </html>

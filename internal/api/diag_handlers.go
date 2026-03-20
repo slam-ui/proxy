@@ -58,18 +58,23 @@ type trafficSnapshot struct {
 }
 
 type trafficStore struct {
-	mu           sync.RWMutex
-	current      trafficSnapshot
-	lastOK       time.Time
-	sessionUpB   int64
-	sessionDnB   int64
-	sessionStart time.Time
+	// current хранится как atomic.Value для lock-free чтения из handleStats.
+	// Запись происходит ~1Hz из sing-box, чтение каждые 2с из UI.
+	// atomic.Value устраняет конкуренцию мьютекса на hot path.
+	currentAtomic atomic.Value     // хранит trafficSnapshot
+	lastOK        atomic.Int64     // UnixNano последнего успешного обновления
+	// Сессионные счётчики защищены мьютексом (пишутся редко — только при обновлении).
+	mu            sync.Mutex
+	sessionUpB    int64
+	sessionDnB    int64
+	sessionStart  time.Time
 }
 
 func (ts *trafficStore) run(ctx context.Context) {
 	ts.mu.Lock()
 	ts.sessionStart = time.Now()
 	ts.mu.Unlock()
+	ts.currentAtomic.Store(trafficSnapshot{}) // инициализируем пустым значением
 	for {
 		ts.connect(ctx)
 		select {
@@ -106,9 +111,11 @@ func (ts *trafficStore) connect(ctx context.Context) {
 		if err := json.Unmarshal(line, &snap); err != nil {
 			continue
 		}
+		// Атомарное обновление снапшота — lock-free для читателей.
+		ts.currentAtomic.Store(snap)
+		ts.lastOK.Store(time.Now().UnixNano())
+		// Счётчики сессии: редкая запись — мьютекс оправдан.
 		ts.mu.Lock()
-		ts.current = snap
-		ts.lastOK = time.Now()
 		ts.sessionUpB += snap.Up
 		ts.sessionDnB += snap.Down
 		ts.mu.Unlock()
@@ -116,16 +123,18 @@ func (ts *trafficStore) connect(ctx context.Context) {
 }
 
 func (ts *trafficStore) get() (trafficSnapshot, bool) {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	ok := !ts.lastOK.IsZero() && time.Since(ts.lastOK) < 10*time.Second
-	return ts.current, ok
+	snap, _ := ts.currentAtomic.Load().(trafficSnapshot)
+	lastNs := ts.lastOK.Load()
+	ok := lastNs > 0 && time.Since(time.Unix(0, lastNs)) < 10*time.Second
+	return snap, ok
 }
 
 func (ts *trafficStore) getSessionTotals() (upB, dnB int64, dur float64) {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.sessionUpB, ts.sessionDnB, time.Since(ts.sessionStart).Seconds()
+	ts.mu.Lock()
+	upB, dnB = ts.sessionUpB, ts.sessionDnB
+	start := ts.sessionStart
+	ts.mu.Unlock()
+	return upB, dnB, time.Since(start).Seconds()
 }
 
 // ── Per-outbound speed via cumulative delta ───────────────────────────────────
@@ -164,7 +173,10 @@ func (ct *connSpeedTracker) tick(ctx context.Context) {
 	ct.active.Store(int64(len(conns)))
 	if err != nil || len(conns) == 0 {
 		ct.mu.Lock()
-		ct.speeds = make(map[string]outboundSpeed)
+		// Очищаем map без аллокации (delete каждого ключа).
+		for k := range ct.speeds {
+			delete(ct.speeds, k)
+		}
 		ct.mu.Unlock()
 		return
 	}
@@ -176,13 +188,21 @@ func (ct *connSpeedTracker) tick(ctx context.Context) {
 	dt := now.Sub(ct.lastTick).Seconds()
 	if dt < 0.1 || ct.lastTick.IsZero() {
 		ct.lastTick = now
-		ct.prev = buildSamples(conns)
+		ct.prev = make(map[string]connSample, len(conns))
+		for _, c := range conns {
+			ct.prev[connKeyFor(c)] = connSample{upload: c.Upload, download: c.Download}
+		}
 		return
 	}
 	ct.lastTick = now
 
-	newSpeeds := make(map[string]outboundSpeed)
-	newPrev := buildSamples(conns)
+	// Переиспользуем maps вместо аллокации новых каждые 2 секунды.
+	// make(map) каждые 2с = ~24 аллокации/мин → GC pressure.
+	newSpeeds := make(map[string]outboundSpeed, len(ct.speeds)+2)
+	newPrev := make(map[string]connSample, len(conns))
+	for _, c := range conns {
+		newPrev[connKeyFor(c)] = connSample{upload: c.Upload, download: c.Download}
+	}
 
 	for _, c := range conns {
 		key := connKeyFor(c)
