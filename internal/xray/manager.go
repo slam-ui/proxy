@@ -2,6 +2,7 @@ package xray
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -29,19 +30,26 @@ type Config struct {
 	OnCrash func(err error)
 	// BeforeRestart вызывается перед каждым запуском sing-box (Start/doStart).
 	// Используется для wintun cleanup без импорта wintun в api пакет.
+	// ctx позволяет прервать ожидание при выходе из приложения.
 	// nil = ничего не делать (default, достаточно для тестов).
-	BeforeRestart func(log logger.Logger) error
+	BeforeRestart func(ctx context.Context, log logger.Logger) error
 }
 
 // Manager интерфейс для управления процессом
 type Manager interface {
 	Start() error
+	// StartAfterManualCleanup запускает sing-box пропуская BeforeRestart.
+	// Используется когда вызывающая сторона уже выполнила wintun cleanup сама
+	// (например handleCrash) — избегает двойного PollUntilFree.
+	StartAfterManualCleanup() error
 	Stop() error
 	IsRunning() bool
 	GetPID() int
 	Wait() error
 	// LastOutput возвращает последние N байт stderr sing-box.
 	LastOutput() string
+	// Uptime возвращает время работы процесса. Ноль если не запущен.
+	Uptime() time.Duration
 }
 
 // ── tailWriter ────────────────────────────────────────────────────────────────
@@ -124,27 +132,33 @@ func (ct *crashTracker) Reset() {
 // ── manager ───────────────────────────────────────────────────────────────────
 
 type manager struct {
-	cmd        *exec.Cmd
-	config     Config
-	logger     logger.Logger
-	mu         sync.RWMutex
-	done       chan struct{} // закрывается когда процесс завершился
-	stopped    bool          // true если Stop() уже был вызван
-	tail       *tailWriter   // последние 32KB stderr для диагностики краша
-	crashes    crashTracker  // rate limiter для авторестартов (как в nekoray)
-	firstStart bool          // true для первого старта — BeforeRestart не вызывается
+	cmd          *exec.Cmd
+	config       Config
+	logger       logger.Logger
+	mu           sync.RWMutex
+	done         chan struct{} // закрывается когда процесс завершился
+	stopped      bool          // true если Stop() уже был вызван
+	tail         *tailWriter   // последние 32KB stderr для диагностики краша
+	crashes      crashTracker  // rate limiter для авторестартов (как в nekoray)
+	firstStart   bool          // true для первого старта — BeforeRestart не вызывается
+	lifecycleCtx context.Context // отменяется при Shutdown — прерывает PollUntilFree
+	startedAt     time.Time      // время последнего успешного запуска процесса
 }
 
-func NewManager(cfg Config) (Manager, error) {
+func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, fmt.Errorf("невалидная конфигурация: %w", err)
 	}
+	if lifecycleCtx == nil {
+		lifecycleCtx = context.Background()
+	}
 
 	m := &manager{
-		config:     cfg,
-		logger:     cfg.Logger,
-		done:       make(chan struct{}),
-		firstStart: true, // первый старт — BeforeRestart пропускается
+		config:       cfg,
+		logger:       cfg.Logger,
+		done:         make(chan struct{}),
+		firstStart:   true,
+		lifecycleCtx: lifecycleCtx,
 	}
 
 	if err := m.doStart(); err != nil {
@@ -186,6 +200,26 @@ func (m *manager) Start() error {
 	m.mu.Unlock()
 	m.crashes.Reset() // успешный старт — сбрасываем счётчик крашей
 	return m.doStart()
+}
+
+// StartAfterManualCleanup запускает sing-box без вызова BeforeRestart.
+// Вызывать когда cleanup уже выполнен внешним кодом (handleCrash).
+func (m *manager) StartAfterManualCleanup() error {
+	m.mu.Lock()
+	m.done = make(chan struct{})
+	m.stopped = false
+	prevFirst := m.firstStart
+	m.firstStart = true // пропускаем BeforeRestart на этот раз
+	m.mu.Unlock()
+	m.crashes.Reset()
+	err := m.doStart()
+	if err != nil {
+		// восстанавливаем значение если старт не удался
+		m.mu.Lock()
+		m.firstStart = prevFirst
+		m.mu.Unlock()
+	}
+	return err
 }
 
 func (m *manager) doStart() error {
@@ -244,7 +278,7 @@ func (m *manager) doStart() error {
 	// стартовый wintun cleanup уже выполнен в startBackground/PollUntilFree.
 	// При повторных стартах (Start() после краша) — выполняется всегда.
 	if m.config.BeforeRestart != nil && !m.firstStart {
-		if err := m.config.BeforeRestart(m.logger); err != nil {
+		if err := m.config.BeforeRestart(m.lifecycleCtx, m.logger); err != nil {
 			return fmt.Errorf("BeforeRestart: %w", err)
 		}
 	}
@@ -255,6 +289,7 @@ func (m *manager) doStart() error {
 
 	m.cmd = cmd
 	m.tail = tailBuf
+	m.startedAt = time.Now()
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
 	// BUG FIX: передаём cmd и done как локальные переменные в monitor().
@@ -353,6 +388,15 @@ func (m *manager) Stop() error {
 	<-doneCh
 	m.logger.Info("Процесс XRay принудительно остановлен")
 	return nil
+}
+
+func (m *manager) Uptime() time.Duration {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(m.startedAt)
 }
 
 func (m *manager) LastOutput() string {

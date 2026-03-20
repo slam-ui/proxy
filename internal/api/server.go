@@ -42,13 +42,19 @@ type Config struct {
 
 // Server HTTP API сервер
 type Server struct {
-	config     Config
-	configMu   sync.RWMutex // защищает изменяемые поля config (XRayManager)
-	proxyOpMu  sync.Mutex   // сериализует check+act операции над прокси (устраняет TOCTOU)
-	router     *mux.Router
-	httpServer *http.Server
-	logger     logger.Logger
-	quitOnce   sync.Once // гарантирует однократное закрытие QuitChan (защита от двойного POST /api/quit)
+	config          Config
+	configMu        sync.RWMutex // защищает изменяемые поля config (XRayManager)
+	proxyOpMu       sync.Mutex   // сериализует check+act операции над прокси (устраняет TOCTOU)
+	router          *mux.Router
+	httpServer      *http.Server
+	logger          logger.Logger
+	quitOnce        sync.Once    // гарантирует однократное закрытие QuitChan (защита от двойного POST /api/quit)
+	lifecycleCtx    context.Context // отменяется при Shutdown — прерывает PollUntilFree в tun_handlers
+	// restarting: true когда sing-box упал и идёт wintun cleanup + ожидание gap.
+	// Позволяет UI показать countdown вместо "не запущен".
+	restarting       bool
+	restartReadyAt   time.Time
+	restartMu        sync.RWMutex
 }
 
 // StatusResponse ответ для /api/status
@@ -82,11 +88,15 @@ type MessageResponse struct {
 // NewServer создаёт новый API сервер.
 // XRayManager в cfg может быть nil — это нормально при "фоновом старте":
 // UI поднимается сразу, sing-box стартует позже и обновляет менеджер через SetXRayManager.
-func NewServer(cfg Config) *Server {
+func NewServer(cfg Config, lifecycleCtx context.Context) *Server {
+	if lifecycleCtx == nil {
+		lifecycleCtx = context.Background()
+	}
 	s := &Server{
-		config: cfg,
-		logger: cfg.Logger,
-		router: mux.NewRouter(),
+		config:       cfg,
+		logger:       cfg.Logger,
+		router:       mux.NewRouter(),
+		lifecycleCtx: lifecycleCtx,
 	}
 	s.setupRoutes()
 	return s
@@ -201,6 +211,23 @@ func (s *Server) IsWarming() bool {
 	return s.config.XRayManager == nil
 }
 
+// SetRestarting помечает что идёт перезапуск после краша и задаёт ETA готовности.
+// Вызывается из handleCrash перед PollUntilFree.
+func (s *Server) SetRestarting(readyAt time.Time) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	s.restarting = true
+	s.restartReadyAt = readyAt
+}
+
+// ClearRestarting сбрасывает флаг перезапуска — вызывается после успешного старта.
+func (s *Server) ClearRestarting() {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	s.restarting = false
+	s.restartReadyAt = time.Time{}
+}
+
 // handleStatus GET /api/status
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	proxyConfig := s.config.ProxyManager.GetConfig()
@@ -213,13 +240,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		ConfigPath: s.config.ConfigPath,
 	}
 
+	s.restartMu.RLock()
+	restarting := s.restarting
+	restartReadyAt := s.restartReadyAt
+	s.restartMu.RUnlock()
+
 	if xrayMgr == nil {
 		// Фоновая инициализация ещё не завершена — сообщаем UI о прогреве.
-		// Вычисляем ETA на основе StopFile + адаптивного gap + settle delay.
 		response.XRay.Running = false
 		response.XRay.Warming = true
 		if eta := wintun.EstimateReadyAt(); eta.After(time.Now()) {
 			response.XRay.ReadyAt = eta.Unix()
+		}
+	} else if restarting {
+		// Sing-box упал, идёт wintun cleanup — показываем countdown.
+		response.XRay.Running = false
+		response.XRay.Warming = true
+		if restartReadyAt.After(time.Now()) {
+			response.XRay.ReadyAt = restartReadyAt.Unix()
 		}
 	} else {
 		response.XRay.Running = xrayMgr.IsRunning()

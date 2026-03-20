@@ -13,7 +13,7 @@ import (
 
 func TestBuildRoute_DefaultProxy(t *testing.T) {
 	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 	if route.Final != "proxy-out" {
 		t.Errorf("Final = %q, want proxy-out", route.Final)
 	}
@@ -21,7 +21,7 @@ func TestBuildRoute_DefaultProxy(t *testing.T) {
 
 func TestBuildRoute_DefaultDirect(t *testing.T) {
 	cfg := &RoutingConfig{DefaultAction: ActionDirect, Rules: []RoutingRule{}}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 	if route.Final != "direct" {
 		t.Errorf("Final = %q, want direct", route.Final)
 	}
@@ -29,7 +29,7 @@ func TestBuildRoute_DefaultDirect(t *testing.T) {
 
 func TestBuildRoute_DefaultBlock(t *testing.T) {
 	cfg := &RoutingConfig{DefaultAction: ActionBlock, Rules: []RoutingRule{}}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 	if route.Final != "block" {
 		t.Errorf("Final = %q, want block", route.Final)
 	}
@@ -44,7 +44,7 @@ func TestBuildRoute_DomainGoesToCorrectOutbound(t *testing.T) {
 			{Value: "ads.com", Type: RuleTypeDomain, Action: ActionBlock},
 		},
 	}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 
 	// Проверяем что у нас есть правила для каждого outbound
 	outbounds := map[string]bool{}
@@ -73,7 +73,7 @@ func TestBuildRoute_ProcessRule(t *testing.T) {
 			{Value: "chrome.exe", Type: RuleTypeProcess, Action: ActionProxy},
 		},
 	}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 
 	var found bool
 	for _, r := range route.Rules {
@@ -97,7 +97,7 @@ func TestBuildRoute_IPCIDRRule(t *testing.T) {
 			{Value: "10.0.0.0/8", Type: RuleTypeIP, Action: ActionProxy},
 		},
 	}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 
 	var found bool
 	for _, r := range route.Rules {
@@ -113,18 +113,17 @@ func TestBuildRoute_IPCIDRRule(t *testing.T) {
 }
 
 func TestBuildRoute_AutoDetectInterface(t *testing.T) {
-	route := buildRoute(DefaultRoutingConfig())
-	// AutoDetectInterface=false: при StrictRoute=true автодетект интерфейса не нужен —
-	// весь трафик идёт через TUN и маршруты уже известны. Отключение убирает
-	// лишний syscall при каждом новом соединении.
-	if route.AutoDetectInterface {
-		t.Error("AutoDetectInterface должен быть false (StrictRoute=true делает его избыточным)")
+	route := buildRoute(DefaultRoutingConfig(), "1.2.3.4")
+	// AutoDetectInterface=true: обязателен при auto_route=true.
+	// Без этого direct-трафик уходит обратно в TUN вместо физического интерфейса → петля.
+	if !route.AutoDetectInterface {
+		t.Error("AutoDetectInterface должен быть true при auto_route=true")
 	}
 }
 
 func TestBuildRoute_EmptyRules_NoRuleSetGenerated(t *testing.T) {
 	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 	if len(route.RuleSet) != 0 {
 		t.Errorf("RuleSet должен быть пустым при отсутствии geosite правил, got %d", len(route.RuleSet))
 	}
@@ -300,7 +299,7 @@ func TestBuildRoute_PrivateIPBypass_AlwaysDirect(t *testing.T) {
 	// Even with default=proxy and no explicit rules,
 	// private IP ranges must have a direct rule.
 	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 
 	// Collect all IPCIDR entries that go to "direct"
 	var directCIDRs []string
@@ -334,7 +333,7 @@ func TestBuildRoute_PrivateIPBypass_BeforeUserRules(t *testing.T) {
 			{Value: "youtube.com", Type: RuleTypeDomain, Action: ActionProxy},
 		},
 	}
-	route := buildRoute(cfg)
+	route := buildRoute(cfg, "1.2.3.4")
 
 	// First non-DNS rule should be the private IP bypass
 	firstReal := -1

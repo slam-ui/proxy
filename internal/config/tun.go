@@ -62,7 +62,22 @@ func LoadRoutingConfig(path string) (*RoutingConfig, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("неверный формат routing config: %w", err)
 	}
+	SanitizeRoutingConfig(&cfg)
 	return &cfg, nil
+}
+
+// SanitizeRoutingConfig исправляет неверно классифицированные правила.
+// Защита от ситуации когда UI или ручное редактирование сохраняет
+// process-имя (например "Spotify.exe") с type="geosite" →
+// генератор пытается найти data/geosite-Spotify.exe.bin → ошибка → старый конфиг.
+func SanitizeRoutingConfig(cfg *RoutingConfig) {
+	for i := range cfg.Rules {
+		rule := &cfg.Rules[i]
+		detected := DetectRuleType(rule.Value)
+		if rule.Type == RuleTypeGeosite && detected == RuleTypeProcess {
+			rule.Type = RuleTypeProcess
+		}
+	}
 }
 
 // SaveRoutingConfig атомарно сохраняет конфиг: пишет во временный файл,

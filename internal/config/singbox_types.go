@@ -51,6 +51,10 @@ type SBInbound struct {
 	AutoRoute                bool     `json:"auto_route,omitempty"`
 	StrictRoute              bool     `json:"strict_route,omitempty"`
 	Stack                    string   `json:"stack,omitempty"`
+	// RouteExcludeAddress — IP-адреса которые TUN-драйвер НЕ перехватывает.
+	// Критично: без этого sing-box перехватывает собственные соединения к прокси-серверу
+	// → routing loop (тысячи соединений по 500-600 байт на один IP).
+	RouteExcludeAddress      []string `json:"route_exclude_address,omitempty"`
 }
 
 // SBMultiplex конфигурация мультиплексирования соединений.
@@ -103,7 +107,18 @@ type SBRuleSet struct {
 // SBExperimental включает Clash-совместимый API для статистики трафика и соединений.
 // Доступен на 127.0.0.1:9090 — используется нашим бэкендом для /api/stats и /api/connections.
 type SBExperimental struct {
-	ClashAPI SBClashAPI `json:"clash_api"`
+	ClashAPI  SBClashAPI  `json:"clash_api"`
+	// CacheFile — персистентный кэш DNS между перезапусками sing-box.
+	// Устраняет cold DNS lookup (~50-200мс) на первых запросах после рестарта.
+	CacheFile *SBCacheFile `json:"cache_file,omitempty"`
+}
+
+// SBCacheFile включает персистентный кэш DNS (sing-box experimental).
+type SBCacheFile struct {
+	Enabled   bool   `json:"enabled"`
+	Path      string `json:"path,omitempty"`
+	CacheID   string `json:"cache_id,omitempty"`
+	StoreFakeIP bool  `json:"store_fakeip,omitempty"`
 }
 
 type SBClashAPI struct {

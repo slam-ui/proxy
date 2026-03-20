@@ -66,6 +66,14 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				ExternalController: ClashAPIAddr,
 				Secret:             "",
 			},
+			// CacheFile: персистентный DNS кэш между перезапусками.
+			// При рестарте sing-box не делает холодные DNS запросы —
+			// отвечает из кэша пока резолвит в фоне. Ускоряет первые
+			// соединения после перезапуска на 50-200мс.
+			CacheFile: &SBCacheFile{
+				Enabled: true,
+				Path:    DataDir + "/dns_cache.db",
+			},
 		},
 		DNS: SBDNS{
 			Servers: []SBDNSServer{
@@ -93,7 +101,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				Sniff:                    true,
 				SniffOverrideDestination: true,
 			},
-			buildTUN(),
+			buildTUN(params.Address),
 		},
 		Outbounds: []SBOutbound{
 			buildVLESSOutbound(params),
@@ -103,7 +111,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 			// но явный outbound обязателен когда final = "block").
 			{Type: "block", Tag: "block"},
 		},
-		Route: buildRoute(routingCfg),
+		Route: buildRoute(routingCfg, params.Address),
 	}
 
 	// Проверяем что все geosite .bin файлы существуют до записи конфига.
@@ -127,7 +135,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 	return nil
 }
 
-func buildTUN() SBInbound {
+func buildTUN(serverAddr string) SBInbound {
 	return SBInbound{
 		Type:          "tun",
 		Tag:           "tun-in",
@@ -145,11 +153,16 @@ func buildTUN() SBInbound {
 		// mixed = gVisor для UDP + system для TCP. system быстрее для большинства трафика
 		// так как нет overhead пользовательского TCP стека. Рекомендация sing-box docs.
 		Stack:         "system",
-		// Sniff=false на TUN: снифинг добавляет задержку (~1-2мс) к каждому соединению
-		// пока sing-box читает первые байты для определения протокола.
-		// TUN работает на сетевом уровне — информация о домене уже есть из DNS.
-		// Sniff нужен только на HTTP inbound для override destination.
-		Sniff:         false,
+		// Sniff=true на TUN: обязателен для работы правила protocol: dns → hijack-dns.
+		// Без sniff sing-box не определяет протокол DNS и правило не срабатывает —
+		// DNS-запросы svchost/Windows падают в final: direct и уходят на 172.20.0.2 в никуда.
+		Sniff:         true,
+		// RouteExcludeAddress: только IP прокси-сервера.
+		// TUN подсеть (172.20.0.0/30) НЕ исключаем — иначе Windows DNS Client (svchost)
+		// не получает ответы на DNS запросы к TUN-адресу → бесконечные ретраи.
+		// Собственный трафик sing-box (включая его DNS) корректно выходит через
+		// физический интерфейс благодаря auto_detect_interface: true.
+		RouteExcludeAddress: []string{serverAddr + "/32"},
 	}
 }
 
@@ -167,12 +180,14 @@ var privateIPRanges = []string{
 	"fe80::/10",      // IPv6 link-local
 }
 
-func buildRoute(routingCfg *RoutingConfig) SBRoute {
+func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
+	directCIDR := append(append([]string{}, privateIPRanges...), serverAddr+"/32")
 	rules := []SBRouteRule{
 		{Protocol: "dns", Action: "hijack-dns"},
-		// Локальные адреса всегда напрямую — LAN, loopback, link-local.
-		// Это стандарт во всех proxy-клиентах (Clash Verge, Hiddify, Mihomo Party).
-		{IPCIDR: privateIPRanges, Outbound: "direct"},
+		// Локальные адреса и IP прокси-сервера всегда напрямую.
+		// serverAddr исключён явно: TUN с auto_route перехватывает весь трафик включая
+		// собственные соединения sing-box к серверу → routing loop без этого правила.
+		{IPCIDR: directCIDR, Outbound: "direct"},
 	}
 
 	var proxyProcs, directProcs, blockProcs []string
@@ -314,11 +329,11 @@ func buildRoute(routingCfg *RoutingConfig) SBRoute {
 		Rules:                 rules,
 		RuleSet:               ruleSets,
 		Final:                 final,
-		// AutoDetectInterface: false — убираем автодетект.
-		// Автодетект делает syscall при каждом новом соединении для определения
-		// исходящего интерфейса. При StrictRoute=true это не нужно — весь трафик
-		// идёт через TUN интерфейс который уже знает маршруты.
-		AutoDetectInterface:   false,
+		// AutoDetectInterface: true — обязателен при auto_route=true.
+		// Без этого sing-box не знает какой физический интерфейс использовать для
+		// direct-трафика и отправляет его обратно в TUN → routing loop на 172.20.0.2.
+		// Производительность: syscall при новом соединении незначителен по сравнению с петлёй.
+		AutoDetectInterface:   true,
 		DefaultDomainResolver: "direct-dns",
 	}
 }

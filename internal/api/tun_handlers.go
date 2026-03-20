@@ -397,7 +397,7 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	// Инъектируется через xray.Config.BeforeRestart из main.go —
 	// api пакет больше не зависит от wintun напрямую.
 	if h.xrayConfig.BeforeRestart != nil {
-		if err := h.xrayConfig.BeforeRestart(h.server.logger); err != nil {
+		if err := h.xrayConfig.BeforeRestart(h.server.lifecycleCtx, h.server.logger); err != nil {
 			h.server.logger.Warn("BeforeRestart вернул ошибку: %v", err)
 		}
 	}
@@ -432,7 +432,7 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 			h.xrayConfig.OnCrash(crashErr)
 		}
 	}
-	newManager, err := xray.NewManager(patchedCfg)
+	newManager, err := xray.NewManager(patchedCfg, h.server.lifecycleCtx)
 	if err != nil {
 		h.server.logger.Error("Не удалось запустить sing-box: %v", err)
 		setErr(err.Error())

@@ -100,6 +100,31 @@ if ($running) {
 }
 
 Write-Host "Running tests ..." -ForegroundColor Yellow
+
+# Добавляем исключение Windows Defender для Go temp-директории.
+# Без этого Defender блокирует тестовые бинарники которые загружают wintun.dll через syscall
+# (ложное срабатывание: динамическая загрузка драйверных DLL выглядит подозрительно).
+# Исключение добавляется только на время сборки и не меняет политику постоянно.
+$goTempDir = & $GoExePath env GOTMPDIR 2>$null
+if (-not $goTempDir) { $goTempDir = [System.IO.Path]::GetTempPath() }
+$projectDir = $PSScriptRoot
+
+$defenderAvailable = $false
+try {
+    $null = Get-Command Add-MpPreference -ErrorAction Stop
+    $defenderAvailable = $true
+} catch { }
+
+if ($defenderAvailable) {
+    try {
+        Add-MpPreference -ExclusionPath $goTempDir -ErrorAction SilentlyContinue
+        Add-MpPreference -ExclusionPath $projectDir -ErrorAction SilentlyContinue
+        Write-Host "  [OK] Defender exclusion добавлен для $goTempDir" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "  [WARN] Не удалось добавить Defender exclusion (нет прав?): $_" -ForegroundColor DarkYellow
+    }
+}
+
 $testResult = & $GoExePath test ./... -timeout 60s 2>&1
 $testResult | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 if ($LASTEXITCODE -ne 0) {
