@@ -49,14 +49,21 @@ Write-Banner "proxy-client build"
 
 # Admin check
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-    [Security.Principal.WindowsBuiltInRole]::Administrator)
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+
 if (-not $isAdmin) {
     Write-Step "Requesting Administrator rights..."
-    $argList = @("-NoExit","-NoProfile","-ExecutionPolicy","Bypass","-File",$MyInvocation.MyCommand.Path,"-GoExePath",$GoExePath)
+
+    # Используем $PSCommandPath (более надежно) и фильтруем пустые значения
+    $argList = @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
+
+    # Добавляем параметры только если они переданы
+    if ($GoExePath) { $argList += @("-GoExePath", "`"$GoExePath`"") }
     if ($Release)   { $argList += "-Release"   }
     if ($Clean)     { $argList += "-Clean"     }
     if ($NoGui)     { $argList += "-NoGui"     }
     if ($SkipTests) { $argList += "-SkipTests" }
+
     Start-Process powershell -Verb RunAs -ArgumentList $argList
     exit 0
 }
