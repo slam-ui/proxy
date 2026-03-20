@@ -45,6 +45,7 @@ type Server struct {
 	router     *mux.Router
 	httpServer *http.Server
 	logger     logger.Logger
+	quitOnce   sync.Once // гарантирует однократное закрытие QuitChan (защита от двойного POST /api/quit)
 }
 
 // StatusResponse ответ для /api/status
@@ -151,6 +152,14 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // Shutdown корректно останавливает сервер
+// GetXRayManager возвращает актуальный XRayManager (обновляется после doApply).
+// Используется в OnCrash в main.go чтобы не держать ссылку на старый менеджер.
+func (s *Server) GetXRayManager() xray.Manager {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.config.XRayManager
+}
+
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer == nil {
 		return nil
@@ -256,14 +265,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleQuit(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "shutting down", Success: true})
 	if s.config.QuitChan != nil {
-		// Закрываем в отдельной горутине: сначала нужно отправить ответ клиенту
+		// BUG FIX: sync.Once гарантирует однократное закрытие.
+		// Два одновременных POST /api/quit без Once → оба проходят select → PANIC: close of closed channel.
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			select {
-			case <-s.config.QuitChan: // already closed
-			default:
-				close(s.config.QuitChan)
-			}
+			s.quitOnce.Do(func() { close(s.config.QuitChan) })
 		}()
 	}
 }

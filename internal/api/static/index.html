@@ -24,7 +24,7 @@
         .bg-glow.off{background:radial-gradient(ellipse 80% 40% at 50% 0%,rgba(255,61,87,.04) 0%,transparent 70%)}
 
         /* ── App shell ─── */
-        .app{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;max-width:520px;margin:0 auto}
+        .app{position:relative;z-index:1;display:flex;flex-direction:column;height:100vh;width:100%;max-width:560px;margin:0 auto}
 
         /* ── Top bar ─── */
         .topbar{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;cursor:default}
@@ -41,7 +41,7 @@
         .slabel{font-size:13px;font-weight:800;letter-spacing:.1em;transition:color .3s}
         .slabel.on{color:var(--on)}.slabel.off{color:var(--off)}.slabel.pend{color:var(--pending)}
         .smeta{font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .topbar-actions{display:flex;gap:6px}
+        .topbar-actions{display:flex;gap:6px;flex-shrink:0}
         .tbtn-sm{background:none;border:1px solid var(--border);border-radius:3px;padding:4px 10px;font-size:11px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'JetBrains Mono',monospace}
         .tbtn-sm.on-btn{border-color:rgba(0,230,118,.3);color:var(--on)}
         .tbtn-sm.on-btn:hover{background:rgba(0,230,118,.08)}
@@ -63,7 +63,7 @@
         .stats-strip{display:flex;flex-direction:column;background:var(--surface2);border-bottom:1px solid var(--border);flex-shrink:0;font-family:'JetBrains Mono',monospace;cursor:default}
         .ss-row{display:flex;align-items:center;padding:4px 14px;gap:0}
         .ss-row+.ss-row{border-top:1px solid var(--border);padding-top:3px;padding-bottom:3px}
-        .sc{display:flex;flex-direction:column;gap:1px;flex:1;min-width:0}
+        .sc{display:flex;flex-direction:column;gap:1px;flex:1;min-width:60px}
         .sc-lbl{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
         .sc-vals{display:flex;gap:4px;align-items:baseline}
         .sc-up{font-size:11px;font-weight:700;color:#7c6cff;font-family:'JetBrains Mono',monospace}
@@ -83,17 +83,19 @@
         .tab-badge{position:absolute;top:5px;right:6px;background:var(--accent);color:#fff;font-size:8px;border-radius:8px;padding:1px 5px;line-height:14px}
 
         /* ── Tab content ─── */
-        .tab-content{flex:1;overflow-y:auto;overflow-x:hidden;display:none}
-        .tab-content.active{display:block}
+        .tab-content{flex:1;overflow-x:hidden;display:none;flex-direction:column}
+        .tab-content.active{display:flex}
+        #tc-main.active,#tc-settings.active{overflow-y:auto}
         .tab-content::-webkit-scrollbar{width:3px}
         .tab-content::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
         .tab-content{scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
 
         /* ── Section ─── */
         .section{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 14px}
-        .section+.section{border-top:none}
+        .section+.section{margin-top:-1px}
         .sec-title{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted2);text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px}
         .sec-dot{width:5px;height:5px;border-radius:50%;background:var(--accent)}
+        .sec-dot-ok{background:var(--on)}
 
         /* ── Default action ─── */
         .def-row{display:flex;gap:6px}
@@ -102,7 +104,7 @@
         .def-btn.ad{background:rgba(124,108,255,.08);border-color:rgba(124,108,255,.3);color:var(--accent)}
 
         /* ── Rules ─── */
-        .add-form{padding:10px 14px 0;background:var(--surface)}
+        .add-form{padding:10px 14px 0;background:var(--surface);flex-shrink:0}
         .type-row{display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap}
         .tbtn{padding:3px 9px;border-radius:3px;border:1px solid var(--border);background:none;font-size:11px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'JetBrains Mono',monospace}
         .tbtn.tsel{border-color:var(--accent);color:var(--accent);background:rgba(124,108,255,.08)}
@@ -119,14 +121,14 @@
         .sel{background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:6px 8px;font-size:11px;color:var(--text);outline:none;cursor:pointer}
         .add-btn{background:rgba(124,108,255,.12);border:1px solid rgba(124,108,255,.3);border-radius:3px;padding:6px 12px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap;transition:all .15s}
         .add-btn:hover{background:rgba(124,108,255,.2)}
-        .fbar{display:flex;gap:4px;flex-wrap:wrap;padding:6px 14px;background:var(--surface2);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+        .fbar{display:flex;gap:4px;flex-wrap:wrap;padding:6px 14px;background:var(--surface2);border-top:1px solid var(--border);border-bottom:1px solid var(--border);flex-shrink:0}
         .fbtn{padding:3px 9px;border-radius:3px;border:1px solid transparent;background:none;font-size:11px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'JetBrains Mono',monospace}
         .fbtn.fa{color:var(--text)}.fbtn.fp{border-color:rgba(0,230,118,.3);color:var(--on)}.fbtn.fd{border-color:rgba(124,108,255,.3);color:var(--accent)}
         .fbtn.fb{border-color:rgba(255,107,53,.3);color:var(--block)}.fbtn.fproc,.fbtn.fdom,.fbtn.fip,.fbtn.fgeo{border-color:var(--border2);color:var(--text)}
-        .rule-search{width:100%;background:var(--input-bg);border:none;border-bottom:1px solid var(--border);padding:7px 14px;font-size:12px;color:var(--text);font-family:'JetBrains Mono',monospace;outline:none}
+        .rule-search{width:100%;background:var(--input-bg);border:none;border-bottom:1px solid var(--border);padding:7px 14px;font-size:12px;color:var(--text);font-family:'JetBrains Mono',monospace;outline:none;flex-shrink:0}
         .rule-search::placeholder{color:var(--muted)}
         .rule-search:focus{border-bottom-color:var(--accent)}
-        .rlist{max-height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .rlist{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
         .rlist::-webkit-scrollbar{width:3px}.rlist::-webkit-scrollbar-thumb{background:var(--border2)}
         .ritem{display:flex;align-items:center;padding:5px 14px;gap:7px;border-bottom:1px solid var(--border);transition:background .15s;cursor:grab}
         .ritem:hover{background:rgba(255,255,255,.02)}.ritem.dragging{opacity:.5}.ritem.drag-over{border-top:2px solid var(--accent)}
@@ -142,7 +144,7 @@
         .rdel{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 4px;border-radius:2px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
         .rdel:hover{color:var(--off);background:rgba(255,61,87,.08)}
         .rempty{padding:24px 14px;text-align:center}.rempty-ico{color:var(--muted);margin-bottom:8px}.rempty-t{font-size:12px;color:var(--muted2);margin-bottom:6px}.rempty-h{font-size:10px;color:var(--muted);line-height:1.6}
-        .rfoot{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface2);border-top:1px solid var(--border)}
+        .rfoot{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0}
         .fhint{font-size:10px;color:var(--muted2);font-family:'JetBrains Mono',monospace}
         .apply-btn{display:flex;align-items:center;gap:6px;background:rgba(124,108,255,.1);border:1px solid rgba(124,108,255,.2);border-radius:3px;padding:5px 14px;font-size:11px;color:var(--accent);cursor:pointer;transition:all .2s;font-weight:700;letter-spacing:.04em}
         .apply-btn.dirty{background:rgba(124,108,255,.2);border-color:var(--accent);box-shadow:0 0 10px rgba(124,108,255,.2)}
@@ -151,17 +153,17 @@
         .stats{display:flex;gap:6px}
         .pill{font-size:9px;padding:2px 7px;border-radius:10px;font-family:'JetBrains Mono',monospace}
         .pp{background:rgba(0,230,118,.1);color:var(--on)}.pd{background:rgba(124,108,255,.1);color:var(--accent)}.pb{background:rgba(255,107,53,.1);color:var(--block)}
-        .rules-head{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+        .rules-head{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
         .rtitle{font-size:9px;font-weight:700;letter-spacing:.08em;color:var(--muted2);text-transform:uppercase}
 
         /* ── Process monitor ─── */
-        .proc-toolbar{display:flex;gap:8px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+        .proc-toolbar{display:flex;gap:8px;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
         .proc-search{flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:5px 10px;font-size:12px;color:var(--text);outline:none;font-family:'JetBrains Mono',monospace}
         .proc-search:focus{border-color:var(--accent)}
         .proc-search::placeholder{color:var(--muted)}
         .proc-refresh{background:rgba(124,108,255,.08);border:1px solid rgba(124,108,255,.2);border-radius:3px;padding:5px 12px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap}
-        .proc-fbar{display:flex;gap:4px;padding:6px 14px;background:var(--surface2);border-bottom:1px solid var(--border);flex-wrap:wrap}
-        .proc-list{overflow-y:auto;max-height:calc(100vh - 280px);scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+        .proc-fbar{display:flex;gap:4px;padding:6px 14px;background:var(--surface2);border-bottom:1px solid var(--border);flex-wrap:wrap;flex-shrink:0}
+        .proc-list{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
         .proc-list::-webkit-scrollbar{width:3px}.proc-list::-webkit-scrollbar-thumb{background:var(--border2)}
         .proc-empty{padding:20px;text-align:center;font-size:11px;color:var(--muted)}
         .pgroup-header{display:flex;align-items:center;gap:8px;padding:6px 14px;background:var(--surface);border-bottom:1px solid var(--border);cursor:pointer;font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--muted2);text-transform:uppercase;position:sticky;top:0;z-index:2}
@@ -193,7 +195,7 @@
         .prof-meta{font-size:10px;color:var(--muted)}
         .prof-del{background:none;border:none;color:var(--muted);cursor:pointer;padding:3px 7px;border-radius:2px;font-size:13px;line-height:1}
         .prof-del:hover{color:var(--off);background:rgba(255,61,87,.08)}
-        .prof-save-row{display:flex;gap:8px;padding:10px 14px;background:var(--surface);border-top:1px solid var(--border)}
+        .prof-save-row{display:flex;gap:8px;padding:10px 14px;background:var(--surface);margin-top:8px;border-top:1px solid var(--border2)}
         .prof-inp{flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:3px;padding:7px 10px;font-size:12px;color:var(--text);outline:none;font-family:'JetBrains Mono',monospace}
         .prof-inp:focus{border-color:var(--accent)}
         .prof-save-btn{background:rgba(124,108,255,.12);border:1px solid rgba(124,108,255,.3);border-radius:3px;padding:7px 14px;font-size:11px;color:var(--accent);cursor:pointer;white-space:nowrap;transition:all .15s}
@@ -207,8 +209,13 @@
         .diag-test-btn:disabled{opacity:.4;cursor:not-allowed}
         .diag-result{font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--muted2)}
         .conn-table{width:100%;border-collapse:collapse;font-size:10px;font-family:'JetBrains Mono',monospace}
-        .conn-table th{color:var(--muted);font-weight:400;padding:4px 0;text-align:left;border-bottom:1px solid var(--border);font-size:9px}
-        .conn-table td{color:var(--text);padding:4px 0;border-bottom:1px solid var(--border2);overflow:hidden;text-overflow:ellipsis;max-width:140px;white-space:nowrap}
+        .conn-table th{color:var(--muted);font-weight:400;padding:4px 4px 4px 0;text-align:left;border-bottom:1px solid var(--border);font-size:9px}
+        .conn-table td{color:var(--text);padding:4px 4px 4px 0;border-bottom:1px solid var(--border2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .conn-table th:nth-child(1),.conn-table td:nth-child(1){width:34%;max-width:0}
+        .conn-table th:nth-child(2),.conn-table td:nth-child(2){width:22%;max-width:0}
+        .conn-table th:nth-child(3),.conn-table td:nth-child(3){width:10%;max-width:0}
+        .conn-table th:nth-child(4),.conn-table td:nth-child(4){width:15%;max-width:0}
+        .conn-table th:nth-child(5),.conn-table td:nth-child(5){width:19%;max-width:0;white-space:nowrap;text-align:right}
 
         /* ── Toast ─── */
         .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:8px 18px;font-size:11px;font-family:'JetBrains Mono',monospace;white-space:nowrap;pointer-events:none;opacity:0;transition:all .25s;z-index:999;max-width:90vw;overflow:hidden;text-overflow:ellipsis}
@@ -245,7 +252,7 @@
         .analysis-header-title{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace}
         .analysis-header-count{font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700}
         .analysis-header-toggle{margin-left:auto;font-size:10px;color:var(--muted);transition:transform .2s}
-        .analysis-wrap{border-top:1px solid var(--border)}
+        .analysis-wrap{border-top:1px solid var(--border);flex-shrink:0}
         .analysis-wrap.collapsed .analysis-bar{display:none}
         #anlBtn{font-size:9px;padding:2px 8px;opacity:.8;position:relative}
         #anlBadge{position:absolute;top:-4px;right:-4px;width:14px;height:14px;border-radius:50%;font-size:8px;font-weight:700;display:none;align-items:center;justify-content:center;background:var(--off);color:#fff}
@@ -297,19 +304,17 @@
             </div>
         </div>
         <!-- Row 2: session totals + IP + test -->
-        <div class="ss-row">
-            <div class="sc" style="flex:none;min-width:0">
-                <span class="sc-lbl">сессия ↑</span>
-                <span class="sc-up" id="sessUp" style="font-size:10px">0B</span>
-            </div>
-            <div class="ss-sep"></div>
-            <div class="sc" style="flex:none;min-width:0">
-                <span class="sc-lbl">сессия ↓</span>
-                <span class="sc-dn" id="sessDn" style="font-size:10px">0B</span>
+        <div class="ss-row" style="padding-top:2px;padding-bottom:2px">
+            <div class="sc">
+                <span class="sc-lbl">сессия</span>
+                <div class="sc-vals">
+                    <span class="sc-arr">↑</span><span class="sc-up" id="sessUp" style="font-size:10px">0B</span>
+                    <span class="sc-arr">↓</span><span class="sc-dn" id="sessDn" style="font-size:10px">0B</span>
+                </div>
             </div>
             <div style="flex:1"></div>
             <span class="ss-ip" id="ssIP">—</span>
-            <button class="ss-test" onclick="runDiagTest()" id="ssTestBtn">⚡</button>
+            <button class="ss-test" onclick="runDiagTest()" id="ssTestBtn" style="flex-shrink:0">⚡</button>
         </div>
     </div>
 
@@ -318,7 +323,7 @@
         <div class="tab active" id="tab-main"    onclick="switchTab('main')">Главная</div>
         <div class="tab"        id="tab-rules"   onclick="switchTab('rules')">Правила<span class="tab-badge" id="rulesBadge" style="display:none">0</span></div>
         <div class="tab"        id="tab-proc"    onclick="switchTab('proc')">Процессы<span class="tab-badge" id="procTabBadge" style="display:none">0</span></div>
-        <div class="tab"        id="tab-settings"onclick="switchTab('settings')">Профили</div>
+        <div class="tab"        id="tab-settings"onclick="switchTab('settings')">Настройки</div>
     </div>
 
     <!-- TAB: Главная -->
@@ -335,7 +340,7 @@
                 <span style="display:flex;align-items:center;gap:6px"><div class="sec-dot"></div>Активные соединения</span>
                 <span id="connCount" style="font-size:9px;color:var(--muted);font-family:'JetBrains Mono',monospace">—</span>
             </div>
-            <div style="overflow-x:auto">
+            <div style="overflow-x:auto;margin-top:4px">
                 <table class="conn-table" id="connTable">
                     <thead><tr>
                         <th style="cursor:pointer;user-select:none" onclick="sortConn('host')" id="th_host">хост <span id="si_host"></span></th>
@@ -474,12 +479,10 @@
             </div>
         </div>
         <div class="section" id="diagSection">
-            <div class="sec-title"><div class="sec-dot" style="background:var(--on)"></div>Диагностика</div>
+            <div class="sec-title"><div class="sec-dot sec-dot-ok"></div>Диагностика</div>
             <div class="diag-row">
                 <button class="diag-test-btn" id="diagBtn" onclick="runDiagTest()">⚡ тест соединения</button>
                 <span class="diag-result" id="diagResult">—</span>
-            </div>
-            <div class="diag-row" style="margin-top:6px">
             </div>
             <pre id="debugOutput" style="display:none;margin-top:8px;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:3px;font-size:9px;font-family:'JetBrains Mono',monospace;color:var(--text);overflow-x:auto;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all"></pre>
         </div>

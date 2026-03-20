@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -58,7 +59,14 @@ func (tw *tailWriter) Write(p []byte) (int, error) {
 	defer tw.mu.Unlock()
 	tw.buf = append(tw.buf, p...)
 	if len(tw.buf) > tw.max {
-		tw.buf = tw.buf[len(tw.buf)-tw.max:]
+		// BUG FIX: при обрезке ищем первый перенос строки чтобы не резать строку посередине.
+		// Иначе crash-детектор может не найти "Cannot create a file" если сообщение
+		// оказалось на границе 32KB буфера.
+		trimmed := tw.buf[len(tw.buf)-tw.max:]
+		if idx := bytes.IndexByte(trimmed, '\n'); idx >= 0 {
+			trimmed = trimmed[idx+1:]
+		}
+		tw.buf = trimmed
 	}
 	return len(p), nil
 }
@@ -309,12 +317,15 @@ func (m *manager) Stop() error {
 	pid := m.cmd.Process.Pid
 	proc := m.cmd.Process
 	m.stopped = true
+	// BUG FIX: захватываем done под lock чтобы избежать data race с Start().
+	// Start() заменяет m.done под mu.Lock() — читать m.done нужно тоже под lock.
+	doneCh := m.done
 	m.mu.Unlock()
 
 	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
 
 	select {
-	case <-m.done:
+	case <-doneCh:
 		m.logger.Info("Процесс XRay завершился самостоятельно")
 		return nil
 	case <-time.After(500 * time.Millisecond):
@@ -324,7 +335,7 @@ func (m *manager) Stop() error {
 	if err := proc.Kill(); err != nil {
 		return fmt.Errorf("не удалось остановить процесс: %w", err)
 	}
-	<-m.done
+	<-doneCh
 	m.logger.Info("Процесс XRay принудительно остановлен")
 	return nil
 }
@@ -372,8 +383,10 @@ func (m *manager) Wait() error {
 		m.mu.RUnlock()
 		return fmt.Errorf("процесс не запущен")
 	}
+	// BUG FIX: захватываем done под lock.
+	doneCh := m.done
 	m.mu.RUnlock()
-	<-m.done
+	<-doneCh
 	return nil
 }
 
