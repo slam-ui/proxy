@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	"proxyclient/internal/fileutil"
 )
 
 // RuleType тип правила маршрутизации
@@ -70,14 +72,8 @@ func SaveRoutingConfig(path string, cfg *RoutingConfig) error {
 	if err != nil {
 		return err
 	}
-
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("не удалось записать временный файл: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("не удалось применить конфиг: %w", err)
+	if err := fileutil.WriteAtomic(path, data, 0644); err != nil {
+		return fmt.Errorf("не удалось сохранить routing config: %w", err)
 	}
 	return nil
 }

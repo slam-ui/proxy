@@ -69,10 +69,11 @@ func (l *logger) log(level Level, format string, args ...interface{}) {
 	if level < l.level {
 		return
 	}
-
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	// Формат совпадает с eventlog: [15:04:05.000] LEVEL  message
+	// Это позволяет читать смешанный вывод без путаницы.
+	timestamp := time.Now().Format("15:04:05.000")
 	message := fmt.Sprintf(format, args...)
-	l.logger.Printf("[%s] %s: %s", timestamp, level.String(), message)
+	l.logger.Printf("[%s] %-5s %s", timestamp, level.String(), message)
 }
 
 func (l *logger) Debug(format string, args ...interface{}) {

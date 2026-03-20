@@ -290,3 +290,63 @@ func TestValidateVLESSParams(t *testing.T) {
 		})
 	}
 }
+
+// ─── LAN bypass: privateIPRanges always go direct ────────────────────────
+
+func TestBuildRoute_PrivateIPBypass_AlwaysDirect(t *testing.T) {
+	// Even with default=proxy and no explicit rules,
+	// private IP ranges must have a direct rule.
+	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}}
+	route := buildRoute(cfg)
+
+	// Collect all IPCIDR entries that go to "direct"
+	var directCIDRs []string
+	for _, r := range route.Rules {
+		if r.Outbound == "direct" {
+			directCIDRs = append(directCIDRs, r.IPCIDR...)
+		}
+	}
+
+	wants := []string{"192.168.0.0/16", "10.0.0.0/8", "127.0.0.0/8"}
+	for _, want := range wants {
+		found := false
+		for _, cidr := range directCIDRs {
+			if cidr == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("private CIDR %q not in direct rules (got: %v)", want, directCIDRs)
+		}
+	}
+}
+
+func TestBuildRoute_PrivateIPBypass_BeforeUserRules(t *testing.T) {
+	// The LAN direct rule must appear BEFORE geosite/domain rules
+	// so it takes priority and can't be overridden by a proxy rule for 192.168.x.x
+	cfg := &RoutingConfig{
+		DefaultAction: ActionProxy,
+		Rules: []RoutingRule{
+			{Value: "youtube.com", Type: RuleTypeDomain, Action: ActionProxy},
+		},
+	}
+	route := buildRoute(cfg)
+
+	// First non-DNS rule should be the private IP bypass
+	firstReal := -1
+	for i, r := range route.Rules {
+		if r.Protocol != "dns" {
+			firstReal = i
+			break
+		}
+	}
+	if firstReal < 0 {
+		t.Fatal("no non-DNS rules found")
+	}
+	r := route.Rules[firstReal]
+	if r.Outbound != "direct" || len(r.IPCIDR) == 0 {
+		t.Errorf("first rule after DNS should be LAN direct bypass, got outbound=%q IPCIDR=%v",
+			r.Outbound, r.IPCIDR)
+	}
+}

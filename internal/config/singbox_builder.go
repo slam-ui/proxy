@@ -1,129 +1,13 @@
 package config
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
+	"encoding/json"
 	"strings"
+
+	"proxyclient/internal/fileutil"
 )
-
-const TunInterfaceName = "tun0"
-
-// DataDir — папка для данных приложения (geosite .bin файлы, routing.json, app_rules.json).
-// Располагается рядом с .exe, изолирует рабочие файлы от системных.
-const DataDir = "data"
-
-type SingBoxConfig struct {
-	Log          SBLog          `json:"log"`
-	DNS          SBDNS          `json:"dns"`
-	Experimental SBExperimental `json:"experimental"`
-	Inbounds     []SBInbound    `json:"inbounds"`
-	Outbounds    []SBOutbound   `json:"outbounds"`
-	Route        SBRoute        `json:"route"`
-}
-
-type SBLog struct {
-	Level string `json:"level"`
-}
-
-type SBDNS struct {
-	Servers []SBDNSServer `json:"servers"`
-	Rules   []SBDNSRule   `json:"rules,omitempty"`
-	Final   string        `json:"final,omitempty"`
-}
-
-type SBDNSServer struct {
-	Tag        string `json:"tag"`
-	Type       string `json:"type"`
-	Server     string `json:"server,omitempty"`
-	ServerPort int    `json:"server_port,omitempty"`
-}
-
-type SBDNSRule struct {
-	Inbound []string `json:"inbound,omitempty"`
-	Server  string   `json:"server"`
-}
-
-type SBInbound struct {
-	Type                     string   `json:"type"`
-	Tag                      string   `json:"tag"`
-	Listen                   string   `json:"listen,omitempty"`
-	ListenPort               int      `json:"listen_port,omitempty"`
-	Sniff                    bool     `json:"sniff,omitempty"`
-	SniffOverrideDestination bool     `json:"sniff_override_destination,omitempty"`
-	InterfaceName            string   `json:"interface_name,omitempty"`
-	Address                  []string `json:"address,omitempty"`
-	MTU                      int      `json:"mtu,omitempty"`
-	AutoRoute                bool     `json:"auto_route,omitempty"`
-	StrictRoute              bool     `json:"strict_route,omitempty"`
-	Stack                    string   `json:"stack,omitempty"`
-}
-
-type SBOutbound struct {
-	Type       string `json:"type"`
-	Tag        string `json:"tag"`
-	Server     string `json:"server,omitempty"`
-	ServerPort int    `json:"server_port,omitempty"`
-	UUID       string `json:"uuid,omitempty"`
-	Flow       string `json:"flow,omitempty"`
-	TLS        *SBTLS `json:"tls,omitempty"`
-}
-
-type SBTLS struct {
-	Enabled    bool       `json:"enabled"`
-	ServerName string     `json:"server_name,omitempty"`
-	Reality    *SBReality `json:"reality,omitempty"`
-	UTLS       *SBUTLS    `json:"utls,omitempty"`
-}
-
-type SBReality struct {
-	Enabled   bool   `json:"enabled"`
-	PublicKey string `json:"public_key"`
-	ShortID   string `json:"short_id"`
-}
-
-type SBUTLS struct {
-	Enabled     bool   `json:"enabled"`
-	Fingerprint string `json:"fingerprint"`
-}
-
-type SBRuleSet struct {
-	Type   string `json:"type"`
-	Tag    string `json:"tag"`
-	Format string `json:"format"`
-	Path   string `json:"path"`
-}
-
-// SBExperimental включает Clash-совместимый API для статистики трафика и соединений.
-// Доступен на 127.0.0.1:9090 — используется нашим бэкендом для /api/stats и /api/connections.
-type SBExperimental struct {
-	ClashAPI SBClashAPI `json:"clash_api"`
-}
-
-type SBClashAPI struct {
-	ExternalController string `json:"external_controller"`
-	Secret             string `json:"secret"`
-}
-
-type SBRoute struct {
-	Rules                 []SBRouteRule `json:"rules,omitempty"`
-	RuleSet               []SBRuleSet   `json:"rule_set,omitempty"`
-	Final                 string        `json:"final"`
-	AutoDetectInterface   bool          `json:"auto_detect_interface"`
-	DefaultDomainResolver string        `json:"default_domain_resolver,omitempty"`
-}
-
-type SBRouteRule struct {
-	Protocol     string   `json:"protocol,omitempty"`
-	ProcessName  []string `json:"process_name,omitempty"`
-	Domain       []string `json:"domain,omitempty"`
-	DomainSuffix []string `json:"domain_suffix,omitempty"`
-	IPCIDR       []string `json:"ip_cidr,omitempty"`
-	Inbound      []string `json:"inbound,omitempty"`
-	Action       string   `json:"action,omitempty"`
-	Outbound     string   `json:"outbound,omitempty"`
-	RuleSet      []string `json:"rule_set,omitempty"`
-}
 
 func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingConfig) error {
 	params, err := parseVLESSKey(secretPath)
@@ -141,7 +25,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
 		Experimental: SBExperimental{
 			ClashAPI: SBClashAPI{
-				ExternalController: "127.0.0.1:9090",
+				ExternalController: ClashAPIAddr,
 				Secret:             "",
 			},
 		},
@@ -160,7 +44,7 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				Type:                     "http",
 				Tag:                      "http-in",
 				Listen:                   "127.0.0.1",
-				ListenPort:               10807,
+				ListenPort:               ProxyPort,
 				Sniff:                    true,
 				SniffOverrideDestination: true,
 			},
@@ -204,13 +88,8 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		return fmt.Errorf("ошибка сериализации: %w", err)
 	}
 
-	// Атомарная запись: tmp + rename, как в SaveRoutingConfig и fileStorage.Save.
-	tmp := outputPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("не удалось записать временный конфиг: %w", err)
-	}
-	if err := os.Rename(tmp, outputPath); err != nil {
-		_ = os.Remove(tmp)
+	// Атомарная запись через fileutil.WriteAtomic (MoveFileExW REPLACE_EXISTING).
+	if err := fileutil.WriteAtomic(outputPath, data, 0644); err != nil {
 		return fmt.Errorf("не удалось применить конфиг sing-box: %w", err)
 	}
 	return nil

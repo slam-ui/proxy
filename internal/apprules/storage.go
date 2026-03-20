@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"proxyclient/internal/fileutil"
 )
 
 // Storage интерфейс для хранения правил
@@ -35,17 +37,9 @@ func (s *fileStorage) Save(rules []Rule) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal rules: %w", err)
 	}
-
-	// Атомарная запись через временный файл
-	tmp := s.filePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
+	if err := fileutil.WriteAtomic(s.filePath, data, 0644); err != nil {
+		return fmt.Errorf("failed to save rules: %w", err)
 	}
-	if err := os.Rename(tmp, s.filePath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-
 	return nil
 }
 

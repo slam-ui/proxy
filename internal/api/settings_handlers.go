@@ -7,10 +7,17 @@ import (
 	"proxyclient/internal/autorun"
 )
 
+// SettingsHandlers обработчики настроек приложения.
+// Использует Server для доступа к respondJSON/respondError — согласованно с TunHandlers.
+type SettingsHandlers struct {
+	server *Server
+}
+
 // SetupSettingsRoutes регистрирует API для настроек приложения.
 func SetupSettingsRoutes(s *Server) {
-	s.router.HandleFunc("/api/settings", handleGetSettings).Methods("GET", "OPTIONS")
-	s.router.HandleFunc("/api/settings/autorun", handleSetAutorun).Methods("POST", "OPTIONS")
+	h := &SettingsHandlers{server: s}
+	s.router.HandleFunc("/api/settings", h.handleGetSettings).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/settings/autorun", h.handleSetAutorun).Methods("POST", "OPTIONS")
 }
 
 // SettingsResponse — состояние всех настроек приложения.
@@ -19,22 +26,20 @@ type SettingsResponse struct {
 }
 
 // handleGetSettings GET /api/settings
-func handleGetSettings(w http.ResponseWriter, _ *http.Request) {
-	resp := SettingsResponse{
+func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
+	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
 		Autorun: autorun.IsEnabled(),
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	})
 }
 
 // handleSetAutorun POST /api/settings/autorun
 // Body: {"enabled": true|false}
-func handleSetAutorun(w http.ResponseWriter, r *http.Request) {
+func (h *SettingsHandlers) handleSetAutorun(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 
@@ -45,10 +50,9 @@ func handleSetAutorun(w http.ResponseWriter, r *http.Request) {
 		err = autorun.Disable()
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(SettingsResponse{Autorun: autorun.IsEnabled()})
+	h.server.respondJSON(w, http.StatusOK, SettingsResponse{Autorun: autorun.IsEnabled()})
 }
