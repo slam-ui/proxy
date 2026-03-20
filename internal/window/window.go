@@ -105,7 +105,15 @@ func readRect(hwnd uintptr) (windowState, bool) {
 
 func writeState(s windowState) {
 	data, _ := json.Marshal(s)
-	_ = os.WriteFile(statePath, data, 0644)
+	// Атомарная запись через tmp+rename — защита от одновременного доступа
+	// из горутины периодического сохранения и windowClose JS-биндинга.
+	// os.WriteFile без атомарности приводит к повреждению файла:
+	// {"x":...}40}"} — два JSON склеиваются в один файл.
+	tmp := statePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, statePath)
 }
 
 func isZoomed(hwnd uintptr) bool {

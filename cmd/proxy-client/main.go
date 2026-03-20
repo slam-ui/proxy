@@ -283,6 +283,11 @@ func run(output io.Writer) error {
 
 	// xrayManager объявляем заранее чтобы OnCrash мог ссылаться на него (closure).
 	var xrayManager xray.Manager
+
+	// getActiveManager — геттер актуального менеджера.
+	// После doApply() новый менеджер сохраняется в apiServer, не в xrayManager.
+	// Инициализируется после создания apiServer (ниже в коде).
+	getActiveManager := func() xray.Manager { return xrayManager }
 	xrayCfg := xray.Config{
 		ExecutablePath: "./sing-box.exe",
 		ConfigPath:     "config.singbox.json",
@@ -308,26 +313,28 @@ func run(output io.Writer) error {
 			// "Cannot create a file when that file already exists" означает что
 			// предыдущий wintun\Device\WINTUN0 ещё не освобождён ядром ОС.
 			// Kernel GC занимает 15-30 секунд — ждём и перезапускаем автоматически.
-			output := xrayManager.LastOutput()
+			// BUG FIX: xrayManager в run() не обновляется после doApply().
+			// После Apply новый менеджер хранится в apiServer.GetXRayManager().
+			// Читаем актуальный менеджер каждый раз — так восстановление работает
+			// правильно и до и после Apply.
+			currentMgr := getActiveManager()
+			output := currentMgr.LastOutput()
 			isTunConflict := strings.Contains(output, "Cannot create a file when that file already exists") ||
 				strings.Contains(output, "configure tun interface")
 			if isTunConflict {
-				// sing-box упал из-за wintun конфликта.
-				// Не ждём фиксированное время — активно опрашиваем TCP/IP стек.
-				// Remove-NetAdapter + polling до реального исчезновения интерфейса.
 				wintun.RecordStop()
 				mainLogger.Warn("Detected wintun conflict — ждём освобождения wintun kernel-объекта...")
 				notification.Send("Proxy", "Перезапуск TUN...")
 				wintun.RemoveStaleTunAdapter(mainLogger)
 				wintun.PollUntilFree(mainLogger, config.TunInterfaceName)
 				mainLogger.Info("Перезапуск sing-box после wintun GC...")
-				if startErr := xrayManager.Start(); startErr != nil {
+				if startErr := currentMgr.Start(); startErr != nil {
 					mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
 					notification.Send("Proxy — ошибка", "Не удалось перезапустить. Откройте приложение.")
 					proxyManager.Disable() //nolint
 					tray.SetEnabled(false)
 				} else {
-					mainLogger.Info("sing-box успешно перезапущен (PID: %d)", xrayManager.GetPID())
+					mainLogger.Info("sing-box успешно перезапущен (PID: %d)", currentMgr.GetPID())
 					notification.Send("Proxy", "Перезапущен успешно ✓")
 				}
 				return
@@ -396,6 +403,11 @@ func run(output io.Writer) error {
 		EventLog:      evLog,
 		QuitChan:      quit, // POST /api/quit closes this → graceful shutdown
 	})
+	// BUG FIX: обновляем геттер после создания apiServer.
+	// OnCrash теперь читает актуальный менеджер через server (обновляется в doApply).
+	getActiveManager = func() xray.Manager {
+		return apiServer.GetXRayManager()
+	}
 	apiServer.SetupTunRoutes(xrayCfg)
 	apiServer.SetupFeatureRoutes()
 	if rulesEngine != nil && processMonitor != nil && processLauncher != nil {
@@ -421,7 +433,7 @@ func run(output io.Writer) error {
 
 	go func() {
 		// Ждём пока сервер реально начнёт принимать соединения
-		if waitErr := netutil.WaitForPort("localhost:8080", 5*time.Second); waitErr == nil {
+		if waitErr := netutil.WaitForPort("localhost"+apiListenAddress, 5*time.Second); waitErr == nil {
 			mainLogger.Info("API сервер готов на :8080")
 		} else {
 			mainLogger.Warn("API сервер не ответил за 5с: %v", waitErr)
