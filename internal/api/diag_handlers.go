@@ -188,10 +188,7 @@ func (ct *connSpeedTracker) tick(ctx context.Context) {
 	dt := now.Sub(ct.lastTick).Seconds()
 	if dt < 0.1 || ct.lastTick.IsZero() {
 		ct.lastTick = now
-		ct.prev = make(map[string]connSample, len(conns))
-		for _, c := range conns {
-			ct.prev[connKeyFor(c)] = connSample{upload: c.Upload, download: c.Download}
-		}
+		ct.prev = buildSamples(conns)
 		return
 	}
 	ct.lastTick = now
@@ -199,10 +196,7 @@ func (ct *connSpeedTracker) tick(ctx context.Context) {
 	// Переиспользуем maps вместо аллокации новых каждые 2 секунды.
 	// make(map) каждые 2с = ~24 аллокации/мин → GC pressure.
 	newSpeeds := make(map[string]outboundSpeed, len(ct.speeds)+2)
-	newPrev := make(map[string]connSample, len(conns))
-	for _, c := range conns {
-		newPrev[connKeyFor(c)] = connSample{upload: c.Upload, download: c.Download}
-	}
+	newPrev := buildSamples(conns)
 
 	for _, c := range conns {
 		key := connKeyFor(c)

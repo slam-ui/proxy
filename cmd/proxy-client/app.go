@@ -11,6 +11,9 @@ package main
 import (
 	"context"
 	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,15 +62,18 @@ func DefaultAppConfig() AppConfig {
 
 // App управляет полным жизненным циклом прокси-клиента.
 type App struct {
-	cfg          AppConfig
-	output       io.Writer
-	appLogger    logger.Logger
-	evLog        *eventlog.Log
-	mainLogger   logger.Logger
-	proxyManager proxy.Manager
-	apiServer    *api.Server
-	quit         chan struct{}
-	anomaly      *anomalylog.Detector
+	cfg             AppConfig
+	output          io.Writer
+	appLogger       logger.Logger
+	evLog           *eventlog.Log
+	mainLogger      logger.Logger
+	proxyManager    proxy.Manager
+	apiServer       *api.Server
+	quit            chan struct{}
+	anomaly         *anomalylog.Detector
+	// lifecycleCtx отменяется при Shutdown — прерывает PollUntilFree во всех горутинах.
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 // NewApp создаёт App и базовые инфраструктурные компоненты (логгер, eventlog, anomaly detector).
@@ -88,15 +94,19 @@ func NewApp(cfg AppConfig, output io.Writer) *App {
 	proxyLogger := eventlog.NewLogger(appLogger, evLog, "proxy")
 	proxyManager := proxy.NewManager(proxyLogger)
 
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+
 	return &App{
-		cfg:          cfg,
-		output:       output,
-		appLogger:    appLogger,
-		evLog:        evLog,
-		mainLogger:   mainLogger,
-		proxyManager: proxyManager,
-		quit:         make(chan struct{}),
-		anomaly:      anomalyDetector,
+		cfg:             cfg,
+		output:          output,
+		appLogger:       appLogger,
+		evLog:           evLog,
+		mainLogger:      mainLogger,
+		proxyManager:    proxyManager,
+		quit:            make(chan struct{}),
+		anomaly:         anomalyDetector,
+		lifecycleCtx:    lifecycleCtx,
+		lifecycleCancel: lifecycleCancel,
 	}
 }
 
@@ -116,10 +126,10 @@ func (a *App) buildXRayCfg() xray.Config {
 		SingBoxWriter:  eventlog.NewLineWriter(a.evLog, "sing-box", eventlog.LevelInfo),
 		FileWriter:     a.output,
 		// BeforeRestart — wintun cleanup. api пакет больше не зависит от wintun.
-		BeforeRestart: func(log logger.Logger) error {
+		BeforeRestart: func(ctx context.Context, log logger.Logger) error {
 			wintun.RecordStop()
 			wintun.RemoveStaleTunAdapter(log)
-			wintun.PollUntilFree(log, config.TunInterfaceName)
+			wintun.PollUntilFree(ctx, log, config.TunInterfaceName)
 			return nil
 		},
 		OnCrash: func(crashErr error) {
@@ -146,17 +156,31 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 
 	lastOut := currentMgr.LastOutput()
 	isTunConflict := strings.Contains(lastOut, "Cannot create a file when that file already exists") ||
-		strings.Contains(lastOut, "configure tun interface")
+		strings.Contains(lastOut, "configure tun interface") ||
+		// ERROR_GEN_FAILURE (error 31): stale wintun driver registration после Windows update.
+		// Лечится через sc delete wintun в RemoveStaleTunAdapter → repairStaleDriver.
+		strings.Contains(lastOut, "A device attached to the system is not functioning")
 
 	if isTunConflict {
 		wintun.RecordStop()
+		// Если sing-box упал с wintun-конфликтом в первые 30 секунд после старта —
+		// предыдущего gap явно не хватило с запасом. Удваиваем ещё раз чтобы быстрее
+		// выйти на достаточный gap вместо двух последовательных коротких крашей.
+		if currentMgr.Uptime() < 30*time.Second {
+			wintun.IncreaseAdaptiveGap(a.mainLogger) // доп. удвоение
+		}
 		wintun.IncreaseAdaptiveGap(a.mainLogger)
 		a.mainLogger.Warn("Detected wintun conflict — ждём освобождения wintun kernel-объекта...")
 		notification.Send("Proxy", "Перезапуск TUN...")
 		wintun.RemoveStaleTunAdapter(a.mainLogger)
-		wintun.PollUntilFree(a.mainLogger, config.TunInterfaceName)
+		// Сообщаем UI что идёт перезапуск и когда ожидать готовности.
+		a.apiServer.SetRestarting(wintun.EstimateReadyAt())
+		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+		a.apiServer.ClearRestarting()
 		a.mainLogger.Info("Перезапуск sing-box после wintun GC...")
-		if startErr := currentMgr.Start(); startErr != nil {
+		// StartAfterManualCleanup: cleanup уже выполнен выше → пропускаем BeforeRestart
+		// чтобы не запускать PollUntilFree второй раз (двойное ожидание ~2 мин).
+		if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
 			a.mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
 			notification.Send("Proxy — ошибка", "Не удалось перезапустить. Откройте приложение.")
 			_ = a.proxyManager.Disable()
@@ -187,28 +211,42 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		a.mainLogger.Info("Фоновая инициализация: wintun cleanup...")
 		tray.SetEnabled(false)
 
-		wintun.RemoveStaleTunAdapter(a.mainLogger)
-		wintun.PollUntilFree(a.mainLogger, config.TunInterfaceName)
-
 		if _, err := os.Stat(a.cfg.ConfigPath + ".pending"); err == nil {
 			_ = os.Remove(a.cfg.ConfigPath + ".pending")
 			a.mainLogger.Info("Удалён осиротевший .pending конфиг от предыдущего запуска")
 		}
 
-		routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
-		if err != nil {
-			a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
-			routingCfg = config.DefaultRoutingConfig()
+		// Оптимизация: генерируем конфиг ПАРАЛЛЕЛЬНО с wintun cleanup/gap-ожиданием.
+		// На обычном перезапуске gap+settle = 15-240с — всё это время CPU простаивает.
+		// Канал configReady доставляет результат (error или nil) после завершения poll.
+		type configResult struct {
+			err        error
+			configPath string // путь к сгенерированному конфигу (может быть .tmp)
 		}
+		configCh := make(chan configResult, 1)
+		go func() {
+			routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
+			if err != nil {
+				a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
+				routingCfg = config.DefaultRoutingConfig()
+			}
+			genErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)
+			configCh <- configResult{err: genErr, configPath: a.cfg.ConfigPath}
+		}()
 
+		wintun.RemoveStaleTunAdapter(a.mainLogger)
+		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+
+		// Ждём завершения генерации конфига (обычно уже готов к этому моменту).
+		cfgRes := <-configCh
 		a.mainLogger.Info("Запуск sing-box...")
-		if genErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg); genErr != nil {
-			if !a.handleConfigError(genErr) {
+		if cfgRes.err != nil {
+			if !a.handleConfigError(cfgRes.err) {
 				return
 			}
 		}
 
-		xrayManager, err := xray.NewManager(xrayCfg)
+		xrayManager, err := xray.NewManager(xrayCfg, a.lifecycleCtx)
 		if err != nil {
 			a.mainLogger.Error("Не удалось запустить sing-box: %v", err)
 			notification.Send("Proxy — ошибка", "Не удалось запустить sing-box. Проверьте лог.")
@@ -233,6 +271,11 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		tray.SetEnabled(true)
 		notification.Send("Proxy", "Прокси готов ✓")
 		a.mainLogger.Info("Фоновая инициализация завершена")
+
+		// Pre-warm: устанавливаем VLESS/Reality TLS соединение с сервером сразу после старта.
+		// Без этого первый реальный запрос пользователя оплачивает TLS handshake (~100-200мс).
+		// Запускаем в отдельной горутине — не блокируем UI.
+		go preWarmProxyConnection(config.ProxyAddr, a.mainLogger)
 	}()
 }
 
@@ -267,6 +310,13 @@ func (a *App) handleConfigError(err error) bool {
 func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monitor) {
 	window.Close()
 
+	// Отменяем lifecycleCtx ПЕРВЫМ — прерываем PollUntilFree во всех горутинах
+	// (handleCrash, BeforeRestart, startBackground). Без этого API server Shutdown
+	// истекает по таймауту пока горутина спит в time.Sleep внутри PollUntilFree.
+	if a.lifecycleCancel != nil {
+		a.lifecycleCancel()
+	}
+
 	if a.apiServer != nil {
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
 			a.mainLogger.Error("Ошибка при остановке API сервера: %v", err)
@@ -290,4 +340,40 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
 	a.mainLogger.Info("Работа завершена корректно")
+}
+
+// preWarmProxyConnection устанавливает соединение через HTTP прокси сразу после старта.
+// Цель: заставить sing-box открыть первое VLESS/Reality TLS соединение к серверу
+// ДО того как пользователь сделает свой первый запрос.
+// Без прогрева: первый запрос = DNS + TLS handshake = +100-200мс latency.
+// С прогревом: TLS уже открыт, первый запрос идёт через готовое соединение.
+func preWarmProxyConnection(proxyAddr string, log logger.Logger) {
+	// Даём TUN интерфейсу время подняться (~2-10с после HTTP-порта).
+	// Прогрев через HTTP proxy inbound — не зависит от TUN.
+	time.Sleep(2 * time.Second)
+
+	// Запрос идёт через наш HTTP proxy (127.0.0.1:10807) к известному быстрому хосту.
+	// connectproxy.go-style: CONNECT → создаёт TCP через sing-box → VLESS TLS handshake.
+	transport := &http.Transport{
+		Proxy: func(req *http.Request) (*url.URL, error) {
+			return url.Parse("http://" + proxyAddr)
+		},
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 5 * time.Second,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   15 * time.Second,
+	}
+	// Connectivity check — лёгкий HEAD запрос, минимум трафика.
+	resp, err := client.Head("https://www.google.com")
+	if err != nil {
+		log.Info("pre-warm: соединение не установлено (%v) — пропускаем", err)
+		return
+	}
+	resp.Body.Close()
+	log.Info("pre-warm: VLESS соединение прогрето ✓ (статус %d)", resp.StatusCode)
 }

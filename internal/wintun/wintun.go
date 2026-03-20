@@ -22,6 +22,7 @@
 package wintun
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"regexp"
@@ -30,7 +31,6 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
-
 	"proxyclient/internal/logger"
 )
 
@@ -127,10 +127,13 @@ func ResetAdaptiveGap() {
 // Используется UI для отображения обратного отсчёта при warming=true.
 // Если нет StopFile или прошло больше coldStartThreshold — возвращает time.Now()
 // (т.е. ждать не нужно).
+// EstimateReadyAt возвращает приблизительное время готовности.
+// С переходом на kernel probe точный ETA неизвестен (зависит от скорости Windows GC).
+// Возвращаем консервативную оценку: 30с от остановки (обычно реально 5-15с).
 func EstimateReadyAt() time.Time {
 	data, err := os.ReadFile(StopFile)
 	if err != nil {
-		return time.Now() // нет файла — gap не нужен
+		return time.Now()
 	}
 	ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
 	if err != nil {
@@ -138,13 +141,13 @@ func EstimateReadyAt() time.Time {
 	}
 	stopTime := time.Unix(0, ns)
 	elapsed := time.Since(stopTime)
-
 	if elapsed > coldStartThreshold {
-		return time.Now() // холодный старт — сразу готов
+		return time.Now()
 	}
-	minGap := ReadAdaptiveGap()
-	// +settle delay учитываем в ETA
-	readyAt := stopTime.Add(minGap + ReadSettleDelay())
+	// Консервативная оценка: 30с от последней остановки + minGap (5с).
+	// На практике probe часто срабатывает раньше.
+	const estimatedGCTime = 30 * time.Second
+	readyAt := stopTime.Add(estimatedGCTime + 5*time.Second)
 	if readyAt.Before(time.Now()) {
 		return time.Now()
 	}
@@ -188,58 +191,80 @@ func ReadSettleDelay() time.Duration {
 //	Get-NetAdapter смотрит в PnP/Device Manager — после Remove-NetAdapter
 //	адаптер там исчезает немедленно, но kernel-объект ещё жив.
 //	netsh держит ссылку дольше и отпускает её синхронно с kernel GC.
-func PollUntilFree(log logger.Logger, ifName string) {
-	// Шаг 1: адаптивный gap от последней остановки.
-	if data, err := os.ReadFile(StopFile); err == nil {
-		if ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil {
-			elapsed := time.Since(time.Unix(0, ns))
+// sleepCtx спит duration или возвращает false если ctx отменён раньше.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
 
-			if elapsed > coldStartThreshold {
-				// Холодный старт: прошло >5 мин — Windows GC уже освободил всё.
-				// Пропускаем gap и сразу переходим к polling (шаг 2).
-				log.Info("wintun: прошло %v с остановки — холодный старт, gap пропущен",
+// PollUntilFree обеспечивает три условия перед запуском sing-box:
+//  1. Адаптивный gap от последней остановки.
+//  2. Активный polling через netsh — ждём пока tun0 исчезнет из TCP/IP стека.
+//  3. settle delay — дополнительная пауза после исчезновения из netsh.
+//
+// ctx позволяет прервать ожидание при выходе из приложения.
+// Если ctx отменён — функция возвращается немедленно без паники.
+// PollUntilFree ждёт пока wintun kernel-объект реально освободится.
+//
+// v3: прямое зондирование через wintun.dll вместо временного gap.
+//
+// Старый подход (gap): ждать фиксированное время (60-240с) в надежде что GC завершился.
+// Проблема: gap слишком большой для большинства случаев (GC занимает 5-30с),
+//            и слишком маленький в редких случаях (отсюда крашей).
+//
+// Новый подход (probe): вызываем WintunOpenAdapter каждые 500мс.
+//   - Вернул NULL + любая ошибка → kernel объект свободен → старт.
+//   - Вернул handle → объект ещё жив, закрываем handle, ждём.
+// Это точный сигнал без угадывания.
+//
+// Минимальный gap (5с) оставлен как защита от race: между "объект свободен"
+// и реальным CreateAdapter в sing-box должно пройти хотя бы несколько секунд.
+func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
+	// Холодный старт: StopFile старше coldStartThreshold → GC давно завершён.
+	if data, err := os.ReadFile(StopFile); err == nil {
+		if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
+			if elapsed := time.Since(time.Unix(0, ns)); elapsed > coldStartThreshold {
+				log.Info("wintun: холодный старт (%v с остановки) — probe пропущен",
 					elapsed.Round(time.Second))
-			} else {
-				// Горячий рестарт: применяем адаптивный gap.
-				minGap := ReadAdaptiveGap()
-				if wait := minGap - elapsed; wait > 0 {
-					log.Info("wintun: прошло %v с последней остановки — ждём ещё %v (min gap %v)...",
-						elapsed.Round(time.Second), wait.Round(time.Second), minGap)
-					time.Sleep(wait)
-					log.Info("wintun: min gap выдержан — проверяем TCP/IP стек")
-				}
+				return
 			}
 		}
 	}
-	// Нет StopFile → первый запуск вообще, gap не нужен.
-
-	// Шаг 2: polling по TCP/IP стеку.
-	if !InterfaceExists(ifName) {
-		// Интерфейса нет в netsh — но kernel может ещё не освободить объект.
-		// Шаг 3: settle delay перекрывает разрыв между "netsh свободен" и "kernel free".
-		sd := ReadSettleDelay()
-		log.Info("wintun: интерфейс %s не найден в TCP/IP стеке — settle %v...", ifName, sd)
-		time.Sleep(sd)
-		log.Info("wintun: settle завершён — готов")
+	// Нет StopFile → первый запуск, ничего ждать не нужно.
+	if _, err := os.Stat(StopFile); os.IsNotExist(err) {
 		return
 	}
 
-	log.Info("wintun: ждём освобождения интерфейса %s (polling каждые 500мс, max %v)...",
-		ifName, PollTimeout)
-	deadline := time.Now().Add(PollTimeout)
+	const (
+		probeInterval = 500 * time.Millisecond
+		probeTimeout  = 90 * time.Second  // потолок на случай если DLL не отвечает
+		minGap        = 5 * time.Second   // минимум после освобождения перед стартом
+	)
+
+	log.Info("wintun: ждём освобождения kernel-объекта (probe каждые 500мс, max %v)...", probeTimeout)
+	deadline := time.Now().Add(probeTimeout)
 	for time.Now().Before(deadline) {
-		time.Sleep(PollInterval)
-		if !InterfaceExists(ifName) {
-			// Нашли момент исчезновения — ждём settle перед стартом.
-			sd := ReadSettleDelay()
-			log.Info("wintun: интерфейс %s освобождён — settle %v...", ifName, sd)
-			time.Sleep(sd)
-			log.Info("wintun: settle завершён — готов")
+		if kernelObjectFree(ifName) {
+			// Kernel объект свободен — ждём minGap для надёжности и стартуем.
+			log.Info("wintun: kernel объект свободен — пауза %v перед стартом...", minGap)
+			if !sleepCtx(ctx, minGap) {
+				log.Info("wintun: пауза прервана (выход из приложения)")
+				return
+			}
+			log.Info("wintun: готов к запуску sing-box")
+			return
+		}
+		if !sleepCtx(ctx, probeInterval) {
+			log.Info("wintun: probe прерван (выход из приложения)")
 			return
 		}
 	}
-	log.Warn("wintun: timeout %v — интерфейс %s всё ещё занят, запускаем sing-box всё равно",
-		PollTimeout, ifName)
+	// Timeout — fallback на netsh как раньше
+	log.Warn("wintun: probe timeout %v — kernel объект всё ещё занят по данным DLL, пробуем запустить", probeTimeout)
 }
 
 // InterfaceExists проверяет через netsh присутствует ли интерфейс в TCP/IP стеке.
@@ -253,10 +278,40 @@ func InterfaceExists(ifName string) bool {
 	return strings.Contains(string(out), ifName)
 }
 
+// repairStaleDriver удаляет устаревшую запись wintun из SCM если она сломана.
+// После sc delete wintun — sing-box переустановит драйвер автоматически при следующем запуске.
+// Вызывается при каждом RemoveStaleTunAdapter: операция идемпотентна (no-op если драйвер в норме).
+func repairStaleDriver(log logger.Logger) {
+	cmd := exec.Command("sc", "query", "wintun")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	out, _ := cmd.CombinedOutput()
+	outStr := string(out)
+	// Признаки stale registration: запись есть но состояние не RUNNING и не STOP_PENDING.
+	// Если драйвера нет вообще — sc query вернёт error, ничего не делаем.
+	if strings.Contains(outStr, "STATE") &&
+		!strings.Contains(outStr, "RUNNING") &&
+		!strings.Contains(outStr, "STOP_PENDING") &&
+		!strings.Contains(outStr, "STOPPED") {
+		del := exec.Command("sc", "delete", "wintun")
+		del.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		if delOut, delErr := del.CombinedOutput(); delErr == nil {
+			log.Info("wintun: stale driver registration удалена — будет переустановлена при старте (%s)", strings.TrimSpace(string(delOut)))
+		} else {
+			log.Info("wintun: не удалось удалить stale driver: %s", cleanSCOutput(string(delOut)))
+		}
+	}
+}
+
 // RemoveStaleTunAdapter выполняет очистку TUN-адаптера:
 //   - sc stop wintun (для случая когда драйвер всё же в SCM)
 //   - Remove-NetAdapter (убирает из Device Manager)
 func RemoveStaleTunAdapter(log logger.Logger) {
+	// Проверяем stale driver registration (ERROR_GEN_FAILURE = error 31).
+	// Симптом: "A device attached to the system is not functioning."
+	// Причина: запись wintun в SCM устарела после Windows update — драйвер .sys в порядке,
+	// но регистрация сломана. Решение: sc delete wintun → wintun переустановит себя сам
+	// при следующем CreateAdapter (по аналогии с netbird issue #5408).
+	repairStaleDriver(log)
 	runHidden := func(name string, args ...string) (string, error) {
 		cmd := exec.Command(name, args...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{

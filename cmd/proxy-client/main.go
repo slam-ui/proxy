@@ -186,7 +186,7 @@ func run(output io.Writer) error {
 		Logger:        app.mainLogger,
 		EventLog:      app.evLog,
 		QuitChan:      app.quit,
-	})
+	}, app.lifecycleCtx)
 
 	// Собираем app rules.
 	appRulesRes := <-appRulesCh

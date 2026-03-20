@@ -1,6 +1,8 @@
 package api
 
 import (
+	"time"
+	"context"
 	"bytes"
 	"encoding/json"
 	"net/http"
@@ -23,7 +25,9 @@ func (s *stubXray) Stop() error        { return nil }
 func (s *stubXray) IsRunning() bool    { return s.running }
 func (s *stubXray) GetPID() int        { return 0 }
 func (s *stubXray) Wait() error        { return nil }
-func (s *stubXray) LastOutput() string { return "" }
+func (s *stubXray) LastOutput() string              { return "" }
+func (s *stubXray) StartAfterManualCleanup() error  { return nil }
+func (s *stubXray) Uptime() time.Duration              { return 0 }
 
 // ─── mock proxy.Manager ───────────────────────────────────────────────────
 
@@ -56,7 +60,7 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 		XRayManager:   &stubXray{running: true},
 		ProxyManager:  &stubProxy{},
 		Logger:        &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	// xray.Config нужен TunHandlers только для doApply; в unit-тестах правил не вызываем.
 	h := srv.SetupTunRoutes(xray.Config{})
 	// Регистрируем все feature-роуты чтобы тесты покрывали реальный набор эндпоинтов
@@ -91,7 +95,7 @@ func TestHandleHealth(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	srv.FinalizeRoutes()
 
 	w := getJSON(t, srv.router, "/api/health")
@@ -110,7 +114,7 @@ func TestHandleStatus_XrayRunning(t *testing.T) {
 		XRayManager:  &stubXray{running: true},
 		ProxyManager: &stubProxy{enabled: true},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	srv.FinalizeRoutes()
 
 	w := getJSON(t, srv.router, "/api/status")
@@ -132,7 +136,7 @@ func TestHandleStatus_XrayStopped(t *testing.T) {
 		XRayManager:  &stubXray{running: false},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	srv.FinalizeRoutes()
 
 	w := getJSON(t, srv.router, "/api/status")
@@ -455,7 +459,7 @@ func TestProfiles_SaveAndLoad(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	SetupProfileRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -493,7 +497,7 @@ func TestProfiles_List(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	SetupProfileRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -534,7 +538,7 @@ func TestProfiles_InvalidName_Returns400(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	SetupProfileRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -564,7 +568,7 @@ func TestProfiles_Delete(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	SetupProfileRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -600,7 +604,7 @@ func TestProfiles_PathTraversal_LoadReturns400(t *testing.T) {
 		XRayManager:  &stubXray{},
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	SetupProfileRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -650,7 +654,7 @@ func TestGetXRayManager_ReturnsCurrentManager(t *testing.T) {
 		XRayManager:  stub,
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
-	})
+	}, context.Background())
 	got := srv.GetXRayManager()
 	if got != stub {
 		t.Error("GetXRayManager should return the configured manager")
@@ -666,7 +670,7 @@ func TestHandleQuit_DoubleCallDoesNotPanic(t *testing.T) {
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
 		QuitChan:     quit,
-	})
+	}, context.Background())
 	// Two simultaneous POST /api/quit must not panic
 	done := make(chan struct{}, 2)
 	for i := 0; i < 2; i++ {
