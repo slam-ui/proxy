@@ -2,35 +2,55 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"proxyclient/internal/config"
 )
 
-const (
-	singBoxAPIBase = "http://127.0.0.1:9090"
-	testProxyAddr  = "http://127.0.0.1:10807"
-)
+// DiagHandlers управляет сбором статистики трафика и соединений.
+// В отличие от предыдущей версии с глобальными переменными — имеет явный lifecycle:
+// Start(ctx) запускает фоновые горутины, они останавливаются при отмене ctx.
+// Это делает код тестируемым: каждый тест создаёт свой экземпляр.
+type DiagHandlers struct {
+	traffic *trafficStore
+	conns   *connSpeedTracker
+}
 
-func SetupDiagRoutes(s *Server) {
-	// BUG FIX: sync.Once гарантирует что фоновые горутины запускаются один раз.
-	// Без этого повторный вызов SetupDiagRoutes (например в тестах) накапливал
-	// дублирующие горутины, каждая из которых поллила sing-box API независимо.
-	diagOnce.Do(func() {
-		go trafficCollector.run()
-		go connTracker.run()
-	})
-	s.router.HandleFunc("/api/stats", handleStats).Methods("GET", "OPTIONS")
-	s.router.HandleFunc("/api/debug/stats", handleDebugStats).Methods("GET", "OPTIONS")
-	s.router.HandleFunc("/api/connections", handleConnections).Methods("GET", "OPTIONS")
+// newDiagHandlers создаёт новый экземпляр DiagHandlers.
+func newDiagHandlers() *DiagHandlers {
+	return &DiagHandlers{
+		traffic: &trafficStore{},
+		conns: &connSpeedTracker{
+			prev:   make(map[string]connSample),
+			speeds: make(map[string]outboundSpeed),
+		},
+	}
+}
+
+// start запускает фоновые горутины сбора данных.
+// Они живут пока ctx не отменён — при завершении приложения ctx отменяется и горутины останавливаются.
+func (h *DiagHandlers) start(ctx context.Context) {
+	go h.traffic.run(ctx)
+	go h.conns.run(ctx)
+}
+
+// SetupDiagRoutes регистрирует маршруты диагностики и запускает сборщики данных.
+func SetupDiagRoutes(s *Server, ctx context.Context) {
+	h := newDiagHandlers()
+	h.start(ctx)
+	s.router.HandleFunc("/api/stats", h.handleStats).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/debug/stats", h.handleDebugStats).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/connections", h.handleConnections).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/test", handleDiagTest).Methods("GET", "OPTIONS")
 }
 
 // ── Total traffic: streaming /traffic ────────────────────────────────────────
-// sing-box отдаёт {"up":N,"down":N} раз в секунду — это уже bytes/s
 
 type trafficSnapshot struct {
 	Up   int64 `json:"up"`
@@ -46,29 +66,38 @@ type trafficStore struct {
 	sessionStart time.Time
 }
 
-var trafficCollector = &trafficStore{}
-
-var diagOnce sync.Once
-
-func (ts *trafficStore) run() {
+func (ts *trafficStore) run(ctx context.Context) {
 	ts.mu.Lock()
 	ts.sessionStart = time.Now()
 	ts.mu.Unlock()
 	for {
-		ts.connect()
-		time.Sleep(3 * time.Second)
+		ts.connect(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
-func (ts *trafficStore) connect() {
+func (ts *trafficStore) connect(ctx context.Context) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.ClashAPIBase+"/traffic", nil)
+	if err != nil {
+		return
+	}
 	client := &http.Client{Timeout: 0}
-	resp, err := client.Get(singBoxAPIBase + "/traffic")
+	resp, err := client.Do(req)
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -80,10 +109,6 @@ func (ts *trafficStore) connect() {
 		ts.mu.Lock()
 		ts.current = snap
 		ts.lastOK = time.Now()
-		// BUG FIX: sing-box /traffic отдаёт bytes/sec текущей скорости, а не накопленный total.
-		// Накапливаем суммарный трафик сессии умножая скорость на интервал опроса (~1с).
-		// Точнее было бы использовать /connections cumulative bytes, но это требует
-		// отдельного парсинга. Текущий подход достаточен для отображения порядка величин.
 		ts.sessionUpB += snap.Up
 		ts.sessionDnB += snap.Down
 		ts.mu.Unlock()
@@ -104,18 +129,6 @@ func (ts *trafficStore) getSessionTotals() (upB, dnB int64, dur float64) {
 }
 
 // ── Per-outbound speed via cumulative delta ───────────────────────────────────
-//
-// sing-box Clash API возвращает upload/download как накопленные байты.
-// uploadSpeed/downloadSpeed могут быть равны 0 если sing-box их не считает.
-// Считаем скорость сами через дельту между опросами.
-//
-// Ключевые нюансы:
-//  1. Соединения могут не иметь стабильного ID — используем составной ключ
-//     host+outbound+network как fallback.
-//  2. Outbound в sing-box Clash API: поле называется "outbound" (проверено).
-
-// connKey struct удалён: connKeyFor() возвращает string, struct остался от старого рефакторинга.
-// Оставлять неиспользуемый тип — staticcheck U1000.
 
 type connSample struct {
 	upload   int64
@@ -129,26 +142,25 @@ type outboundSpeed struct {
 
 type connSpeedTracker struct {
 	mu       sync.RWMutex
-	prev     map[string]connSample // ключ → предыдущий снимок
+	prev     map[string]connSample
 	speeds   map[string]outboundSpeed
-	active   atomic.Int64 // кол-во активных соединений
+	active   atomic.Int64
 	lastTick time.Time
 }
 
-var connTracker = &connSpeedTracker{
-	prev:   make(map[string]connSample),
-	speeds: make(map[string]outboundSpeed),
-}
-
-func (ct *connSpeedTracker) run() {
+func (ct *connSpeedTracker) run(ctx context.Context) {
 	for {
-		time.Sleep(2 * time.Second)
-		ct.tick()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		ct.tick(ctx)
 	}
 }
 
-func (ct *connSpeedTracker) tick() {
-	conns, err := fetchConnectionsData()
+func (ct *connSpeedTracker) tick(ctx context.Context) {
+	conns, err := fetchConnectionsData(ctx)
 	ct.active.Store(int64(len(conns)))
 	if err != nil || len(conns) == 0 {
 		ct.mu.Lock()
@@ -163,7 +175,6 @@ func (ct *connSpeedTracker) tick() {
 
 	dt := now.Sub(ct.lastTick).Seconds()
 	if dt < 0.1 || ct.lastTick.IsZero() {
-		// Первый тик — только устанавливаем baseline, скорости не считаем
 		ct.lastTick = now
 		ct.prev = buildSamples(conns)
 		return
@@ -187,7 +198,6 @@ func (ct *connSpeedTracker) tick() {
 		if dDn < 0 {
 			dDn = 0
 		}
-
 		ob := c.effectiveOutbound()
 		sp := newSpeeds[ob]
 		sp.UpSpeed += int64(float64(dUp) / dt)
@@ -208,11 +218,9 @@ func buildSamples(conns []clashConn) map[string]connSample {
 }
 
 func connKeyFor(c clashConn) string {
-	// Используем ID если он есть (не пустой)
 	if c.ID != "" {
 		return c.ID
 	}
-	// Fallback: host + outbound + network (устойчивый для долгих соединений)
 	host := c.Metadata.Host
 	if host == "" {
 		host = c.Metadata.DestinationIP
@@ -248,47 +256,38 @@ type StatsResponse struct {
 	SessSec float64 `json:"sess_duration_sec"`
 }
 
-func handleStats(w http.ResponseWriter, _ *http.Request) {
-	snap, ok := trafficCollector.get()
+func (h *DiagHandlers) handleStats(w http.ResponseWriter, _ *http.Request) {
+	snap, ok := h.traffic.get()
 	resp := StatsResponse{
 		Up:     snap.Up,
 		Down:   snap.Down,
 		OK:     ok,
-		Active: int(connTracker.active.Load()),
+		Active: int(h.conns.active.Load()),
 	}
-	resp.ProxyUp, resp.ProxyDn, resp.DirUp, resp.DirDn = connTracker.getSpeeds()
-	resp.SessUpB, resp.SessDnB, resp.SessSec = trafficCollector.getSessionTotals()
-
+	resp.ProxyUp, resp.ProxyDn, resp.DirUp, resp.DirDn = h.conns.getSpeeds()
+	resp.SessUpB, resp.SessDnB, resp.SessSec = h.traffic.getSessionTotals()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // ── Connections struct ────────────────────────────────────────────────────────
-// sing-box Clash API (verified field names):
-//   - "outbound"     — outbound tag name ("proxy-out", "direct", "block")
-//   - "upload"       — cumulative bytes sent
-//   - "download"     — cumulative bytes received
-//   - "metadata.processPath" — full path to process (camelCase!)
-//   - "metadata.host" — destination hostname
 
 type clashConn struct {
 	ID       string   `json:"id"`
 	Outbound string   `json:"outbound"`
-	Chains   []string `json:"chains"` // sing-box: цепочка outbounds (первый = финальный)
+	Chains   []string `json:"chains"`
 	Upload   int64    `json:"upload"`
 	Download int64    `json:"download"`
 	Metadata struct {
 		Host          string `json:"host"`
 		DestinationIP string `json:"destinationIP"`
 		Network       string `json:"network"`
-		ProcessPath   string `json:"processPath"` // camelCase! не process_path
+		ProcessPath   string `json:"processPath"`
 	} `json:"metadata"`
 	Rule        string `json:"rule"`
 	RulePayload string `json:"rulePayload"`
 }
 
-// effectiveOutbound возвращает реальный outbound тег.
-// sing-box Clash API иногда не заполняет "outbound" но заполняет "chains".
 func (c *clashConn) effectiveOutbound() string {
 	if c.Outbound != "" {
 		return c.Outbound
@@ -299,9 +298,13 @@ func (c *clashConn) effectiveOutbound() string {
 	return ""
 }
 
-func fetchConnectionsData() ([]clashConn, error) {
+func fetchConnectionsData(ctx context.Context) ([]clashConn, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.ClashAPIBase+"/connections", nil)
+	if err != nil {
+		return nil, err
+	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	r, err := client.Get(singBoxAPIBase + "/connections")
+	r, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -315,21 +318,18 @@ func fetchConnectionsData() ([]clashConn, error) {
 	return cr.Connections, nil
 }
 
-// handleDebugStats — временный debug endpoint для диагностики скорости.
-// Возвращает сырые данные из sing-box + текущие вычисленные скорости.
-func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
-	conns, err := fetchConnectionsData()
-	snap, snapOK := trafficCollector.get()
+func (h *DiagHandlers) handleDebugStats(w http.ResponseWriter, r *http.Request) {
+	conns, err := fetchConnectionsData(r.Context())
+	snap, snapOK := h.traffic.get()
 
-	connTracker.mu.RLock()
+	h.conns.mu.RLock()
 	speeds := make(map[string]interface{})
-	for k, v := range connTracker.speeds {
+	for k, v := range h.conns.speeds {
 		speeds[k] = map[string]int64{"up": v.UpSpeed, "dn": v.DnSpeed}
 	}
-	prevCount := len(connTracker.prev)
-	connTracker.mu.RUnlock()
+	prevCount := len(h.conns.prev)
+	h.conns.mu.RUnlock()
 
-	// Первые 5 соединений для диагностики
 	sample := []map[string]interface{}{}
 	for i, c := range conns {
 		if i >= 5 {
@@ -365,8 +365,8 @@ func handleDebugStats(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func handleConnections(w http.ResponseWriter, _ *http.Request) {
-	conns, err := fetchConnectionsData()
+func (h *DiagHandlers) handleConnections(w http.ResponseWriter, r *http.Request) {
+	conns, err := fetchConnectionsData(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -386,8 +386,8 @@ type DiagResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
-func handleDiagTest(w http.ResponseWriter, _ *http.Request) {
-	proxyURL, _ := url.Parse(testProxyAddr)
+func handleDiagTest(w http.ResponseWriter, r *http.Request) {
+	proxyURL, _ := url.Parse("http://" + config.ProxyAddr)
 	client := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   10 * time.Second,

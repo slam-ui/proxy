@@ -11,16 +11,19 @@ import (
 	"sync"
 	"time"
 
+	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 
 	"github.com/gorilla/mux"
 )
 
 // DefaultProxyAddress адрес HTTP-прокси по умолчанию (sing-box http inbound)
-const DefaultProxyAddress = "127.0.0.1:10807"
+// DefaultProxyAddress адрес HTTP-прокси по умолчанию — алиас config.ProxyAddr.
+const DefaultProxyAddress = config.ProxyAddr
 
 // Config конфигурация API сервера
 type Config struct {
@@ -53,6 +56,10 @@ type StatusResponse struct {
 	XRay struct {
 		Running bool `json:"running"`
 		PID     int  `json:"pid"`
+		Warming bool `json:"warming"`  // true пока wintun/sing-box ещё инициализируются
+		// ReadyAt — Unix timestamp (секунды) когда прокси ориентировочно будет готов.
+		// 0 если warming=false или ETA уже в прошлом.
+		ReadyAt int64 `json:"ready_at"`
 	} `json:"xray"`
 	Proxy struct {
 		Enabled bool   `json:"enabled"`
@@ -72,7 +79,9 @@ type MessageResponse struct {
 	Success bool   `json:"success"`
 }
 
-// NewServer создаёт новый API сервер
+// NewServer создаёт новый API сервер.
+// XRayManager в cfg может быть nil — это нормально при "фоновом старте":
+// UI поднимается сразу, sing-box стартует позже и обновляет менеджер через SetXRayManager.
 func NewServer(cfg Config) *Server {
 	s := &Server{
 		config: cfg,
@@ -101,10 +110,12 @@ func (s *Server) setupRoutes() {
 }
 
 // SetupFeatureRoutes регистрирует профили, диагностику и статистику.
+// ctx используется для управления lifecycle фоновых горутин диагностики —
+// при отмене ctx горутины останавливаются корректно.
 // Вызывать после NewServer, до FinalizeRoutes.
-func (s *Server) SetupFeatureRoutes() {
+func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupProfileRoutes(s)
-	SetupDiagRoutes(s)
+	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
 	// Geosite endpoints
 	api := s.router.PathPrefix("/api").Subrouter()
@@ -142,9 +153,6 @@ func (s *Server) Start(ctx context.Context) error {
 	case err := <-errChan:
 		return err
 	case <-ctx.Done():
-		// Контекст отменён — корректно останавливаем сервер.
-		// Ранее здесь был просто return nil, из-за чего ListenAndServe продолжал
-		// работать: горутина и порт оставались занятыми до явного вызова Shutdown.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return s.httpServer.Shutdown(shutdownCtx)
@@ -152,27 +160,41 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // Shutdown корректно останавливает сервер
-// GetXRayManager возвращает актуальный XRayManager (обновляется после doApply).
-// Используется в OnCrash в main.go чтобы не держать ссылку на старый менеджер.
-func (s *Server) GetXRayManager() xray.Manager {
-	s.configMu.RLock()
-	defer s.configMu.RUnlock()
-	return s.config.XRayManager
-}
-
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.httpServer == nil {
 		return nil
 	}
 	s.logger.Info("Остановка API сервера...")
 	err := s.httpServer.Shutdown(ctx)
-	// ErrServerClosed возникает при повторном вызове Shutdown — это нормально:
-	// первый вызов происходит явно в main.go, второй — через defer cancel() → ctx.Done().
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("ошибка при остановке API сервера: %w", err)
 	}
 	s.logger.Info("API сервер остановлен")
 	return nil
+}
+
+// GetXRayManager возвращает актуальный XRayManager (обновляется после doApply и после фонового старта).
+func (s *Server) GetXRayManager() xray.Manager {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.config.XRayManager
+}
+
+// SetXRayManager обновляет XRayManager потокобезопасно.
+// Используется при "фоновом старте": sing-box создаётся после поднятия UI
+// и регистрирует себя здесь когда готов.
+// Также используется в doApply при перезапуске с новым конфигом.
+func (s *Server) SetXRayManager(mgr xray.Manager) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	s.config.XRayManager = mgr
+}
+
+// IsWarming возвращает true пока XRayManager ещё не установлен (фоновая инициализация).
+func (s *Server) IsWarming() bool {
+	s.configMu.RLock()
+	defer s.configMu.RUnlock()
+	return s.config.XRayManager == nil
 }
 
 // handleStatus GET /api/status
@@ -186,8 +208,21 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{
 		ConfigPath: s.config.ConfigPath,
 	}
-	response.XRay.Running = xrayMgr.IsRunning()
-	response.XRay.PID = xrayMgr.GetPID()
+
+	if xrayMgr == nil {
+		// Фоновая инициализация ещё не завершена — сообщаем UI о прогреве.
+		// Вычисляем ETA на основе StopFile + адаптивного gap + settle delay.
+		response.XRay.Running = false
+		response.XRay.Warming = true
+		if eta := wintun.EstimateReadyAt(); eta.After(time.Now()) {
+			response.XRay.ReadyAt = eta.Unix()
+		}
+	} else {
+		response.XRay.Running = xrayMgr.IsRunning()
+		response.XRay.PID = xrayMgr.GetPID()
+		response.XRay.Warming = false
+		response.XRay.ReadyAt = 0
+	}
 	response.Proxy.Enabled = s.config.ProxyManager.IsEnabled()
 	response.Proxy.Address = proxyConfig.Address
 
@@ -265,8 +300,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleQuit(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "shutting down", Success: true})
 	if s.config.QuitChan != nil {
-		// BUG FIX: sync.Once гарантирует однократное закрытие.
-		// Два одновременных POST /api/quit без Once → оба проходят select → PANIC: close of closed channel.
 		go func() {
 			time.Sleep(100 * time.Millisecond)
 			s.quitOnce.Do(func() { close(s.config.QuitChan) })
@@ -304,15 +337,12 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // addSilentPath добавляет путь в список без логирования (polling endpoints)
 func (s *Server) addSilentPath(path string) {
-	// silentPaths живёт внутри loggingMiddleware-замыкания — добавляем через отдельный список
 	s.config.SilentPaths = append(s.config.SilentPaths, path)
 }
 
 // loggingMiddleware логирует HTTP запросы.
-// Частые polling-эндпоинты и статика не логируются — иначе флудят stdout
-// вместе с логами sing-box и могут блокировать запись в буфер.
+// Частые polling-эндпоинты и статика не логируются.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
-	// Эндпоинты которые поллятся каждую секунду — не логируем
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		silentPaths := map[string]bool{
 			"/api/status":           true,
@@ -327,9 +357,6 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Статические файлы тоже не логируем.
-		// BUG FIX: используем strings.HasSuffix вместо ручных slice операций —
-		// p[len(p)-3:] паникует если len(p) < 3 (например путь "/a").
 		if strings.HasSuffix(r.URL.Path, ".js") ||
 			strings.HasSuffix(r.URL.Path, ".css") ||
 			strings.HasSuffix(r.URL.Path, ".ico") ||

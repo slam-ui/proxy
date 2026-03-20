@@ -13,7 +13,6 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/proxy"
-	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 
 	"github.com/gorilla/mux"
@@ -394,11 +393,14 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 		}
 	}
 
-	// Записываем timestamp + активный polling до реального освобождения wintun.
-	// Используем пакет internal/wintun — единственная точка определения логики.
-	wintun.RecordStop()
-	wintun.RemoveStaleTunAdapter(h.server.logger)
-	wintun.PollUntilFree(h.server.logger, config.TunInterfaceName)
+	// BeforeRestart выполняет wintun cleanup (RecordStop + RemoveStaleTunAdapter + PollUntilFree).
+	// Инъектируется через xray.Config.BeforeRestart из main.go —
+	// api пакет больше не зависит от wintun напрямую.
+	if h.xrayConfig.BeforeRestart != nil {
+		if err := h.xrayConfig.BeforeRestart(h.server.logger); err != nil {
+			h.server.logger.Warn("BeforeRestart вернул ошибку: %v", err)
+		}
+	}
 
 	// Применяем предварительно сгенерированный конфиг (или оставляем существующий).
 	// Конфиг уже был проверен в handleApply ДО остановки sing-box — здесь просто

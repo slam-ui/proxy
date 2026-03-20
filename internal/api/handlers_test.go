@@ -59,6 +59,9 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 	})
 	// xray.Config нужен TunHandlers только для doApply; в unit-тестах правил не вызываем.
 	h := srv.SetupTunRoutes(xray.Config{})
+	// Регистрируем все feature-роуты чтобы тесты покрывали реальный набор эндпоинтов
+	SetupSettingsRoutes(srv)
+	srv.FinalizeRoutes()
 
 	return srv, h, func() { os.Chdir(old) }
 }
@@ -607,4 +610,76 @@ func TestProfiles_PathTraversal_LoadReturns400(t *testing.T) {
 	if w.Code == http.StatusOK {
 		t.Error("path traversal в имени профиля не должен возвращать 200")
 	}
+}
+
+// ─── /api/settings ────────────────────────────────────────────────────────
+
+func TestGetSettings_ReturnsJSON(t *testing.T) {
+	srv, _, cleanup := buildTunServer(t)
+	defer cleanup()
+	w := getJSON(t, srv.router, "/api/settings")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/settings = %d, want 200", w.Code)
+	}
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := resp["autorun"]; !ok {
+		t.Error("response missing 'autorun' field")
+	}
+}
+
+func TestSetAutorun_InvalidBody_Returns400(t *testing.T) {
+	srv, _, cleanup := buildTunServer(t)
+	defer cleanup()
+	req, _ := http.NewRequest(http.MethodPost, "/api/settings/autorun", bytes.NewReader([]byte(`{bad json`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid body = %d, want 400", w.Code)
+	}
+}
+
+// ─── server.GetXRayManager ────────────────────────────────────────────────
+
+func TestGetXRayManager_ReturnsCurrentManager(t *testing.T) {
+	stub := &stubXray{running: true}
+	srv := NewServer(Config{
+		XRayManager:  stub,
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	})
+	got := srv.GetXRayManager()
+	if got != stub {
+		t.Error("GetXRayManager should return the configured manager")
+	}
+}
+
+// ─── handleQuit double-close safety ──────────────────────────────────────
+
+func TestHandleQuit_DoubleCallDoesNotPanic(t *testing.T) {
+	quit := make(chan struct{})
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+		QuitChan:     quit,
+	})
+	// Two simultaneous POST /api/quit must not panic
+	done := make(chan struct{}, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("panic on double quit: %v", r)
+				}
+				done <- struct{}{}
+			}()
+			postJSON(t, srv.router, "/api/quit", nil)
+		}()
+	}
+	<-done
+	<-done
 }

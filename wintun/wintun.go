@@ -144,7 +144,7 @@ func EstimateReadyAt() time.Time {
 	}
 	minGap := ReadAdaptiveGap()
 	// +settle delay учитываем в ETA
-	readyAt := stopTime.Add(minGap + ReadSettleDelay())
+	readyAt := stopTime.Add(minGap + readSettleDelay())
 	if readyAt.Before(time.Now()) {
 		return time.Now()
 	}
@@ -161,7 +161,7 @@ const settleDelayMax  = 45 * time.Second
 
 // readSettleDelay вычисляет актуальный settle delay на основе текущего адаптивного gap.
 // settle = max(settleDelayBase, gap * 0.25), не более settleDelayMax.
-func ReadSettleDelay() time.Duration {
+func readSettleDelay() time.Duration {
 	gap := ReadAdaptiveGap()
 	d := time.Duration(float64(gap) * 0.25)
 	if d < settleDelayBase {
@@ -217,7 +217,7 @@ func PollUntilFree(log logger.Logger, ifName string) {
 	if !InterfaceExists(ifName) {
 		// Интерфейса нет в netsh — но kernel может ещё не освободить объект.
 		// Шаг 3: settle delay перекрывает разрыв между "netsh свободен" и "kernel free".
-		sd := ReadSettleDelay()
+		sd := readSettleDelay()
 		log.Info("wintun: интерфейс %s не найден в TCP/IP стеке — settle %v...", ifName, sd)
 		time.Sleep(sd)
 		log.Info("wintun: settle завершён — готов")
@@ -231,7 +231,7 @@ func PollUntilFree(log logger.Logger, ifName string) {
 		time.Sleep(PollInterval)
 		if !InterfaceExists(ifName) {
 			// Нашли момент исчезновения — ждём settle перед стартом.
-			sd := ReadSettleDelay()
+			sd := readSettleDelay()
 			log.Info("wintun: интерфейс %s освобождён — settle %v...", ifName, sd)
 			time.Sleep(sd)
 			log.Info("wintun: settle завершён — готов")

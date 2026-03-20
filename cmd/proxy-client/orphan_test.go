@@ -33,6 +33,7 @@ import (
 	"time"
 	"unsafe"
 
+	"proxyclient/internal/fileutil"
 	"proxyclient/internal/logger"
 )
 
@@ -414,7 +415,33 @@ func TestWindowState_SaveAndRestore(t *testing.T) {
 	})
 }
 
+// atomicReplaceFile атомарно заменяет dst содержимым data.
+//
+// На Windows os.Rename над существующим файлом НЕ атомарна:
+// ядро сначала удаляет целевой файл, потом переименовывает источник.
+// В этом окне другой writer может успеть записать своё содержимое,
+// и два JSON-блока конкатенируются → невалидный файл.
+//
+// MoveFileExW с флагом MOVEFILE_REPLACE_EXISTING атомарна на NTFS:
+// она меняет directory entry одной транзакцией без промежуточного удаления.
+// Именно её используют production proxy-клиенты (v2rayN, Clash Verge Rev)
+// для атомарной замены конфигов sing-box.
+func atomicReplaceFile(dst string, data []byte) error {
+	// Делегируем в fileutil.WriteAtomic — единственная реализация для всего проекта.
+	return fileutil.WriteAtomic(dst, data, 0644)
+}
+
 // TestWindowState_ConcurrentAccess: атомарность записи файла под нагрузкой.
+//
+// Тест проверяет что atomicReplaceFile не оставляет невалидный JSON
+// при конкурентных записях. Это реальный сценарий из production:
+// proxy-client сохраняет позицию окна при каждом перемещении,
+// sing-box конфиг обновляется через doApply — оба используют tmp+rename.
+//
+// Корень предыдущего бага: все горутины писали в ОДИН tmp-файл.
+// Горутина A писала в .tmp, горутина B перетирала .tmp, горутина A
+// делала Rename — результат принадлежал B. А os.Rename(existing) на
+// Windows не атомарна и может дать два JSON подряд в одном файле.
 func TestWindowState_ConcurrentAccess(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -431,9 +458,12 @@ func TestWindowState_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			s := windowState{X: int32(n * 10), Y: int32(n * 5), Width: 960, Height: 640}
 			data, _ := json.Marshal(s)
-			tmp := statePath + ".tmp"
-			_ = os.WriteFile(tmp, data, 0644)
-			_ = os.Rename(tmp, statePath) // атомарная замена
+			// atomicReplaceFile: уникальный tmp per-goroutine + MoveFileExW REPLACE_EXISTING.
+			if err := atomicReplaceFile(statePath, data); err != nil {
+				// Ошибки записи возможны при конкуренции на Windows — не фатальны:
+				// хотя бы одна горутина должна победить и оставить валидный файл.
+				t.Logf("goroutine %d: atomicReplaceFile: %v", n, err)
+			}
 		}(i)
 	}
 	wg.Wait()

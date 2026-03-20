@@ -41,6 +41,13 @@
         .slabel{font-size:13px;font-weight:800;letter-spacing:.1em;transition:color .3s}
         .slabel.on{color:var(--on)}.slabel.off{color:var(--off)}.slabel.pend{color:var(--pending)}
         .smeta{font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        /* ── Warming timer ─── */
+        .warm-bar{display:none;align-items:center;gap:8px;padding:6px 14px;background:rgba(255,179,0,.07);border-bottom:1px solid rgba(255,179,0,.15);flex-shrink:0}
+        .warm-bar.visible{display:flex}
+        .warm-spinner{width:12px;height:12px;border:2px solid rgba(255,179,0,.3);border-top-color:var(--pending);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .warm-text{font-size:10px;color:var(--pending);font-family:'JetBrains Mono',monospace;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .warm-eta{font-size:11px;font-weight:700;color:var(--pending);font-family:'JetBrains Mono',monospace;flex-shrink:0;min-width:36px;text-align:right}
         .topbar-actions{display:flex;gap:6px;flex-shrink:0}
         .tbtn-sm{background:none;border:1px solid var(--border);border-radius:3px;padding:4px 10px;font-size:11px;color:var(--muted2);cursor:pointer;transition:all .15s;font-family:'JetBrains Mono',monospace}
         .tbtn-sm.on-btn{border-color:rgba(0,230,118,.3);color:var(--on)}
@@ -284,6 +291,12 @@
         </div>
     </div>
 
+    <!-- Warming bar: показывается пока sing-box инициализируется в фоне -->
+    <div class="warm-bar" id="warmBar">
+        <div class="warm-spinner"></div>
+        <div class="warm-text" id="warmText">Инициализация TUN...</div>
+        <div class="warm-eta" id="warmEta">--:--</div>
+    </div>
     <!-- Stats strip: 2 rows, fits compact 540px window -->
     <div class="stats-strip" id="statsStrip">
         <!-- Row 1: realtime speeds -->
@@ -493,7 +506,7 @@
 
 <script>
     const API='http://localhost:8080/api', POLL=3000;
-    let ps={enabled:false,xray:false,pid:0,addr:'',pending:false,conn:false};
+    let ps={enabled:false,xray:false,pid:0,addr:'',pending:false,conn:false,warming:false,readyAt:0};
     let rules=[], defAction='proxy', dirty=false, filter='all';
     let selectedType='auto';
     let procData=[], procFilter='all';
@@ -525,18 +538,52 @@
     }
 
     // ── Proxy render ───────────────────────────────────────────
+    let warmTimerInterval=null;
+
+    function updateWarmBar(){
+        const bar=$('warmBar');
+        if(!ps.warming||!ps.conn){
+            bar.classList.remove('visible');
+            if(warmTimerInterval){clearInterval(warmTimerInterval);warmTimerInterval=null;}
+            return;
+        }
+        bar.classList.add('visible');
+        const updateEta=()=>{
+            const now=Math.floor(Date.now()/1000);
+            const sec=(ps.readyAt||0)-now;
+            if(sec<=0){
+                $('warmText').textContent='Запуск sing-box...';
+                $('warmEta').textContent='';
+            } else {
+                const m=Math.floor(sec/60),s=sec%60;
+                $('warmText').textContent='Ожидание освобождения TUN...';
+                $('warmEta').textContent=(m>0?m+'м ':'')+s+'с';
+            }
+        };
+        updateEta();
+        if(!warmTimerInterval){
+            warmTimerInterval=setInterval(()=>{
+                if(!ps.warming){clearInterval(warmTimerInterval);warmTimerInterval=null;updateWarmBar();return;}
+                updateEta();
+            },1000);
+        }
+    }
+
     function renderProxy(){
-        const s=ps.pending?'pend':(ps.enabled?'on':'off');
+        const warming=ps.warming&&ps.conn;
+        const s=warming?'pend':(ps.pending?'pend':(ps.enabled?'on':'off'));
         $('bg').className='bg-glow '+(ps.enabled?'on':'off');
         $('cdot').className='conn-dot '+(ps.conn?'ok':'err');
         $('pi').className='pwr '+s;
         $('sl').className='slabel '+s;
-        if(ps.pending)$('sl').textContent='ОЖИДАНИЕ...';
-        else if(ps.enabled)$('sl').textContent='ВКЛЮЧЁН';
-        else $('sl').textContent='ОТКЛЮЧЁН';
-        $('smeta').textContent=ps.xray?`${ps.addr||'127.0.0.1:10807'} · pid ${ps.pid}`:'sing-box · vless · reality';
-        const b=ps.pending;
+        if(warming)$('sl').textContent='ПРОГРЕВ...';
+        else if(ps.pending)$('sl').textContent='ОЖИДАНИЕ...';
+        else if(ps.enabled)$('sl').textContent='ВКЛЮЧЕН';
+        else $('sl').textContent='ОТКЛЮЧЕН';
+        $('smeta').textContent=ps.xray?`${ps.addr||'127.0.0.1:10807'} · pid ${ps.pid}`:(warming?'wintun cleanup · ожидание TUN':'sing-box · vless · reality');
+        const b=ps.pending||warming;
         $('rb').disabled=b||!ps.conn;$('be').disabled=b||ps.enabled||!ps.conn;$('bd').disabled=b||!ps.enabled||!ps.conn;
+        updateWarmBar();
     }
 
     // ── Default render ─────────────────────────────────────────
@@ -740,6 +787,7 @@
             const d=await r.json();
             ps.conn=true;ps.enabled=d.proxy?.enabled??false;
             ps.xray=d.xray?.running??false;ps.pid=d.xray?.pid??0;ps.addr=d.proxy?.address??'';
+            ps.warming=d.xray?.warming??false;ps.readyAt=d.xray?.ready_at??0;
         }catch{ps.conn=false}
         // BUG FIX: убран вызов fetchConnections() отсюда — он уже вызывается
         // через setInterval каждые 4с. Двойной fetch на главной вкладке создавал
