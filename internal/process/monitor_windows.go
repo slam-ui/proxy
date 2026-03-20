@@ -59,7 +59,10 @@ func (m *monitor) Start() error {
 	m.stopChan = make(chan struct{})
 
 	// Запускаем периодическое сканирование
-	m.ticker = time.NewTicker(5 * time.Second)
+	// 10с вместо 5с: CreateToolhelp32Snapshot перечисляет ВСЕ процессы системы.
+	// На Windows это ~200-500 процессов, каждый с OpenProcess + GetProcessTimes.
+	// Список процессов пользователя меняется редко — 10с достаточно.
+	m.ticker = time.NewTicker(10 * time.Second)
 	m.running = true
 
 	go m.monitorLoop()
