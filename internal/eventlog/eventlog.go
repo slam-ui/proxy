@@ -81,17 +81,50 @@ func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 	}
 }
 
-// GetSince возвращает события с ID > since (в хронологическом порядке)
+// GetSince возвращает события с ID > since (в хронологическом порядке).
+// OPT #3: быстрый путь если новых событий нет (самый частый случай при polling).
+// Бинарный поиск начальной позиции — O(log n) вместо O(n).
+// ID монотонно растут и кольцевой буфер хранит события в порядке добавления,
+// поэтому бинарный поиск применим напрямую.
 func (l *Log) GetSince(since int) []Event {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	result := make([]Event, 0)
-	for i := 0; i < l.size; i++ {
-		e := l.events[(l.head+i)%l.maxSize]
-		if e.ID > since {
-			result = append(result, e)
+	if l.size == 0 {
+		return []Event{}
+	}
+
+	// Быстрый путь: последнее событие не новее since — нечего отдавать.
+	lastIdx := (l.head + l.size - 1) % l.maxSize
+	if l.events[lastIdx].ID <= since {
+		return []Event{}
+	}
+
+	// Быстрый путь: первое событие новее since — отдаём всё.
+	firstIdx := l.head % l.maxSize
+	if l.events[firstIdx].ID > since {
+		result := make([]Event, l.size)
+		for i := 0; i < l.size; i++ {
+			result[i] = l.events[(l.head+i)%l.maxSize]
 		}
+		return result
+	}
+
+	// Бинарный поиск: найти первый индекс i такой что events[i].ID > since.
+	// Диапазон [0, l.size): логические индексы в кольцевом буфере.
+	lo, hi := 0, l.size
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if l.events[(l.head+mid)%l.maxSize].ID <= since {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+
+	result := make([]Event, l.size-lo)
+	for i := lo; i < l.size; i++ {
+		result[i-lo] = l.events[(l.head+i)%l.maxSize]
 	}
 	return result
 }
@@ -125,24 +158,41 @@ func NewLogger(inner logger.Logger, evLog *Log, source string) *Logger {
 	return &Logger{inner: inner, evLog: evLog, source: source}
 }
 
+// OPT #2: форматируем сообщение один раз и передаём готовую строку
+// в оба назначения. Ранее: inner.Info(format, args...) → Sprintf внутри logger,
+// evLog.Add(format, args...) → ещё один Sprintf внутри Add. Итого 2 аллокации
+// на каждое сообщение. Сейчас — одна.
+
 func (l *Logger) Debug(format string, args ...interface{}) {
-	l.inner.Debug(format, args...)
-	l.evLog.Add(LevelDebug, l.source, format, args...)
+	msg := formatMsg(format, args...)
+	l.inner.Debug("%s", msg)
+	l.evLog.Add(LevelDebug, l.source, "%s", msg)
 }
 
 func (l *Logger) Info(format string, args ...interface{}) {
-	l.inner.Info(format, args...)
-	l.evLog.Add(LevelInfo, l.source, format, args...)
+	msg := formatMsg(format, args...)
+	l.inner.Info("%s", msg)
+	l.evLog.Add(LevelInfo, l.source, "%s", msg)
 }
 
 func (l *Logger) Warn(format string, args ...interface{}) {
-	l.inner.Warn(format, args...)
-	l.evLog.Add(LevelWarn, l.source, format, args...)
+	msg := formatMsg(format, args...)
+	l.inner.Warn("%s", msg)
+	l.evLog.Add(LevelWarn, l.source, "%s", msg)
 }
 
 func (l *Logger) Error(format string, args ...interface{}) {
-	l.inner.Error(format, args...)
-	l.evLog.Add(LevelError, l.source, format, args...)
+	msg := formatMsg(format, args...)
+	l.inner.Error("%s", msg)
+	l.evLog.Add(LevelError, l.source, "%s", msg)
+}
+
+// formatMsg форматирует строку только если есть аргументы.
+func formatMsg(format string, args ...interface{}) string {
+	if len(args) == 0 {
+		return format
+	}
+	return fmt.Sprintf(format, args...)
 }
 
 // ─── LineWriter ───────────────────────────────────────────────────────────────

@@ -176,16 +176,20 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 		// Сообщаем UI что идёт перезапуск и когда ожидать готовности.
 		a.apiServer.SetRestarting(wintun.EstimateReadyAt())
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
-		a.apiServer.ClearRestarting()
 		a.mainLogger.Info("Перезапуск sing-box после wintun GC...")
 		// StartAfterManualCleanup: cleanup уже выполнен выше → пропускаем BeforeRestart
 		// чтобы не запускать PollUntilFree второй раз (двойное ожидание ~2 мин).
+		// BUG FIX #2: ClearRestarting() вызывается ПОСЛЕ успешного запуска sing-box.
+		// Ранее он вызывался ДО StartAfterManualCleanup, из-за чего UI кратко видел
+		// warming=false, running=false (прокси «не запущен») до реального старта.
 		if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
+			a.apiServer.ClearRestarting()
 			a.mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
 			notification.Send("Proxy — ошибка", "Не удалось перезапустить. Откройте приложение.")
 			_ = a.proxyManager.Disable()
 			tray.SetEnabled(false)
 		} else {
+			a.apiServer.ClearRestarting()
 			a.mainLogger.Info("sing-box успешно перезапущен (PID: %d)", currentMgr.GetPID())
 			notification.Send("Proxy", "Перезапущен успешно ✓")
 		}
@@ -219,11 +223,9 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		// Оптимизация: генерируем конфиг ПАРАЛЛЕЛЬНО с wintun cleanup/gap-ожиданием.
 		// На обычном перезапуске gap+settle = 15-240с — всё это время CPU простаивает.
 		// Канал configReady доставляет результат (error или nil) после завершения poll.
-		type configResult struct {
-			err        error
-			configPath string // путь к сгенерированному конфигу (может быть .tmp)
-		}
-		configCh := make(chan configResult, 1)
+		// BUG FIX #15: configResult.configPath было мёртвым полем (писалось, никогда не читалось).
+		// Передаём просто error — это всё что нужно вызывающему коду.
+		configCh := make(chan error, 1)
 		go func() {
 			routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
 			if err != nil {
@@ -231,17 +233,17 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 				routingCfg = config.DefaultRoutingConfig()
 			}
 			genErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)
-			configCh <- configResult{err: genErr, configPath: a.cfg.ConfigPath}
+			configCh <- genErr
 		}()
 
 		wintun.RemoveStaleTunAdapter(a.mainLogger)
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
 
 		// Ждём завершения генерации конфига (обычно уже готов к этому моменту).
-		cfgRes := <-configCh
+		cfgErr := <-configCh
 		a.mainLogger.Info("Запуск sing-box...")
-		if cfgRes.err != nil {
-			if !a.handleConfigError(cfgRes.err) {
+		if cfgErr != nil {
+			if !a.handleConfigError(cfgErr) {
 				return
 			}
 		}
@@ -347,6 +349,12 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 // ДО того как пользователь сделает свой первый запрос.
 // Без прогрева: первый запрос = DNS + TLS handshake = +100-200мс latency.
 // С прогревом: TLS уже открыт, первый запрос идёт через готовое соединение.
+//
+// BUG FIX #9: google.com нарушал логику при default_action=direct —
+// трафик шёл напрямую, не через VLESS, и прогрев не работал.
+// Вместо этого используем api.ipify.org — надёжный хост который всегда
+// должен идти через proxy-out (он не попадает ни в один прямой маршрут),
+// и одновременно проверяем что внешний IP сменился на серверный.
 func preWarmProxyConnection(proxyAddr string, log logger.Logger) {
 	// Даём TUN интерфейсу время подняться (~2-10с после HTTP-порта).
 	// Прогрев через HTTP proxy inbound — не зависит от TUN.
@@ -368,8 +376,11 @@ func preWarmProxyConnection(proxyAddr string, log logger.Logger) {
 		Transport: transport,
 		Timeout:   15 * time.Second,
 	}
-	// Connectivity check — лёгкий HEAD запрос, минимум трафика.
-	resp, err := client.Head("https://www.google.com")
+	// BUG FIX #9: используем хост который гарантированно идёт через proxy-out.
+	// api.ipify.org не входит ни в один direct/block маршрут по умолчанию,
+	// поэтому при любом default_action он попадает в proxy-out и открывает
+	// VLESS TLS соединение. Дополнительный бонус: видим внешний IP сервера в логе.
+	resp, err := client.Get("https://api.ipify.org?format=json")
 	if err != nil {
 		log.Info("pre-warm: соединение не установлено (%v) — пропускаем", err)
 		return

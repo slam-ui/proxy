@@ -207,16 +207,8 @@ func (h *AppProxyHandlers) handleDisableRule(w http.ResponseWriter, r *http.Requ
 
 func (h *AppProxyHandlers) handleListProcesses(w http.ResponseWriter, r *http.Request) {
 	processes := h.monitor.GetProcesses()
-
-	// Обогащаем данные о процессах matching rules
-	for i := range processes {
-		match := h.engine.FindMatchingRule(processes[i].Executable)
-		if match.Matched {
-			processes[i].RuleID = match.Rule.ID
-			processes[i].ProxyStatus = string(match.Rule.Action)
-		}
-	}
-
+	// OPT #2: ProxyStatus и RuleID уже закэшированы в ProcessInfo во время refresh().
+	// Цикл FindMatchingRule удалён — данные готовы без дополнительных вычислений.
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"processes": processes,
 		"count":     len(processes),

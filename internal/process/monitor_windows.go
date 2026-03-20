@@ -29,6 +29,10 @@ type monitor struct {
 	ticker    *time.Ticker
 	stopChan  chan struct{}
 	running   bool
+	// OPT #2: опциональная ссылка на engine для кэширования ProxyStatus во время refresh().
+	// Без этого handleListProcesses делал O(процессы × правила) при каждом HTTP-запросе.
+	// Теперь matching выполняется раз в 10с при refresh() — результат хранится в ProcessInfo.
+	engine    apprules.Engine
 }
 
 // NewMonitor создает новый process monitor
@@ -37,6 +41,16 @@ func NewMonitor(log logger.Logger) Monitor {
 		processes: make(map[int]*apprules.ProcessInfo),
 		logger:    log,
 		stopChan:  make(chan struct{}),
+	}
+}
+
+// NewMonitorWithEngine создает monitor с engine для автоматического кэширования ProxyStatus.
+func NewMonitorWithEngine(log logger.Logger, eng apprules.Engine) Monitor {
+	return &monitor{
+		processes: make(map[int]*apprules.ProcessInfo),
+		logger:    log,
+		stopChan:  make(chan struct{}),
+		engine:    eng,
 	}
 }
 
@@ -124,7 +138,12 @@ func (m *monitor) Refresh() error {
 	return m.refresh()
 }
 
-// refresh внутренний метод для обновления (без lock)
+// refresh внутренний метод для обновления (без lock).
+// OPT #4: diff-based подход вместо полной замены map.
+// OpenProcess + QueryFullProcessImageNameW — дорогие Win32 вызовы.
+// Ранее вызывались для ВСЕХ ~200-400 процессов системы каждые 10с.
+// Теперь: только для новых процессов (появившихся с последнего скана).
+// Аналог: singbox-launcher/go-ps использует аналогичный инкрементальный подход.
 func (m *monitor) refresh() error {
 	snapshot, err := createToolhelp32Snapshot()
 	if err != nil {
@@ -132,23 +151,40 @@ func (m *monitor) refresh() error {
 	}
 	defer syscall.CloseHandle(snapshot)
 
-	newProcesses := make(map[int]*apprules.ProcessInfo)
-
 	snaps, err := enumProcesses(snapshot)
 	if err != nil {
 		return fmt.Errorf("failed to enumerate processes: %w", err)
 	}
 
+	// Отмечаем живые PID-ы.
+	seen := make(map[int]bool, len(snaps))
 	for _, snap := range snaps {
-		info, err := getProcessInfo(snap)
-		if err != nil {
-			continue
+		seen[snap.PID] = true
+		if _, exists := m.processes[snap.PID]; !exists {
+			// Новый процесс — нужен OpenProcess для получения пути.
+			if info, err := getProcessInfo(snap); err == nil {
+				// OPT #2: кэшируем ProxyStatus сразу при refresh() если engine задан.
+				// handleListProcesses теперь просто отдаёт готовые данные — O(1),
+				// вместо O(процессы × правила) при каждом HTTP-запросе UI.
+				if m.engine != nil {
+					match := m.engine.FindMatchingRule(info.Executable)
+					if match.Matched {
+						info.RuleID = match.Rule.ID
+						info.ProxyStatus = string(match.Rule.Action)
+					}
+				}
+				m.processes[snap.PID] = info
+			}
 		}
-		newProcesses[snap.PID] = info
+		// Существующие процессы не трогаем — их данные актуальны.
 	}
 
-	// Обновляем кэш
-	m.processes = newProcesses
+	// Удаляем завершившиеся процессы.
+	for pid := range m.processes {
+		if !seen[pid] {
+			delete(m.processes, pid)
+		}
+	}
 
 	return nil
 }

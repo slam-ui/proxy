@@ -6,8 +6,8 @@ package fileutil
 import (
 	"fmt"
 	"io/fs"
-	"math/rand"
 	"os"
+	"path/filepath"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -22,22 +22,43 @@ const moveFileReplaceExisting = 0x1
 
 // WriteAtomic атомарно записывает data в dst.
 //
-// Проблема os.Rename на Windows:
+// OPT #4: заменили rand.Int63() на os.CreateTemp():
+//   - os.CreateTemp использует криптографически стойкий источник имён — нет коллизий
+//     при высокой частоте записи из нескольких горутин.
+//   - Возвращает уже открытый *os.File — один syscall open вместо двух
+//     (os.WriteFile открывал бы файл заново).
+//   - Убрали import "math/rand".
 //
-//	os.Rename над существующим файлом НЕ атомарна: ядро сначала удаляет
-//	целевой файл, потом переименовывает источник. В этом окне конкурирующий
-//	writer может вклиниться и два JSON-блока конкатенируются → невалидный файл.
-//
-// Решение: MoveFileExW с флагом MOVEFILE_REPLACE_EXISTING атомарна на NTFS —
+// MoveFileExW с MOVEFILE_REPLACE_EXISTING атомарна на NTFS —
 // меняет directory entry одной транзакцией без промежуточного удаления.
-//
-// Уникальное tmp-имя (rand.Int63) предотвращает гонку нескольких вызывающих
-// на одном tmp-файле, что происходит при общем statePath+".tmp".
 func WriteAtomic(dst string, data []byte, perm fs.FileMode) error {
-	tmp := fmt.Sprintf("%s.%d.tmp", dst, rand.Int63())
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return fmt.Errorf("fileutil.WriteAtomic: write tmp: %w", err)
+	dir := filepath.Dir(dst)
+	base := filepath.Base(dst)
+
+	// CreateTemp создаёт файл вида "<base>.*.tmp" с уникальным суффиксом.
+	f, err := os.CreateTemp(dir, base+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("fileutil.WriteAtomic: create tmp: %w", err)
 	}
+	tmp := f.Name()
+
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("fileutil.WriteAtomic: write tmp: %w", writeErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("fileutil.WriteAtomic: close tmp: %w", closeErr)
+	}
+
+	// Применяем запрошенные права доступа к временному файлу.
+	if err := os.Chmod(tmp, perm); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("fileutil.WriteAtomic: chmod: %w", err)
+	}
+
 	dstPtr, err := windows.UTF16PtrFromString(dst)
 	if err != nil {
 		_ = os.Remove(tmp)

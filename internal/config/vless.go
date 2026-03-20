@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // VLESSParams параметры из VLESS URL
@@ -20,8 +22,52 @@ type VLESSParams struct {
 	Mux       bool // true если URL содержит ?mux=1 или ?multiplex=1
 }
 
-// parseVLESSKey читает и парсит VLESS URL из файла
+// vlessCache кэш разобранных параметров.
+// OPT #6: parseVLESSKey читала файл с диска при каждом вызове GenerateSingBoxConfig.
+// Функция вызывается при старте, при каждом apply (дважды), при ошибках.
+// Кэш инвалидируется только когда mtime файла изменился — т.е. пользователь
+// обновил secret.key. Аналог: GUI.for.SingBox кэширует конфиг по mtime.
+var vlessCache struct {
+	mu     sync.Mutex
+	path   string
+	mtime  time.Time
+	params *VLESSParams
+}
+
+// parseVLESSKey читает и парсит VLESS URL из файла.
+// При повторных вызовах с тем же файлом и неизменённым mtime возвращает кэш.
 func parseVLESSKey(secretPath string) (*VLESSParams, error) {
+	fi, err := os.Stat(secretPath)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось прочитать файл '%s': %w", secretPath, err)
+	}
+	modTime := fi.ModTime()
+
+	vlessCache.mu.Lock()
+	if vlessCache.path == secretPath && vlessCache.params != nil && vlessCache.mtime.Equal(modTime) {
+		cached := vlessCache.params
+		vlessCache.mu.Unlock()
+		return cached, nil
+	}
+	vlessCache.mu.Unlock()
+
+	// Кэш устарел или отсутствует — читаем файл заново.
+	params, err := readAndParseVLESS(secretPath)
+	if err != nil {
+		return nil, err
+	}
+
+	vlessCache.mu.Lock()
+	vlessCache.path = secretPath
+	vlessCache.mtime = modTime
+	vlessCache.params = params
+	vlessCache.mu.Unlock()
+
+	return params, nil
+}
+
+// readAndParseVLESS выполняет фактическое чтение и парсинг файла.
+func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 	secretBytes, err := os.ReadFile(secretPath)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось прочитать файл '%s': %w", secretPath, err)

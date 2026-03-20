@@ -50,11 +50,15 @@ type Server struct {
 	logger          logger.Logger
 	quitOnce        sync.Once    // гарантирует однократное закрытие QuitChan (защита от двойного POST /api/quit)
 	lifecycleCtx    context.Context // отменяется при Shutdown — прерывает PollUntilFree в tun_handlers
-	// restarting: true когда sing-box упал и идёт wintun cleanup + ожидание gap.
-	// Позволяет UI показать countdown вместо "не запущен".
+	// BUG FIX #13: restarting и restartReadyAt объединены под одним мьютексом.
+	// /api/status поллится каждые 2-3с — два отдельных RLock были избыточны.
+	restartMu        sync.RWMutex
 	restarting       bool
 	restartReadyAt   time.Time
-	restartMu        sync.RWMutex
+	// BUG FIX #7: silentCache строится один раз, инвалидируется только при addSilentPath.
+	// Без кэша map пересоздавалась при каждом HTTP-запросе (~30 аллокаций/мин).
+	silentMu         sync.RWMutex
+	silentCache      map[string]bool
 }
 
 // StatusResponse ответ для /api/status
@@ -363,10 +367,32 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 	s.respondJSON(w, status, ErrorResponse{Error: message})
 }
 
-// corsMiddleware добавляет CORS заголовки
+// corsMiddleware добавляет CORS заголовки.
+// BUG FIX #19: ранее Access-Control-Allow-Origin: * разрешал любому сайту
+// в браузере делать запросы к API (включая POST /api/quit).
+// Теперь разрешены только localhost origins и app:// для WebView2.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
+	allowed := map[string]bool{
+		"http://localhost:8080":  true,
+		"http://127.0.0.1:8080": true,
+		"app://":                 true, // WebView2 custom scheme
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin == "" || allowed[origin] {
+			// Запросы без Origin (curl, Postman, нативные) или с разрешённого origin.
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			}
+		} else {
+			// Запрос с чужого origin — отклоняем preflight, для остальных не ставим заголовок.
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			// Остальные запросы пропускаем без CORS заголовков — браузер заблокирует сам.
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
@@ -380,22 +406,41 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 // addSilentPath добавляет путь в список без логирования (polling endpoints)
 func (s *Server) addSilentPath(path string) {
 	s.config.SilentPaths = append(s.config.SilentPaths, path)
+	// Инвалидируем кэш silentPaths в loggingMiddleware — он будет пересобран при следующем запросе.
+	s.silentMu.Lock()
+	s.silentCache = nil
+	s.silentMu.Unlock()
 }
 
 // loggingMiddleware логирует HTTP запросы.
-// Частые polling-эндпоинты и статика не логируются.
+// BUG FIX #7: silentPaths map пересоздавалась на каждый HTTP-запрос (~30 аллокаций/мин).
+// Теперь map строится один раз и инвалидируется только при вызове addSilentPath.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		silentPaths := map[string]bool{
-			"/api/status":           true,
-			"/api/health":           true,
-			"/api/tun/apply/status": true,
-			"/api/events":           true,
+		s.silentMu.RLock()
+		cache := s.silentCache
+		s.silentMu.RUnlock()
+
+		if cache == nil {
+			// Собираем map — редкое событие (только при старте или addSilentPath).
+			s.silentMu.Lock()
+			if s.silentCache == nil { // double-checked locking
+				m := map[string]bool{
+					"/api/status":           true,
+					"/api/health":           true,
+					"/api/tun/apply/status": true,
+					"/api/events":           true,
+				}
+				for _, p := range s.config.SilentPaths {
+					m[p] = true
+				}
+				s.silentCache = m
+			}
+			cache = s.silentCache
+			s.silentMu.Unlock()
 		}
-		for _, p := range s.config.SilentPaths {
-			silentPaths[p] = true
-		}
-		if silentPaths[r.URL.Path] {
+
+		if cache[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}

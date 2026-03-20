@@ -54,6 +54,10 @@ type Detector struct {
 	lastID       int             // ID последнего обработанного события
 	warnTimes    []time.Time     // временные метки недавних warn (для burst-детекции)
 	writtenFiles map[string]bool // уже созданные файлы (дедупликация)
+	// BUG FIX #4: anomalyCount считает аномалии внутри каждого файла независимо.
+	// Ранее использовался len(writtenFiles) — количество файлов, а не аномалий —
+	// поэтому второй файл открывался с #2, но второй блок в первом файле тоже #2.
+	anomalyCount map[string]int  // filename → количество записанных аномалий
 
 	stopCh chan struct{}
 	wg     sync.WaitGroup
@@ -68,6 +72,7 @@ func New(evLog *eventlog.Log, dir string) *Detector {
 		sessionTS:    time.Now(),
 		pollInterval: 3 * time.Second,
 		writtenFiles: make(map[string]bool),
+		anomalyCount: make(map[string]int),
 		stopCh:       make(chan struct{}),
 	}
 }
@@ -226,8 +231,9 @@ func (d *Detector) writeFile(kind AnomalyKind, anomalies []eventlog.Event) {
 	}
 
 	// Аномальные события
+	d.anomalyCount[filename]++
 	fmt.Fprintf(f, "── АНОМАЛИЯ #%d [%s] ──────────────────────────────────────\n",
-		len(d.writtenFiles), time.Now().Format("15:04:05"))
+		d.anomalyCount[filename], time.Now().Format("15:04:05"))
 	for _, e := range anomalies {
 		fmt.Fprintf(f, "[%s] %-5s [%s] %s\n",
 			e.Timestamp.Format("15:04:05.000"),

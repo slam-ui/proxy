@@ -58,12 +58,11 @@ type trafficSnapshot struct {
 }
 
 type trafficStore struct {
-	// current хранится как atomic.Value для lock-free чтения из handleStats.
-	// Запись происходит ~1Hz из sing-box, чтение каждые 2с из UI.
-	// atomic.Value устраняет конкуренцию мьютекса на hot path.
-	currentAtomic atomic.Value     // хранит trafficSnapshot
-	lastOK        atomic.Int64     // UnixNano последнего успешного обновления
-	// Сессионные счётчики защищены мьютексом (пишутся редко — только при обновлении).
+	// OPT #5: клиент создаётся один раз — переиспользует пул TCP-соединений к localhost.
+	// Ранее новый http.Client на каждый connect() = потеря keep-alive каждые 3с при разрыве.
+	client        http.Client
+	currentAtomic atomic.Value
+	lastOK        atomic.Int64
 	mu            sync.Mutex
 	sessionUpB    int64
 	sessionDnB    int64
@@ -74,7 +73,9 @@ func (ts *trafficStore) run(ctx context.Context) {
 	ts.mu.Lock()
 	ts.sessionStart = time.Now()
 	ts.mu.Unlock()
-	ts.currentAtomic.Store(trafficSnapshot{}) // инициализируем пустым значением
+	ts.currentAtomic.Store(trafficSnapshot{})
+	// OPT #5: инициализируем клиент один раз — Transport с keep-alive пулом.
+	ts.client = http.Client{Timeout: 0}
 	for {
 		ts.connect(ctx)
 		select {
@@ -90,8 +91,8 @@ func (ts *trafficStore) connect(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	client := &http.Client{Timeout: 0}
-	resp, err := client.Do(req)
+	// OPT #5: используем переиспользуемый клиент (инициализирован в run()).
+	resp, err := ts.client.Do(req)
 	if err != nil {
 		return
 	}
@@ -154,6 +155,9 @@ type connSpeedTracker struct {
 	prev     map[string]connSample
 	speeds   map[string]outboundSpeed
 	active   atomic.Int64
+	// BUG FIX #16: apiAvailable отделяет "0 активных соединений" от "API недоступен".
+	// Ранее active=0 при ошибке не отличалось от active=0 при отсутствии соединений.
+	apiAvailable atomic.Bool
 	lastTick time.Time
 }
 
@@ -170,10 +174,22 @@ func (ct *connSpeedTracker) run(ctx context.Context) {
 
 func (ct *connSpeedTracker) tick(ctx context.Context) {
 	conns, err := fetchConnectionsData(ctx)
-	ct.active.Store(int64(len(conns)))
-	if err != nil || len(conns) == 0 {
+	// BUG FIX #16: сначала фиксируем доступность API, затем обновляем счётчик.
+	// Так можно отличить "API недоступен" от "0 активных соединений" на стороне UI.
+	if err != nil {
+		ct.apiAvailable.Store(false)
+		ct.active.Store(0)
 		ct.mu.Lock()
-		// Очищаем map без аллокации (delete каждого ключа).
+		for k := range ct.speeds {
+			delete(ct.speeds, k)
+		}
+		ct.mu.Unlock()
+		return
+	}
+	ct.apiAvailable.Store(true)
+	ct.active.Store(int64(len(conns)))
+	if len(conns) == 0 {
+		ct.mu.Lock()
 		for k := range ct.speeds {
 			delete(ct.speeds, k)
 		}
@@ -265,6 +281,8 @@ type StatsResponse struct {
 	DirDn   int64   `json:"direct_dn"`
 	Active  int     `json:"active_connections"`
 	OK      bool    `json:"ok"`
+	// BUG FIX #16: APIAvailable отличает "sing-box API недоступен" от "0 соединений".
+	APIAvailable bool    `json:"api_available"`
 	SessUpB int64   `json:"sess_up_bytes"`
 	SessDnB int64   `json:"sess_dn_bytes"`
 	SessSec float64 `json:"sess_duration_sec"`
@@ -273,10 +291,11 @@ type StatsResponse struct {
 func (h *DiagHandlers) handleStats(w http.ResponseWriter, _ *http.Request) {
 	snap, ok := h.traffic.get()
 	resp := StatsResponse{
-		Up:     snap.Up,
-		Down:   snap.Down,
-		OK:     ok,
-		Active: int(h.conns.active.Load()),
+		Up:           snap.Up,
+		Down:         snap.Down,
+		OK:           ok,
+		Active:       int(h.conns.active.Load()),
+		APIAvailable: h.conns.apiAvailable.Load(),
 	}
 	resp.ProxyUp, resp.ProxyDn, resp.DirUp, resp.DirDn = h.conns.getSpeeds()
 	resp.SessUpB, resp.SessDnB, resp.SessSec = h.traffic.getSessionTotals()

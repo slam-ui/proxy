@@ -14,6 +14,32 @@ import (
 	"proxyclient/internal/logger"
 )
 
+// kernel32 для CTRL_BREAK graceful shutdown.
+// Используем LazyDLL — загрузка при первом вызове, не при старте приложения.
+var (
+	kernel32        = syscall.NewLazyDLL("kernel32.dll")
+	procGenCtrlEvt  = kernel32.NewProc("GenerateConsoleCtrlEvent")
+	procAttachConsole = kernel32.NewProc("AttachConsole")
+	procFreeConsole   = kernel32.NewProc("FreeConsole")
+)
+
+// sendCtrlBreak посылает CTRL_BREAK в процесс pid.
+// Sing-box перехватывает это событие и выполняет graceful shutdown:
+// сохраняет DNS-кэш, закрывает TUN-адаптер — что снижает вероятность
+// "file already exists" при следующем старте.
+func sendCtrlBreak(pid int) error {
+	procAttachConsole.Call(uintptr(pid))
+	defer procFreeConsole.Call()
+	ret, _, err := procGenCtrlEvt.Call(
+		syscall.CTRL_BREAK_EVENT,
+		uintptr(pid),
+	)
+	if ret == 0 {
+		return fmt.Errorf("GenerateConsoleCtrlEvent failed: %w", err)
+	}
+	return nil
+}
+
 // Config конфигурация менеджера процесса
 type Config struct {
 	ExecutablePath string
@@ -65,6 +91,16 @@ type tailWriter struct {
 }
 
 func newTailWriter(max int) *tailWriter { return &tailWriter{max: max, buf: make([]byte, 0, max)} }
+
+// Reset очищает буфер без освобождения памяти — переиспользуется при рестарте.
+// OPT #8: ранее при каждом doStart() создавался новый tailWriter(32KB),
+// старый уходил в GC. Reset() позволяет переиспользовать один буфер на весь
+// lifecycle менеджера.
+func (tw *tailWriter) Reset() {
+	tw.mu.Lock()
+	tw.buf = tw.buf[:0]
+	tw.mu.Unlock()
+}
 
 func (tw *tailWriter) Write(p []byte) (int, error) {
 	tw.mu.Lock()
@@ -136,13 +172,15 @@ type manager struct {
 	config       Config
 	logger       logger.Logger
 	mu           sync.RWMutex
-	done         chan struct{} // закрывается когда процесс завершился
-	stopped      bool          // true если Stop() уже был вызван
-	tail         *tailWriter   // последние 32KB stderr для диагностики краша
-	crashes      crashTracker  // rate limiter для авторестартов (как в nekoray)
-	firstStart   bool          // true для первого старта — BeforeRestart не вызывается
-	lifecycleCtx context.Context // отменяется при Shutdown — прерывает PollUntilFree
-	startedAt     time.Time      // время последнего успешного запуска процесса
+	done         chan struct{}
+	stopped      bool
+	// OPT #8: tail создаётся один раз и сбрасывается через Reset() при каждом рестарте.
+	// Ранее newTailWriter(32KB) вызывался при каждом doStart() — 32KB аллокация + GC.
+	tail         *tailWriter
+	crashes      crashTracker
+	firstStart   bool
+	lifecycleCtx context.Context
+	startedAt     time.Time
 }
 
 func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
@@ -159,6 +197,7 @@ func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
 		done:         make(chan struct{}),
 		firstStart:   true,
 		lifecycleCtx: lifecycleCtx,
+		tail:         newTailWriter(32 * 1024), // создаём один раз, сбрасываем при рестарте
 	}
 
 	if err := m.doStart(); err != nil {
@@ -265,13 +304,13 @@ func (m *manager) doStart() error {
 
 	cmd.Stdout = buildWriter(false)
 	stderrBase := buildWriter(true)
-	// 32KB tail — увеличено с 4KB, чтобы захватить полный контекст wintun ошибки
-	// (по аналогии с nekoray max_log_line = 200 строк)
-	tailBuf := newTailWriter(32 * 1024)
+	// OPT #8: сбрасываем существующий tailWriter вместо создания нового.
+	// Reset() очищает срез без освобождения памяти — 0 аллокаций.
+	m.tail.Reset()
 	if stderrBase == io.Discard {
-		cmd.Stderr = tailBuf
+		cmd.Stderr = m.tail
 	} else {
-		cmd.Stderr = io.MultiWriter(stderrBase, tailBuf)
+		cmd.Stderr = io.MultiWriter(stderrBase, m.tail)
 	}
 
 	// BeforeRestart пропускается при первом старте (NewManager):
@@ -288,7 +327,6 @@ func (m *manager) doStart() error {
 	}
 
 	m.cmd = cmd
-	m.tail = tailBuf
 	m.startedAt = time.Now()
 	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
 
@@ -332,12 +370,24 @@ func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
 		m.logger.Error(
 			"[Error] Core exits too frequently (%d раз за %v) — авторестарт отключён",
 			count, crashRateWindow)
-		// Передаём краш с флагом "too many" через специальную ошибку
 		go onCrash(&tooManyRestartsError{count: count, base: err})
 		return
 	}
 
-	go onCrash(err)
+	// OPT #10: экспоненциальный backoff перед перезапуском.
+	// Без задержки при системной ошибке (кончилось место на диске, плохой конфиг)
+	// получается busy-loop: 3 краша за 2 минуты → авторестарт отключается.
+	// С backoff: 1й краш ждёт 1с, 2й — 2с, 3й — 4с (но не более 30с).
+	// Аналог: singbox-launcher и V2RayN используют аналогичный backoff.
+	backoff := time.Duration(1<<uint(count-1)) * time.Second // 1s, 2s, 4s, 8s...
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+	m.logger.Info("Краш #%d — перезапуск через %v...", count, backoff)
+	go func() {
+		time.Sleep(backoff)
+		onCrash(err)
+	}()
 }
 
 // tooManyRestartsError сигнализирует что авторестарт заблокирован из-за rate limit.
@@ -367,18 +417,33 @@ func (m *manager) Stop() error {
 	pid := m.cmd.Process.Pid
 	proc := m.cmd.Process
 	m.stopped = true
-	// BUG FIX: захватываем done под lock чтобы избежать data race с Start().
-	// Start() заменяет m.done под mu.Lock() — читать m.done нужно тоже под lock.
 	doneCh := m.done
 	m.mu.Unlock()
 
 	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
 
+	// Проверяем — может, процесс уже завершился сам.
 	select {
 	case <-doneCh:
-		m.logger.Info("Процесс XRay завершился самостоятельно")
+		m.logger.Info("Процесс XRay уже завершился")
 		return nil
 	case <-time.After(500 * time.Millisecond):
+	}
+
+	// OPT #1: сначала CTRL_BREAK — sing-box перехватывает его и делает graceful shutdown:
+	// сохраняет DNS-кэш, закрывает TUN-адаптер корректно.
+	// Это снижает вероятность "file already exists" при следующем старте,
+	// потому что wintun успевает освободить kernel-объект до Kill().
+	// Аналог: singbox-launcher использует CTRL_BREAK + 3s таймаут перед taskkill /F.
+	if err := sendCtrlBreak(pid); err == nil {
+		m.logger.Info("Отправлен CTRL_BREAK (PID: %d), ожидаем graceful shutdown...", pid)
+		select {
+		case <-doneCh:
+			m.logger.Info("Процесс XRay корректно завершился (graceful)")
+			return nil
+		case <-time.After(3 * time.Second):
+			m.logger.Info("Graceful shutdown timeout — принудительная остановка")
+		}
 	}
 
 	m.logger.Info("Принудительная остановка XRay (PID: %d)...", pid)
@@ -400,9 +465,6 @@ func (m *manager) Uptime() time.Duration {
 }
 
 func (m *manager) LastOutput() string {
-	if m.tail == nil {
-		return ""
-	}
 	return m.tail.String()
 }
 
