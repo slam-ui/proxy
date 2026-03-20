@@ -25,15 +25,30 @@ var (
 
 // kernelObjectFree возвращает true если wintun kernel-объект для ifName свободен.
 // Fail-open: если wintun.dll не найдена — возвращает true (не блокируем запуск).
+//
+// OPT #7: UTF16PtrFromString кэшируется по имени интерфейса — при polling каждые 500мс
+// это 180 лишних аллокаций за 90с. Имя интерфейса (tun0) фиксировано на весь сеанс.
+var (
+	cachedIfName    string
+	cachedIfNamePtr *uint16
+)
+
 func kernelObjectFree(ifName string) bool {
 	if err := modwintun.Load(); err != nil {
 		return true // wintun.dll не найдена, fail-open
 	}
-	name16, err := syscall.UTF16PtrFromString(ifName)
-	if err != nil {
-		return true
+
+	// Кэшируем конвертацию UTF-16 — ifName никогда не меняется в рамках одного запуска.
+	if cachedIfNamePtr == nil || cachedIfName != ifName {
+		ptr, err := syscall.UTF16PtrFromString(ifName)
+		if err != nil {
+			return true
+		}
+		cachedIfName = ifName
+		cachedIfNamePtr = ptr
 	}
-	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(name16)))
+
+	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(cachedIfNamePtr)))
 	if r0 == 0 {
 		// NULL → kernel-объект не существует → свободен
 		return true

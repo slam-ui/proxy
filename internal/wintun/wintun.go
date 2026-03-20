@@ -4,17 +4,22 @@
 //
 //	sing-box грузит wintun.dll напрямую (не через SCM) и создаёт
 //	именованный kernel-объект \Device\WINTUN-{GUID}.
-//	После смерти sing-box объект живёт ещё 30-60 секунд (Windows GC асинхронный).
+//	После смерти sing-box объект живёт ещё 5-60 секунд (Windows GC асинхронный).
 //	sc stop wintun не помогает — драйвер не регистрируется в SCM.
 //
-// Решение:
+// Решение (v3 — DLL probe):
 //  1. При каждой остановке sing-box записываем timestamp в файл (RecordStop).
-//  2. При старте: Remove-NetAdapter, затем активный polling через netsh
-//     до реального исчезновения интерфейса из TCP/IP стека (PollUntilFree).
-//  3. TCP/IP стек (netsh) освобождает ссылку синхронно с kernel GC —
-//     исчезновение из netsh = реальное освобождение \Device\WINTUN-{GUID}.
+//  2. При старте: Remove-NetAdapter для очистки Device Manager,
+//     затем активный polling через WintunOpenAdapter из wintun.dll (probe_windows.go)
+//     до реального освобождения kernel-объекта.
+//  3. WintunOpenAdapter возвращает NULL → kernel объект свободен → старт.
+//     В отличие от netsh, probe работает напрямую с kernel-объектом и даёт
+//     точный сигнал без угадывания времени ожидания.
 //
-// Адаптивный gap (v2):
+// BUG FIX #6: предыдущий комментарий описывал устаревший netsh-подход (v2).
+// После рефакторинга PollUntilFree использует DLL probe, netsh не применяется.
+//
+// Адаптивный gap (v2, сохранён как fallback):
 //
 //	При каждом wintun-краше gap удваивается (IncreaseAdaptiveGap).
 //	При чистом выходе сбрасывается (ResetAdaptiveGap).
@@ -28,6 +33,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -50,9 +56,12 @@ func cleanSCOutput(raw string) string {
 }
 
 const (
-	StopFile     = "wintun_stopped_at" // файл с timestamp последней остановки
-	PollInterval = 500 * time.Millisecond
-	PollTimeout  = 70 * time.Second
+	StopFile = "wintun_stopped_at" // файл с timestamp последней остановки
+	// BUG FIX #14: PollInterval и PollTimeout были экспортированы но нигде
+	// не использовались снаружи пакета. После рефакторинга на DLL-probe
+	// PollUntilFree использует локальные константы probeInterval/probeTimeout.
+	// Приватные версии тоже удалены — Go не позволяет иметь неиспользуемые const
+	// в test-сборке, и они создавали путаницу со значениями в PollUntilFree.
 )
 
 // RecordStop записывает текущее время в файл StopFile.
@@ -123,14 +132,38 @@ func ResetAdaptiveGap() {
 	_ = os.Remove(gapFile)
 }
 
-// EstimateReadyAt возвращает время когда прокси ориентировочно будет готов.
-// Используется UI для отображения обратного отсчёта при warming=true.
-// Если нет StopFile или прошло больше coldStartThreshold — возвращает time.Now()
-// (т.е. ждать не нужно).
+// estimateCache кэш для EstimateReadyAt — инвалидируется по mtime StopFile.
+// OPT #10: ранее читала wintun_stopped_at с диска при каждом вызове.
+// /api/status поллится каждые 2с при warming=true → каждые 2с был syscall ReadFile.
+// Инвалидация по mtime: один stat вместо полного ReadFile при каждом poll.
+var estimateCache struct {
+	mu        sync.Mutex
+	result    time.Time
+	fileMtime time.Time
+}
+
 // EstimateReadyAt возвращает приблизительное время готовности.
-// С переходом на kernel probe точный ETA неизвестен (зависит от скорости Windows GC).
-// Возвращаем консервативную оценку: 30с от остановки (обычно реально 5-15с).
+// Кэш инвалидируется когда mtime StopFile изменяется (новая остановка sing-box).
 func EstimateReadyAt() time.Time {
+	estimateCache.mu.Lock()
+	defer estimateCache.mu.Unlock()
+
+	fi, statErr := os.Stat(StopFile)
+	if statErr != nil {
+		return time.Now()
+	}
+	mtime := fi.ModTime()
+	if mtime.Equal(estimateCache.fileMtime) {
+		return estimateCache.result
+	}
+	result := computeEstimateReadyAt()
+	estimateCache.result = result
+	estimateCache.fileMtime = mtime
+	return result
+}
+
+// computeEstimateReadyAt выполняет фактическое вычисление ETA.
+func computeEstimateReadyAt() time.Time {
 	data, err := os.ReadFile(StopFile)
 	if err != nil {
 		return time.Now()
@@ -144,8 +177,6 @@ func EstimateReadyAt() time.Time {
 	if elapsed > coldStartThreshold {
 		return time.Now()
 	}
-	// Консервативная оценка: 30с от последней остановки + minGap (5с).
-	// На практике probe часто срабатывает раньше.
 	const estimatedGCTime = 30 * time.Second
 	readyAt := stopTime.Add(estimatedGCTime + 5*time.Second)
 	if readyAt.Before(time.Now()) {
@@ -242,16 +273,20 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 	const (
 		probeInterval = 500 * time.Millisecond
 		probeTimeout  = 90 * time.Second  // потолок на случай если DLL не отвечает
-		minGap        = 5 * time.Second   // минимум после освобождения перед стартом
 	)
 
 	log.Info("wintun: ждём освобождения kernel-объекта (probe каждые 500мс, max %v)...", probeTimeout)
 	deadline := time.Now().Add(probeTimeout)
 	for time.Now().Before(deadline) {
 		if kernelObjectFree(ifName) {
-			// Kernel объект свободен — ждём minGap для надёжности и стартуем.
-			log.Info("wintun: kernel объект свободен — пауза %v перед стартом...", minGap)
-			if !sleepCtx(ctx, minGap) {
+			// Kernel объект свободен — ждём settle delay для надёжности и стартуем.
+			// FIX: используем ReadSettleDelay() вместо захардкоженных 5s.
+			// ReadSettleDelay() возвращает min 15s и растёт вместе с адаптивным gap:
+			// при gap=3m settle=45s. Именно это спасает от ложного "free" от DLL-probe.
+			// Было: minGap=5s → sing-box стартовал, падал через 15s с "file already exists".
+			settle := ReadSettleDelay()
+			log.Info("wintun: kernel объект свободен — пауза %v перед стартом...", settle)
+			if !sleepCtx(ctx, settle) {
 				log.Info("wintun: пауза прервана (выход из приложения)")
 				return
 			}
@@ -263,7 +298,6 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 			return
 		}
 	}
-	// Timeout — fallback на netsh как раньше
 	log.Warn("wintun: probe timeout %v — kernel объект всё ещё занят по данным DLL, пробуем запустить", probeTimeout)
 }
 

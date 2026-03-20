@@ -18,10 +18,19 @@ func NewMatcher() Matcher {
 	return &matcher{}
 }
 
-// Match проверяет соответствие значения паттерну
+// NormalizePattern нормализует паттерн один раз при сохранении правила.
+// OPT #1: ранее filepath.ToSlash + ToLower вызывались при КАЖДОМ Match() —
+// ~8000 аллокаций на запрос /api/apps/processes (400 процессов × 20 правил).
+// Теперь нормализация выполняется один раз в AddRule/restoreRule.
+func NormalizePattern(pattern string) string {
+	return filepath.ToSlash(strings.ToLower(pattern))
+}
+
+// Match проверяет соответствие значения паттерну.
+// Паттерн должен быть уже нормализован через NormalizePattern.
+// Значение нормализуется здесь — оно приходит из ОС и не кэшируется.
 func (m *matcher) Match(pattern string, value string) bool {
-	// Нормализуем пути
-	pattern = filepath.ToSlash(strings.ToLower(pattern))
+	// Нормализуем только value — pattern уже нормализован при сохранении правила.
 	value = filepath.ToSlash(strings.ToLower(value))
 
 	// Точное совпадение
@@ -29,13 +38,13 @@ func (m *matcher) Match(pattern string, value string) bool {
 		return true
 	}
 
-	// Wildcard matching
+	// Wildcard matching по полному пути
 	matched, _ := filepath.Match(pattern, value)
 	if matched {
 		return true
 	}
 
-	// Совпадение по имени файла
+	// Совпадение по имени файла (basename)
 	valueBase := filepath.Base(value)
 	patternBase := filepath.Base(pattern)
 
@@ -49,12 +58,11 @@ func (m *matcher) Match(pattern string, value string) bool {
 		return true
 	}
 
-	// Contains matching — только по имени файла (basename), не по полному пути.
-	// strings.Contains(value, pattern) намеренно убран: он давал ложные срабатывания —
-	// паттерн "chrome" совпадал с "chromium.exe", "chrome_helper.exe" и любым путём
-	// содержащим подстроку "chrome". Теперь частичное совпадение проверяется только
-	// против basename процесса, что безопаснее и предсказуемее.
-	if strings.Contains(valueBase, pattern) {
+	// OPT #9: Contains только для паттернов без wildcard-символов.
+	// filepath.Match уже поймал бы "chrom*" → "chrome.exe",
+	// поэтому Contains нужен лишь для точных подстрок ("chrome" → "google_chrome.exe").
+	// Без проверки "chrom*" давал бы ложный Contains по символу '*'.
+	if !strings.ContainsAny(pattern, "*?[") && strings.Contains(valueBase, pattern) {
 		return true
 	}
 

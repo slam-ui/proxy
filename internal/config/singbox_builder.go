@@ -181,7 +181,13 @@ var privateIPRanges = []string{
 }
 
 func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
-	directCIDR := append(append([]string{}, privateIPRanges...), serverAddr+"/32")
+	// BUG FIX #11: заменяем append(append(...)) на явный make+copy.
+	// append([]string{}, privateIPRanges...) корректен сам по себе, но цепочка
+	// append-ов хрупка — следующий append может создать алиасинг если ёмкость совпадёт.
+	// Явный make с точным размером исключает любое алиасирование.
+	directCIDR := make([]string, len(privateIPRanges)+1)
+	copy(directCIDR, privateIPRanges)
+	directCIDR[len(privateIPRanges)] = serverAddr + "/32"
 	rules := []SBRouteRule{
 		{Protocol: "dns", Action: "hijack-dns"},
 		// Локальные адреса и IP прокси-сервера всегда напрямую.

@@ -18,6 +18,8 @@ import (
 
 const profilesDir = "profiles"
 
+var reValidName = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,64}$`) // letters, digits, space, _, -
+
 // Profile сохранённый набор правил маршрутизации с именем
 type Profile struct {
 	Name      string              `json:"name"`
@@ -26,17 +28,30 @@ type Profile struct {
 	Routing   config.RoutingConfig `json:"routing"`
 }
 
-// ProfileHandlers обработчики для профилей правил
-type ProfileHandlers struct {
-	server *Server
-	mu     sync.RWMutex
+// profileMeta — лёгкие метаданные профиля для кэша (не хранит полный Routing).
+type profileMeta struct {
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	RuleCount int
+	mtime     time.Time // mtime файла на момент последнего чтения
 }
 
-var reValidName = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,64}$`)  // letters, digits, space, _, -
+// ProfileHandlers обработчики для профилей правил
+type ProfileHandlers struct {
+	server    *Server
+	mu        sync.RWMutex
+	// OPT #6: кэш метаданных профилей — инвалидируется только при изменении mtime файла.
+	// Ранее handleList читал и парсил полный JSON каждого профиля при каждом запросе UI.
+	// Теперь: ReadDir + Stat (дёшево), парсинг JSON только когда файл реально изменился.
+	metaCache map[string]profileMeta
+}
 
 func SetupProfileRoutes(s *Server) {
-	h := &ProfileHandlers{server: s}
-	// Создаём директорию profiles если не существует
+	h := &ProfileHandlers{
+		server:    s,
+		metaCache: make(map[string]profileMeta),
+	}
 	_ = os.MkdirAll(profilesDir, 0755)
 
 	s.router.HandleFunc("/api/profiles", h.handleList).Methods("GET", "OPTIONS")
@@ -47,8 +62,8 @@ func SetupProfileRoutes(s *Server) {
 
 // handleList GET /api/profiles — список всех сохранённых профилей
 func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	entries, err := os.ReadDir(profilesDir)
 	if err != nil {
@@ -56,20 +71,59 @@ func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
+	// Убираем из кэша удалённые файлы.
+	activeFiles := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			activeFiles[e.Name()] = true
+		}
+	}
+	for name := range h.metaCache {
+		if !activeFiles[name] {
+			delete(h.metaCache, name)
+		}
+	}
+
 	var profiles []map[string]interface{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		mtime := fi.ModTime()
+
+		// OPT #6: проверяем кэш — если mtime не изменился, используем кэшированные метаданные.
+		if cached, ok := h.metaCache[e.Name()]; ok && cached.mtime.Equal(mtime) {
+			profiles = append(profiles, map[string]interface{}{
+				"name":       cached.Name,
+				"created_at": cached.CreatedAt,
+				"updated_at": cached.UpdatedAt,
+				"rule_count": cached.RuleCount,
+			})
+			continue
+		}
+
+		// Кэш устарел — читаем файл.
 		p, err := loadProfile(e.Name())
 		if err != nil {
 			continue
 		}
+		meta := profileMeta{
+			Name:      p.Name,
+			CreatedAt: p.CreatedAt,
+			UpdatedAt: p.UpdatedAt,
+			RuleCount: len(p.Routing.Rules),
+			mtime:     mtime,
+		}
+		h.metaCache[e.Name()] = meta
 		profiles = append(profiles, map[string]interface{}{
-			"name":       p.Name,
-			"created_at": p.CreatedAt,
-			"updated_at": p.UpdatedAt,
-			"rule_count": len(p.Routing.Rules),
+			"name":       meta.Name,
+			"created_at": meta.CreatedAt,
+			"updated_at": meta.UpdatedAt,
+			"rule_count": meta.RuleCount,
 		})
 	}
 	if profiles == nil {

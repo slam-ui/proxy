@@ -66,14 +66,20 @@ func New(cfg Config) Logger {
 }
 
 func (l *logger) log(level Level, format string, args ...interface{}) {
+	// OPT #2: проверяем уровень ДО форматирования — Sprintf не вызывается
+	// если сообщение будет отброшено. Также пропускаем Sprintf когда нет
+	// аргументов (format уже готовая строка без %v/%s/...).
 	if level < l.level {
 		return
 	}
-	// Формат совпадает с eventlog: [15:04:05.000] LEVEL  message
-	// Это позволяет читать смешанный вывод без путаницы.
+	var msg string
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	} else {
+		msg = format
+	}
 	timestamp := time.Now().Format("15:04:05.000")
-	message := fmt.Sprintf(format, args...)
-	l.logger.Printf("[%s] %-5s %s", timestamp, level.String(), message)
+	l.logger.Printf("[%s] %-5s %s", timestamp, level.String(), msg)
 }
 
 func (l *logger) Debug(format string, args ...interface{}) {

@@ -20,6 +20,13 @@ import (
 
 var routingConfigPath = config.DataDir + "/routing.json"
 
+// isValidAction возвращает true если action — одно из допустимых значений.
+// BUG FIX #18: валидация action дублировалась в 4 местах (handleAddRule,
+// handleBulkReplaceRules, handleSetDefault, handleImport). Вынесена в функцию.
+func isValidAction(a config.RuleAction) bool {
+	return a == config.ActionProxy || a == config.ActionDirect || a == config.ActionBlock
+}
+
 // applyState хранит состояние последнего применения правил
 type applyState struct {
 	mu      sync.Mutex
@@ -121,11 +128,15 @@ func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 
 	ruleType := config.DetectRuleType(strings.ToLower(val))
 
-	if ruleType != config.RuleTypeProcess {
-		val = strings.ToLower(val)
-	}
+	// BUG FIX #10: process rules тоже переводим в lowercase при сохранении.
+	// Ранее домены сохранялись строчными (val = strings.ToLower), но process rules
+	// оставались в оригинальном case ("Discord.exe"). DELETE /api/tun/rules/discord.exe
+	// находил правило через ToLower, но DELETE /api/tun/rules/Discord.exe
+	// тоже находил — неконсистентно. Единый lowercase устраняет двусмысленность.
+	// Windows сама нечувствительна к регистру имён exe, так что поведение не меняется.
+	val = strings.ToLower(val)
 
-	if req.Action != config.ActionProxy && req.Action != config.ActionDirect && req.Action != config.ActionBlock {
+	if !isValidAction(req.Action) {
 		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
 		return
 	}
@@ -188,7 +199,7 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 				fmt.Sprintf("правило #%d: пустое значение", i+1))
 			return
 		}
-		if rule.Action != config.ActionProxy && rule.Action != config.ActionDirect && rule.Action != config.ActionBlock {
+		if !isValidAction(rule.Action) {
 			h.server.respondError(w, http.StatusBadRequest,
 				fmt.Sprintf("правило #%d: неверный action (proxy|direct|block)", i+1))
 			return
@@ -196,10 +207,7 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Валидируем default_action (пустая строка → оставляем текущий)
-	if req.DefaultAction != "" &&
-		req.DefaultAction != config.ActionProxy &&
-		req.DefaultAction != config.ActionDirect &&
-		req.DefaultAction != config.ActionBlock {
+	if req.DefaultAction != "" && !isValidAction(req.DefaultAction) {
 		h.server.respondError(w, http.StatusBadRequest, "default_action: proxy | direct | block")
 		return
 	}
@@ -276,7 +284,7 @@ func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
 		return
 	}
-	if req.Action != config.ActionProxy && req.Action != config.ActionDirect && req.Action != config.ActionBlock {
+	if !isValidAction(req.Action) {
 		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
 		return
 	}
@@ -535,12 +543,7 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Валидация
-	validActions := map[config.RuleAction]bool{
-		config.ActionProxy:  true,
-		config.ActionDirect: true,
-		config.ActionBlock:  true,
-	}
-	if !validActions[incoming.DefaultAction] {
+	if !isValidAction(incoming.DefaultAction) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid default_action")
 		return
 	}
@@ -550,7 +553,7 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("rule[%d]: value is empty", i))
 			return
 		}
-		if !validActions[rule.Action] {
+		if !isValidAction(rule.Action) {
 			h.server.respondError(w, http.StatusBadRequest,
 				fmt.Sprintf("rule[%d]: invalid action %q", i, rule.Action))
 			return

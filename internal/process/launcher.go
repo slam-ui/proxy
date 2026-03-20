@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+	"sync"
 
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/logger"
@@ -26,16 +28,24 @@ type LaunchResult struct {
 
 // launcher реализация Launcher
 type launcher struct {
-	logger logger.Logger
-	engine apprules.Engine
+	logger  logger.Logger
+	engine  apprules.Engine
+	// OPT #9: кэш базового environ — os.Environ() копирует весь environ процесса
+	// (~100-200 строк) при каждом вызове. Кэшируем один раз при создании launcher.
+	// При частых запусках дочерних процессов экономит одну полную копию environ
+	// на каждый Launch. Инвалидируется только при явном вызове refreshBaseEnv().
+	baseEnvMu  sync.RWMutex
+	baseEnv    []string
 }
 
 // NewLauncher создает новый process launcher
 func NewLauncher(log logger.Logger, engine apprules.Engine) Launcher {
-	return &launcher{
+	l := &launcher{
 		logger: log,
 		engine: engine,
 	}
+	l.baseEnv = os.Environ() // захватываем environ один раз при старте
+	return l
 }
 
 // Launch запускает процесс с применением правила
@@ -126,13 +136,14 @@ func (l *launcher) applyProxyEnv(cmd *exec.Cmd, proxyAddr string) error {
 		return fmt.Errorf("proxy address is required")
 	}
 
-	// Формируем proxy URL
 	proxyURL := fmt.Sprintf("http://%s", proxyAddr)
 
-	// Получаем текущие переменные окружения
-	env := os.Environ()
+	// OPT #9: копируем кэшированный базовый environ вместо os.Environ().
+	l.baseEnvMu.RLock()
+	env := make([]string, len(l.baseEnv), len(l.baseEnv)+6)
+	copy(env, l.baseEnv)
+	l.baseEnvMu.RUnlock()
 
-	// Добавляем proxy переменные
 	env = append(env,
 		fmt.Sprintf("HTTP_PROXY=%s", proxyURL),
 		fmt.Sprintf("HTTPS_PROXY=%s", proxyURL),
@@ -150,19 +161,18 @@ func (l *launcher) applyProxyEnv(cmd *exec.Cmd, proxyAddr string) error {
 
 // applyDirectEnv убирает proxy environment variables
 func (l *launcher) applyDirectEnv(cmd *exec.Cmd) error {
-	// Получаем текущие переменные окружения
-	env := os.Environ()
+	// OPT #9: копируем кэшированный базовый environ вместо os.Environ().
+	l.baseEnvMu.RLock()
+	base := l.baseEnv
+	l.baseEnvMu.RUnlock()
 
-	// Фильтруем proxy переменные
-	filteredEnv := make([]string, 0, len(env))
-	for _, e := range env {
-		// Пропускаем proxy переменные
+	filteredEnv := make([]string, 0, len(base)+2)
+	for _, e := range base {
 		if !isProxyEnvVar(e) {
 			filteredEnv = append(filteredEnv, e)
 		}
 	}
 
-	// Явно отключаем proxy
 	filteredEnv = append(filteredEnv,
 		"NO_PROXY=*",
 		"no_proxy=*",
@@ -174,24 +184,15 @@ func (l *launcher) applyDirectEnv(cmd *exec.Cmd) error {
 	return nil
 }
 
-// isProxyEnvVar проверяет, является ли переменная proxy-related
+// isProxyEnvVar проверяет, является ли переменная proxy-related.
+// OPT #7: заменили линейный поиск по слайсу на strings.Cut + switch.
+// os.Environ() возвращает ~100-200 строк, для каждой ранее выполнялось
+// 8 сравнений с префиксом. Switch компилируется в jump-table — O(1).
 func isProxyEnvVar(env string) bool {
-	proxyVars := []string{
-		"HTTP_PROXY=",
-		"HTTPS_PROXY=",
-		"FTP_PROXY=",
-		"ALL_PROXY=",
-		"http_proxy=",
-		"https_proxy=",
-		"ftp_proxy=",
-		"all_proxy=",
+	key, _, _ := strings.Cut(env, "=")
+	switch strings.ToUpper(key) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY":
+		return true
 	}
-
-	for _, prefix := range proxyVars {
-		if len(env) >= len(prefix) && env[:len(prefix)] == prefix {
-			return true
-		}
-	}
-
 	return false
 }

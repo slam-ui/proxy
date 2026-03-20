@@ -48,11 +48,12 @@ func (s *fileStorage) Load() ([]Rule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, err := os.Stat(s.filePath); os.IsNotExist(err) {
+	// OPT #5: убрали предварительный os.Stat — ReadFile сам возвращает IsNotExist.
+	// Было два syscall (Stat + ReadFile), стало один.
+	data, err := os.ReadFile(s.filePath)
+	if os.IsNotExist(err) {
 		return []Rule{}, nil
 	}
-
-	data, err := os.ReadFile(s.filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
@@ -108,7 +109,7 @@ func (pe *PersistentEngine) AddRule(rule Rule) (*Rule, error) {
 		return nil, err
 	}
 
-	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil { // OPT #3: save without sort
 		_ = pe.engine.DeleteRule(created.ID)
 		return nil, fmt.Errorf("failed to save rules: %w", err)
 	}
@@ -131,7 +132,7 @@ func (pe *PersistentEngine) UpdateRule(id string, rule Rule) (*Rule, error) {
 		return nil, err
 	}
 
-	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil { // OPT #3: save without sort
 		_, _ = pe.engine.UpdateRule(id, *oldRule)
 		return nil, fmt.Errorf("failed to save rules: %w", err)
 	}
@@ -153,7 +154,7 @@ func (pe *PersistentEngine) DeleteRule(id string) error {
 		return err
 	}
 
-	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil { // OPT #3: save without sort
 		_ = pe.engine.restoreRule(*rule)
 		return fmt.Errorf("failed to save rules: %w", err)
 	}
@@ -169,9 +170,10 @@ func (pe *PersistentEngine) EnableRule(id string) error {
 	if err := pe.engine.EnableRule(id); err != nil {
 		return err
 	}
-	// BUG FIX: при ошибке сохранения откатываем изменение в памяти,
-	// иначе in-memory состояние расходится с файлом до следующего рестарта.
-	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+	// Синхронное сохранение с откатом при ошибке.
+	// OPT #8 (debounce) не применяется здесь: тесты и внешний контракт
+	// требуют чтобы ошибка Save возвращалась вызывающему, а состояние откатывалось.
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil { // OPT #3: save without sort
 		_ = pe.engine.DisableRule(id) // откат
 		return fmt.Errorf("failed to save rules: %w", err)
 	}
@@ -186,9 +188,7 @@ func (pe *PersistentEngine) DisableRule(id string) error {
 	if err := pe.engine.DisableRule(id); err != nil {
 		return err
 	}
-	// BUG FIX: при ошибке сохранения откатываем изменение в памяти,
-	// иначе in-memory состояние расходится с файлом до следующего рестарта.
-	if err := pe.storage.Save(pe.engine.ListRules()); err != nil {
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil { // OPT #3: save without sort
 		_ = pe.engine.EnableRule(id) // откат
 		return fmt.Errorf("failed to save rules: %w", err)
 	}

@@ -23,9 +23,29 @@ type Engine interface {
 
 // engine реализация Engine
 type engine struct {
-	rules   map[string]*Rule
-	matcher Matcher
-	mu      sync.RWMutex
+	rules      map[string]*Rule
+	// BUG FIX #12: sorted кэширует rules в порядке убывания Priority.
+	// Ранее Match() вызывал sort.Slice на каждый вызов (O(n log n)).
+	// Теперь сортировка выполняется только в rebuildSorted() при мутациях.
+	sorted     []*Rule
+	matcher    Matcher
+	mu         sync.RWMutex
+}
+
+// rebuildSorted пересобирает и сортирует срез enabled-правил.
+// Вызывается при любой мутации (Add/Update/Delete/Enable/Disable).
+// ВАЖНО: должен вызываться под e.mu.Lock().
+func (e *engine) rebuildSorted() {
+	s := make([]*Rule, 0, len(e.rules))
+	for _, r := range e.rules {
+		if r.Enabled {
+			s = append(s, r)
+		}
+	}
+	sort.Slice(s, func(i, j int) bool {
+		return s[i].Priority > s[j].Priority
+	})
+	e.sorted = s
 }
 
 // NewEngine создаёт новый engine
@@ -56,8 +76,11 @@ func (e *engine) AddRule(rule Rule) (*Rule, error) {
 	rule.ID = newID()
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
+	// OPT #1: нормализуем паттерн один раз при сохранении.
+	rule.Pattern = NormalizePattern(rule.Pattern)
 
 	e.rules[rule.ID] = &rule
+	e.rebuildSorted()
 	return &rule, nil
 }
 
@@ -72,7 +95,9 @@ func (e *engine) restoreRule(rule Rule) error {
 	if rule.ID == "" {
 		rule.ID = newID()
 	}
+	rule.Pattern = NormalizePattern(rule.Pattern)
 	e.rules[rule.ID] = &rule
+	e.rebuildSorted()
 	return nil
 }
 
@@ -107,8 +132,10 @@ func (e *engine) UpdateRule(id string, rule Rule) (*Rule, error) {
 	rule.ID = id
 	rule.CreatedAt = existing.CreatedAt
 	rule.UpdatedAt = time.Now()
+	rule.Pattern = NormalizePattern(rule.Pattern)
 
 	e.rules[id] = &rule
+	e.rebuildSorted()
 	return &rule, nil
 }
 
@@ -122,6 +149,7 @@ func (e *engine) DeleteRule(id string) error {
 	}
 
 	delete(e.rules, id)
+	e.rebuildSorted()
 	return nil
 }
 
@@ -137,6 +165,7 @@ func (e *engine) EnableRule(id string) error {
 
 	rule.Enabled = true
 	rule.UpdatedAt = time.Now()
+	e.rebuildSorted()
 	return nil
 }
 
@@ -152,10 +181,11 @@ func (e *engine) DisableRule(id string) error {
 
 	rule.Enabled = false
 	rule.UpdatedAt = time.Now()
+	e.rebuildSorted()
 	return nil
 }
 
-// ListRules возвращает все правила, отсортированные по приоритету
+// ListRules возвращает все правила, отсортированные по приоритету (для API)
 func (e *engine) ListRules() []Rule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -165,7 +195,6 @@ func (e *engine) ListRules() []Rule {
 		rules = append(rules, *r)
 	}
 
-	// Сортируем по приоритету (выше = важнее)
 	sort.Slice(rules, func(i, j int) bool {
 		return rules[i].Priority > rules[j].Priority
 	})
@@ -173,24 +202,29 @@ func (e *engine) ListRules() []Rule {
 	return rules
 }
 
-// Match находит первое подходящее правило для процесса
-func (e *engine) Match(processName string) RuleMatch {
+// listRulesUnsorted возвращает все правила без сортировки — только для сохранения.
+// OPT #3: ListRules() делает sort.Slice при каждом Save(). Порядок в JSON-файле
+// не важен — при загрузке правила сортируются через rebuildSorted().
+func (e *engine) listRulesUnsorted() []Rule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	// Собираем включённые правила и сортируем по приоритету
-	rules := make([]*Rule, 0, len(e.rules))
+	rules := make([]Rule, 0, len(e.rules))
 	for _, r := range e.rules {
-		if r.Enabled {
-			rules = append(rules, r)
-		}
+		rules = append(rules, *r)
 	}
+	return rules
+}
 
-	sort.Slice(rules, func(i, j int) bool {
-		return rules[i].Priority > rules[j].Priority
-	})
+// Match находит первое подходящее правило для процесса.
+// BUG FIX #12: сортировка вынесена в rebuildSorted() которая вызывается
+// только при мутациях. Match теперь просто читает уже отсортированный срез —
+// O(n) вместо O(n log n) на каждый вызов от process monitor.
+func (e *engine) Match(processName string) RuleMatch {
+	e.mu.RLock()
+	sorted := e.sorted
+	e.mu.RUnlock()
 
-	for _, rule := range rules {
+	for _, rule := range sorted {
 		if e.matcher.Match(rule.Pattern, processName) {
 			ruleCopy := *rule
 			return RuleMatch{Matched: true, Rule: &ruleCopy}

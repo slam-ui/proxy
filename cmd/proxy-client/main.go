@@ -14,6 +14,8 @@ import (
 	"time"
 	"unsafe"
 
+	"golang.org/x/sys/windows"
+
 	"proxyclient/internal/api"
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/autorun"
@@ -29,11 +31,14 @@ import (
 )
 
 // Кэшируем Win32 прокси на уровне пакета.
+// BUG FIX #20: MustLoadDLL паникует в var-блоке ДО любого recover.
+// NewLazySystemDLL откладывает загрузку до первого вызова — паника
+// перехватывается recover из main() и записывается в crash.log.
 var (
-	kern32             = syscall.MustLoadDLL("kernel32.dll")
-	procProcess32First = kern32.MustFindProc("Process32FirstW")
-	procProcess32Next  = kern32.MustFindProc("Process32NextW")
-	procCreateSnapshot = kern32.MustFindProc("CreateToolhelp32Snapshot")
+	kern32             = syscall.NewLazyDLL("kernel32.dll")
+	procProcess32First = kern32.NewProc("Process32FirstW")
+	procProcess32Next  = kern32.NewProc("Process32NextW")
+	procCreateSnapshot = kern32.NewProc("CreateToolhelp32Snapshot")
 )
 
 const (
@@ -75,18 +80,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Ранняя защита от паники — до открытия лога.
-	defer func() {
-		if r := recover(); r != nil {
-			msg := fmt.Sprintf("[%s] EARLY PANIC: %v\n%s\n",
-				time.Now().Format("2006-01-02 15:04:05"), r, debug.Stack())
-			if f, ferr := os.OpenFile("crash.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); ferr == nil {
-				_, _ = f.WriteString(msg)
-				_ = f.Close()
-			}
-			panic(r)
-		}
-	}()
+	// BUG FIX #1: ранний defer recover удалён.
+	// Два defer recover в LIFO-порядке: поздний (с output) перехватывает панику первым,
+	// ранний становился недостижимым кодом. Паники до открытия лога теперь обрабатываются
+	// единственным defer ниже — он открывает crash.log самостоятельно при output == nil.
 
 	lf, fileErr := openLogFile()
 	if fileErr != nil {
@@ -116,9 +113,18 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			ts := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Fprintf(output, "\n[%s] ══ PANIC ══\n[%s] %v\n%s\n", ts, ts, r, debug.Stack())
-			if lf != nil {
-				_ = lf.Sync()
+			msg := fmt.Sprintf("\n[%s] ══ PANIC ══\n[%s] %v\n%s\n", ts, ts, r, debug.Stack())
+			if output != nil {
+				fmt.Fprint(output, msg)
+				if lf != nil {
+					_ = lf.Sync()
+				}
+			} else {
+				// Паника случилась ДО открытия лога — пишем напрямую в crash.log.
+				if f, ferr := os.OpenFile("crash.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); ferr == nil {
+					_, _ = f.WriteString(msg)
+					_ = f.Close()
+				}
 			}
 			os.Exit(2)
 		}
@@ -202,7 +208,9 @@ func run(output io.Writer) error {
 	var processLauncher process.Launcher
 	monitorLogger := eventlog.NewLogger(app.appLogger, app.evLog, "monitor")
 	if rulesEngine != nil {
-		processMonitor = process.NewMonitor(monitorLogger)
+		// OPT #2: передаём engine в монитор — refresh() будет кэшировать ProxyStatus
+		// прямо во время сканирования процессов вместо пересчёта на каждый HTTP-запрос.
+		processMonitor = process.NewMonitorWithEngine(monitorLogger, rulesEngine)
 		if err := processMonitor.Start(); err != nil {
 			app.mainLogger.Warn("Failed to start process monitor: %v", err)
 		} else {
@@ -346,13 +354,14 @@ func createToolhelp32Snapshot() (syscall.Handle, error) {
 	return syscall.Handle(h), nil
 }
 
+// isRunningAsAdmin проверяет привилегии через Windows token elevation.
+// BUG FIX #5: проверка через PHYSICALDRIVE0 ненадёжна — на системах с BitLocker,
+// шифрованием диска или в виртуальных машинах диск может быть недоступен даже
+// с правами администратора. windows.GetCurrentProcessToken().IsElevated() —
+// официальный способ проверки из golang.org/x/sys/windows.
 func isRunningAsAdmin() bool {
-	f, err := os.Open("\\\\.\\PHYSICALDRIVE0")
-	if err == nil {
-		_ = f.Close()
-		return true
-	}
-	return false
+	// BUG FIX #5: IsElevated() возвращает только bool, без error.
+	return windows.GetCurrentProcessToken().IsElevated()
 }
 
 func createSingleInstanceMutex(name string) (syscall.Handle, error) {
