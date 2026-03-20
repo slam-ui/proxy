@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package fileutil предоставляет утилиты для безопасной работы с файлами.
 package fileutil
 
@@ -6,13 +8,14 @@ import (
 	"io/fs"
 	"math/rand"
 	"os"
-	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
-	kernel32dll  = syscall.NewLazyDLL("kernel32.dll")
-	moveFileExW  = kernel32dll.NewProc("MoveFileExW")
+	kernel32dll = windows.NewLazyDLL("kernel32.dll")
+	moveFileExW = kernel32dll.NewProc("MoveFileExW")
 )
 
 const moveFileReplaceExisting = 0x1
@@ -20,9 +23,10 @@ const moveFileReplaceExisting = 0x1
 // WriteAtomic атомарно записывает data в dst.
 //
 // Проблема os.Rename на Windows:
-//   os.Rename над существующим файлом НЕ атомарна: ядро сначала удаляет
-//   целевой файл, потом переименовывает источник. В этом окне конкурирующий
-//   writer может вклиниться и два JSON-блока конкатенируются → невалидный файл.
+//
+//	os.Rename над существующим файлом НЕ атомарна: ядро сначала удаляет
+//	целевой файл, потом переименовывает источник. В этом окне конкурирующий
+//	writer может вклиниться и два JSON-блока конкатенируются → невалидный файл.
 //
 // Решение: MoveFileExW с флагом MOVEFILE_REPLACE_EXISTING атомарна на NTFS —
 // меняет directory entry одной транзакцией без промежуточного удаления.
@@ -34,12 +38,12 @@ func WriteAtomic(dst string, data []byte, perm fs.FileMode) error {
 	if err := os.WriteFile(tmp, data, perm); err != nil {
 		return fmt.Errorf("fileutil.WriteAtomic: write tmp: %w", err)
 	}
-	dstPtr, err := syscall.UTF16PtrFromString(dst)
+	dstPtr, err := windows.UTF16PtrFromString(dst)
 	if err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: encode dst: %w", err)
 	}
-	tmpPtr, err := syscall.UTF16PtrFromString(tmp)
+	tmpPtr, err := windows.UTF16PtrFromString(tmp)
 	if err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: encode tmp: %w", err)
