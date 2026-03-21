@@ -189,6 +189,7 @@ func run(output io.Writer) error {
 		XRayManager:   nil,
 		ProxyManager:  app.proxyManager,
 		ConfigPath:    cfg.RuntimeFile,
+		SecretKeyPath: cfg.SecretFile,
 		Logger:        app.mainLogger,
 		EventLog:      app.evLog,
 		QuitChan:      app.quit,

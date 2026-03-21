@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
+	"proxyclient/internal/killswitch"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
@@ -36,6 +38,7 @@ import (
 
 // AppConfig содержит все настраиваемые параметры приложения.
 type AppConfig struct {
+	KillSwitch   bool   // блокировать трафик при падении туннеля
 	SecretFile   string
 	SingBoxPath  string
 	ConfigPath   string
@@ -163,41 +166,65 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 
 	if isTunConflict {
 		wintun.RecordStop()
-		// Если sing-box упал с wintun-конфликтом в первые 30 секунд после старта —
-		// предыдущего gap явно не хватило с запасом. Удваиваем ещё раз чтобы быстрее
-		// выйти на достаточный gap вместо двух последовательных коротких крашей.
-		if currentMgr.Uptime() < 30*time.Second {
-			wintun.IncreaseAdaptiveGap(a.mainLogger) // доп. удвоение
+		// Kill Switch: блокируем трафик на время перезапуска TUN
+		if a.cfg.KillSwitch {
+			serverIP := extractServerIP(a.cfg.SecretFile)
+			killswitch.Enable(serverIP, a.mainLogger)
 		}
-		wintun.IncreaseAdaptiveGap(a.mainLogger)
-		a.mainLogger.Warn("Detected wintun conflict — ждём освобождения wintun kernel-объекта...")
-		notification.Send("Proxy", "Перезапуск TUN...")
-		wintun.RemoveStaleTunAdapter(a.mainLogger)
-		// Сообщаем UI что идёт перезапуск и когда ожидать готовности.
-		a.apiServer.SetRestarting(wintun.EstimateReadyAt())
-		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
-		a.mainLogger.Info("Перезапуск sing-box после wintun GC...")
-		// StartAfterManualCleanup: cleanup уже выполнен выше → пропускаем BeforeRestart
-		// чтобы не запускать PollUntilFree второй раз (двойное ожидание ~2 мин).
-		// BUG FIX #2: ClearRestarting() вызывается ПОСЛЕ успешного запуска sing-box.
-		// Ранее он вызывался ДО StartAfterManualCleanup, из-за чего UI кратко видел
-		// warming=false, running=false (прокси «не запущен») до реального старта.
-		if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
+
+		// Retry loop: пытаемся поднять TUN несколько раз с увеличивающимся gap.
+		// Каждая попытка: IncreaseGap → RemoveAdapter → PollUntilFree → Start.
+		// Если старт успешен — выходим. Если нет — повторяем.
+		const maxTunAttempts = 5
+		for attempt := 1; attempt <= maxTunAttempts; attempt++ {
+			// Если краш случился быстро (<30s) — gap не хватило, удваиваем.
+			if currentMgr.Uptime() < 30*time.Second || attempt > 1 {
+				wintun.IncreaseAdaptiveGap(a.mainLogger)
+			}
+			wintun.IncreaseAdaptiveGap(a.mainLogger)
+
+			a.mainLogger.Warn("TUN попытка %d/%d — ждём освобождения kernel-объекта...", attempt, maxTunAttempts)
+			notification.Send("Proxy", fmt.Sprintf("Перезапуск TUN... (%d/%d)", attempt, maxTunAttempts))
+
+			wintun.RemoveStaleTunAdapter(a.mainLogger)
+			a.apiServer.SetRestarting(wintun.EstimateReadyAt())
+			a.apiServer.SetTunAttempt(attempt, maxTunAttempts)
+			wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+
+			a.mainLogger.Info("TUN попытка %d/%d — запускаем sing-box...", attempt, maxTunAttempts)
+			if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
+				a.mainLogger.Error("TUN попытка %d/%d — не удалось запустить: %v", attempt, maxTunAttempts, startErr)
+				if attempt == maxTunAttempts {
+					a.apiServer.ClearRestarting()
+					notification.Send("Proxy — ошибка", fmt.Sprintf("Не удалось поднять TUN после %d попыток", maxTunAttempts))
+					_ = a.proxyManager.Disable()
+					tray.SetEnabled(false)
+					return
+				}
+				// Записываем краш для следующей итерации
+				wintun.RecordStop()
+				continue
+			}
+
+			// Успех: sing-box запущен — ждём подтверждения что TUN поднялся
 			a.apiServer.ClearRestarting()
-			a.mainLogger.Error("Не удалось перезапустить sing-box: %v", startErr)
-			notification.Send("Proxy — ошибка", "Не удалось перезапустить. Откройте приложение.")
-			_ = a.proxyManager.Disable()
-			tray.SetEnabled(false)
-		} else {
-			a.apiServer.ClearRestarting()
-			a.mainLogger.Info("sing-box успешно перезапущен (PID: %d)", currentMgr.GetPID())
-			notification.Send("Proxy", "Перезапущен успешно ✓")
+			killswitch.Disable(a.mainLogger)
+			wintun.ResetAdaptiveGap()
+			a.mainLogger.Info("sing-box успешно перезапущен (PID: %d, попытка %d/%d)",
+				currentMgr.GetPID(), attempt, maxTunAttempts)
+			notification.Send("Proxy", fmt.Sprintf("Перезапущен ✓ (попытка %d/%d)", attempt, maxTunAttempts))
+			return
 		}
 		return
 	}
 
 	a.mainLogger.Error("sing-box упал неожиданно (%v) — отключаем системный прокси", crashErr)
 	notification.Send("Proxy — ошибка", "sing-box упал. Проверьте лог и перезапустите.")
+	// Kill Switch: блокируем трафик пока туннель не восстановлен
+	if a.cfg.KillSwitch {
+		serverIP := extractServerIP(a.cfg.SecretFile)
+		killswitch.Enable(serverIP, a.mainLogger)
+	}
 	if disableErr := a.proxyManager.Disable(); disableErr != nil {
 		a.mainLogger.Error("Не удалось отключить прокси: %v", disableErr)
 	} else {
@@ -264,6 +291,8 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Info("sing-box готов")
 		}
 
+		killswitch.Disable(a.mainLogger)
+		wintun.ResetAdaptiveGap() // успешный первый старт → сбрасываем накопленный gap
 		if err := a.proxyManager.Enable(proxyConfig); err != nil {
 			a.mainLogger.Warn("Не удалось включить системный прокси: %v", err)
 		} else {
@@ -342,6 +371,39 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
 	a.mainLogger.Info("Работа завершена корректно")
+}
+
+// extractServerIP читает IP прокси-сервера из secret.key для Kill Switch allowlist.
+// При ошибке возвращает пустую строку — Kill Switch всё равно активируется, но только loopback.
+func extractServerIP(secretFile string) string {
+	data, err := os.ReadFile(secretFile)
+	if err != nil {
+		return ""
+	}
+	vlessURL := strings.TrimSpace(string(data))
+	vlessURL = strings.TrimPrefix(vlessURL, "\xef\xbb\xbf")
+	// vless://uuid@host:port?params — извлекаем host
+	at := strings.Index(vlessURL, "@")
+	if at < 0 {
+		return ""
+	}
+	hostPort := vlessURL[at+1:]
+	if q := strings.IndexAny(hostPort, "?#/"); q >= 0 {
+		hostPort = hostPort[:q]
+	}
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return hostPort // возможно уже без порта
+	}
+	// Резолвим если это hostname
+	if net.ParseIP(host) == nil {
+		addrs, err := net.LookupHost(host)
+		if err == nil && len(addrs) > 0 {
+			return addrs[0]
+		}
+		return "" // не смогли резолвить — не добавляем в allowlist
+	}
+	return host
 }
 
 // preWarmProxyConnection устанавливает соединение через HTTP прокси сразу после старта.
