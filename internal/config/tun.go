@@ -76,8 +76,12 @@ func NormalizeRuleValue(val string) string {
 	val = strings.TrimPrefix(val, "\xef\xbb\xbf")
 
 	lower := strings.ToLower(val)
-	if strings.HasSuffix(lower, ".exe") || strings.HasPrefix(lower, "geosite:") {
-		return strings.ToLower(val)
+	if strings.HasSuffix(lower, ".exe") {
+		// Process names: сохраняем оригинальный регистр — sing-box матчит с учётом регистра
+		return strings.TrimSpace(val)
+	}
+	if strings.HasPrefix(lower, "geosite:") {
+		return lower
 	}
 
 	val = strings.TrimPrefix(val, "https://")

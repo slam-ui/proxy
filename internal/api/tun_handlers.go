@@ -29,10 +29,12 @@ func isValidAction(a config.RuleAction) bool {
 
 // applyState хранит состояние последнего применения правил
 type applyState struct {
-	mu      sync.Mutex
-	running bool
-	lastErr string
-	lastPID int
+	mu            sync.Mutex
+	running       bool
+	lastErr       string
+	lastPID       int
+	startedAt     time.Time // когда начался apply
+	estimatedDone time.Time // оценочное время завершения
 }
 
 // TunHandlers обработчики маршрутизации
@@ -123,13 +125,12 @@ func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 
 	ruleType := config.DetectRuleType(strings.ToLower(val))
 
-	// BUG FIX #10: process rules тоже переводим в lowercase при сохранении.
-	// Ранее домены сохранялись строчными (val = strings.ToLower), но process rules
-	// оставались в оригинальном case ("Discord.exe"). DELETE /api/tun/rules/discord.exe
-	// находил правило через ToLower, но DELETE /api/tun/rules/Discord.exe
-	// тоже находил — неконсистентно. Единый lowercase устраняет двусмысленность.
-	// Windows сама нечувствительна к регистру имён exe, так что поведение не меняется.
-	val = strings.ToLower(val)
+	// FIX: process rules сохраняем в оригинальном регистре.
+	// sing-box матчит process_name с учётом регистра на Windows — "telegram.exe" не совпадёт
+	// с реальным процессом "Telegram.exe". Домены и IP приводим к lowercase, .exe — нет.
+	if ruleType != config.RuleTypeProcess {
+		val = strings.ToLower(val)
+	}
 
 	if !isValidAction(req.Action) {
 		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
@@ -311,6 +312,8 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 	}
 	h.apply.running = true
 	h.apply.lastErr = ""
+	h.apply.startedAt = time.Now()
+	h.apply.estimatedDone = time.Now().Add(35 * time.Second) // BeforeRestart=30s + startup ~5s
 	h.apply.mu.Unlock()
 
 	h.mu.RLock()
@@ -470,10 +473,23 @@ func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) 
 	lastPID := h.apply.lastPID
 	h.apply.mu.Unlock()
 
+	elapsedMs := int64(0)
+	estimatedRemainMs := int64(0)
+	if !h.apply.startedAt.IsZero() {
+		elapsedMs = time.Since(h.apply.startedAt).Milliseconds()
+	}
+	if !h.apply.estimatedDone.IsZero() && running {
+		remaining := time.Until(h.apply.estimatedDone).Milliseconds()
+		if remaining < 0 { remaining = 0 }
+		estimatedRemainMs = remaining
+	}
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"running":  running,
-		"last_err": lastErr,
-		"last_pid": lastPID,
+		"running":              running,
+		"last_err":             lastErr,
+		"last_pid":             lastPID,
+		"elapsed_ms":           elapsedMs,
+		"estimated_remain_ms":  estimatedRemainMs,
+		"estimated_total_ms":   35000,
 	})
 }
 

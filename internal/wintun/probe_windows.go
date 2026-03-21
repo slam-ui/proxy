@@ -18,9 +18,10 @@ import (
 // не существует — прямая проверка без угадывания через временной gap.
 
 var (
-	modwintun        = syscall.NewLazyDLL("wintun.dll")
-	procOpenAdapter  = modwintun.NewProc("WintunOpenAdapter")
-	procCloseAdapter = modwintun.NewProc("WintunCloseAdapter")
+	modwintun          = syscall.NewLazyDLL("wintun.dll")
+	procOpenAdapter    = modwintun.NewProc("WintunOpenAdapter")
+	procCloseAdapter   = modwintun.NewProc("WintunCloseAdapter")
+	procDeleteAdapter  = modwintun.NewProc("WintunDeleteAdapter")
 )
 
 // kernelObjectFree возвращает true если wintun kernel-объект для ifName свободен.
@@ -32,6 +33,29 @@ var (
 	cachedIfName    string
 	cachedIfNamePtr *uint16
 )
+
+// ForceDeleteAdapter принудительно удаляет TUN-адаптер через WinTun DLL.
+// В отличие от Remove-NetAdapter который убирает из Device Manager,
+// WintunDeleteAdapter удаляет именно тот kernel-объект который блокирует CreateAdapter.
+// Fail-silent: ошибки игнорируются — если не получилось, продолжаем обычную очистку.
+func ForceDeleteAdapter(ifName string) {
+	if err := modwintun.Load(); err != nil {
+		return // wintun.dll не найдена
+	}
+	ptr, err := syscall.UTF16PtrFromString(ifName)
+	if err != nil {
+		return
+	}
+	// Сначала открываем адаптер
+	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	if r0 == 0 {
+		return // уже не существует
+	}
+	// Удаляем: WintunDeleteAdapter(adapter) — освобождает kernel-объект синхронно
+	_, _, _ = procDeleteAdapter.Call(r0)
+	// Закрываем handle (на случай если Delete не закрыл)
+	_, _, _ = procCloseAdapter.Call(r0)
+}
 
 func kernelObjectFree(ifName string) bool {
 	if err := modwintun.Load(); err != nil {
