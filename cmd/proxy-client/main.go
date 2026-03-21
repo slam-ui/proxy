@@ -330,7 +330,7 @@ func killProcessesByName(targetName string, log interface{ Info(string, ...inter
 	var e entry32
 	e.Size = uint32(unsafe.Sizeof(e))
 	selfPID := uint32(os.Getpid())
-	killed := false
+	var procs []*os.Process
 	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	for ret != 0 {
 		name := syscall.UTF16ToString(e.ExeFile[:])
@@ -338,12 +338,22 @@ func killProcessesByName(targetName string, log interface{ Info(string, ...inter
 			if proc, err := os.FindProcess(int(e.ProcessID)); err == nil {
 				log.Info("Завершаем осиротевший процесс %s (PID: %d)", targetName, e.ProcessID)
 				_ = proc.Kill()
-				killed = true
+				procs = append(procs, proc)
 			}
 		}
 		ret, _, _ = procProcess32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	}
-	return killed
+	if len(procs) == 0 {
+		return false
+	}
+	// Ждём завершения всех убитых процессов — без этого kernel WinTun объект
+	// остаётся живым и sing-box падает с FATAL[0015] через 15с после старта.
+	for _, proc := range procs {
+		_, _ = proc.Wait()
+	}
+	// Дополнительная пауза для освобождения kernel handles после Wait
+	time.Sleep(1 * time.Second)
+	return true
 }
 
 func createToolhelp32Snapshot() (syscall.Handle, error) {

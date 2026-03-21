@@ -8,3 +8,5 @@ package wintun
 func kernelObjectFree(_ string) bool {
 	return true
 }
+
+func ForceDeleteAdapter(_ string) {}

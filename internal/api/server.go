@@ -134,6 +134,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupProfileRoutes(s)
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
+	SetupEngineRoutes(s)
 	if s.config.SecretKeyPath != "" {
 		SetupServerRoutes(s, s.config.SecretKeyPath)
 	}

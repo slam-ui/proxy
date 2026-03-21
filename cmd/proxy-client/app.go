@@ -22,6 +22,7 @@ import (
 
 	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
+	"proxyclient/internal/engine"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
@@ -128,11 +129,17 @@ func (a *App) buildXRayCfg() xray.Config {
 		Logger:         xrayLogger,
 		SingBoxWriter:  eventlog.NewLineWriter(a.evLog, "sing-box", eventlog.LevelInfo),
 		FileWriter:     a.output,
-		// BeforeRestart — wintun cleanup. api пакет больше не зависит от wintun.
+		// BeforeRestart — wintun cleanup для обычного перезапуска (apply rules, ручной restart).
+		// Используем таймаут 30s — если TUN не освободился за это время,
+		// sing-box всё равно попробует запуститься. Wintun-конфликт после apply
+		// обрабатывается через handleCrash → retry loop с полным PollUntilFree.
 		BeforeRestart: func(ctx context.Context, log logger.Logger) error {
 			wintun.RecordStop()
 			wintun.RemoveStaleTunAdapter(log)
-			wintun.PollUntilFree(ctx, log, config.TunInterfaceName)
+			// Быстрое ожидание с таймаутом 30s — не блокируем apply rules надолго.
+			quickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			wintun.PollUntilFree(quickCtx, log, config.TunInterfaceName)
 			return nil
 		},
 		OnCrash: func(crashErr error) {
@@ -177,11 +184,12 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 		// Если старт успешен — выходим. Если нет — повторяем.
 		const maxTunAttempts = 5
 		for attempt := 1; attempt <= maxTunAttempts; attempt++ {
-			// Если краш случился быстро (<30s) — gap не хватило, удваиваем.
-			if currentMgr.Uptime() < 30*time.Second || attempt > 1 {
+			// Увеличиваем gap один раз при первой попытке (и каждой последующей).
+			// На первой попытке — только если краш случился быстро (<30s),
+			// иначе gap уже достаточен. При повторах — всегда увеличиваем.
+			if attempt > 1 || currentMgr.Uptime() < 30*time.Second {
 				wintun.IncreaseAdaptiveGap(a.mainLogger)
 			}
-			wintun.IncreaseAdaptiveGap(a.mainLogger)
 
 			a.mainLogger.Warn("TUN попытка %d/%d — ждём освобождения kernel-объекта...", attempt, maxTunAttempts)
 			notification.Send("Proxy", fmt.Sprintf("Перезапуск TUN... (%d/%d)", attempt, maxTunAttempts))
@@ -239,8 +247,29 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 	go func() {
 		<-apiReady
 
-		a.mainLogger.Info("Фоновая инициализация: wintun cleanup...")
+		a.mainLogger.Info("Фоновая инициализация: проверка движка sing-box...")
 		tray.SetEnabled(false)
+		// Auto-Engine: скачиваем sing-box.exe если отсутствует
+		if engine.NeedsDownload(a.cfg.SingBoxPath) {
+			a.mainLogger.Info("sing-box.exe не найден — автоматическая загрузка...")
+			notification.Send("Proxy", "Загружаем sing-box.exe...")
+			progress := make(chan engine.Progress, 20)
+			go func() {
+				for p := range progress {
+					if p.Message != "" {
+						a.mainLogger.Info("engine: %s", p.Message)
+					}
+				}
+			}()
+			if err := engine.EnsureEngine(a.lifecycleCtx, a.cfg.SingBoxPath, progress); err != nil {
+				a.mainLogger.Error("Не удалось загрузить sing-box.exe: %v", err)
+				notification.Send("Proxy — ошибка", "Не удалось загрузить sing-box. Откройте приложение.")
+				return
+			}
+			a.mainLogger.Info("sing-box.exe успешно загружен ✓")
+			notification.Send("Proxy", "sing-box.exe загружен ✓")
+		}
+		a.mainLogger.Info("Фоновая инициализация: wintun cleanup...")
 
 		if _, err := os.Stat(a.cfg.ConfigPath + ".pending"); err == nil {
 			_ = os.Remove(a.cfg.ConfigPath + ".pending")
@@ -252,22 +281,23 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		// Канал configReady доставляет результат (error или nil) после завершения poll.
 		// BUG FIX #15: configResult.configPath было мёртвым полем (писалось, никогда не читалось).
 		// Передаём просто error — это всё что нужно вызывающему коду.
-		configCh := make(chan error, 1)
-		go func() {
-			routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
-			if err != nil {
-				a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
-				routingCfg = config.DefaultRoutingConfig()
-			}
-			genErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)
-			configCh <- genErr
-		}()
-
+		// Ожидаем наличия VLESS ключа перед стартом — для wizard-сценария,
+		// когда пользователь ещё не вставил ключ пока шла загрузка движка (~60с).
+		// Ожидаем VLESS ключа — для wizard-сценария когда пользователь ещё не вставил ключ.
+		// Запускаем wintun cleanup параллельно — не теряем время.
 		wintun.RemoveStaleTunAdapter(a.mainLogger)
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
 
-		// Ждём завершения генерации конфига (обычно уже готов к этому моменту).
-		cfgErr := <-configCh
+		// Ждём ключ ПОСЛЕ PollUntilFree: wizard мог сохранить ключ пока шёл wintun cleanup.
+		a.waitForSecretKey()
+
+		// Генерируем конфиг ТОЛЬКО после того как ключ точно есть.
+		routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
+		if err != nil {
+			a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
+			routingCfg = config.DefaultRoutingConfig()
+		}
+		cfgErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)
 		a.mainLogger.Info("Запуск sing-box...")
 		if cfgErr != nil {
 			if !a.handleConfigError(cfgErr) {
@@ -371,6 +401,40 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
 	a.mainLogger.Info("Работа завершена корректно")
+}
+
+// waitForSecretKey ждёт пока secret.key не будет содержать валидный VLESS URL.
+// Нужно для wizard-сценария: движок скачивается ~60с, пользователь ещё не вставил ключ.
+// При обычном запуске файл уже есть — возвращается мгновенно.
+func (a *App) waitForSecretKey() {
+	hasKey := func() bool {
+		data, err := os.ReadFile(a.cfg.SecretFile)
+		if err != nil || len(data) == 0 {
+			return false
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") && strings.HasPrefix(line, "vless://") {
+				return true
+			}
+		}
+		return false
+	}
+	if hasKey() {
+		return // быстрый путь — ключ уже есть
+	}
+	a.mainLogger.Info("Ожидание VLESS ключа (wizard mode)...")
+	for {
+		select {
+		case <-a.lifecycleCtx.Done():
+			return
+		case <-time.After(2 * time.Second):
+			if hasKey() {
+				a.mainLogger.Info("VLESS ключ получен — продолжаем запуск")
+				return
+			}
+		}
+	}
 }
 
 // extractServerIP читает IP прокси-сервера из secret.key для Kill Switch allowlist.

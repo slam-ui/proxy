@@ -420,6 +420,25 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 		return strings.TrimSpace(string(out)), err
 	}
 
+	// Убиваем любой оставшийся процесс sing-box.exe перед очисткой TUN.
+	// Это критично: если sing-box ещё жив (даже в состоянии завершения), он держит
+	// WinTun kernel-объект открытым → новый sing-box получает FATAL[0015] через 15с.
+	taskkillOut, _ := runHidden("taskkill", "/F", "/IM", "sing-box.exe", "/T")
+	if strings.Contains(taskkillOut, "SUCCESS") || !strings.Contains(strings.ToLower(taskkillOut), "not found") {
+		log.Info("wintun: sing-box.exe завершён принудительно, ждём выгрузки...")
+		// Ждём пока процесс действительно исчезнет из системы (до 3с)
+		for i := 0; i < 6; i++ {
+			time.Sleep(500 * time.Millisecond)
+			chkOut, _ := runHidden("tasklist", "/FI", "IMAGENAME eq sing-box.exe", "/NH")
+			if !strings.Contains(strings.ToLower(chkOut), "sing-box.exe") {
+				log.Info("wintun: sing-box.exe выгружен из памяти")
+				break
+			}
+		}
+	}
+	// Дополнительная пауза для освобождения kernel handles
+	time.Sleep(500 * time.Millisecond)
+
 	// Попытка остановить wintun через SCM (работает если драйвер зарегистрирован)
 	out, err := runHidden("sc", "stop", "wintun")
 	if err != nil {
@@ -438,18 +457,31 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 		}
 	}
 
-	// Удалить адаптер из Device Manager (косметика — убирает из списка сетей)
-	// Удалить адаптер из Device Manager через Remove-NetAdapter
+	// Шаг 0: WintunDeleteAdapter — удаляем kernel-объект напрямую через DLL.
+	// Это то что не делают ни Remove-NetAdapter, ни netsh, ни taskkill.
+	// WintunDeleteAdapter освобождает \\Device\\WINTUN-{GUID} синхронно, без ожидания Windows GC.
+	// WARN[0010]+FATAL[0015] возникают именно потому что этот объект остаётся занятым.
+	ForceDeleteAdapter("tun0") // config.TunInterfaceName
+	time.Sleep(200 * time.Millisecond) // даём DLL завершить освобождение
+
+	// Шаг 1: Убрать интерфейс из TCP/IP стека через netsh.
+	// Remove-NetAdapter убирает из Device Manager, но netsh выбрасывает из TCP/IP стека.
+	// Это критично: даже после Remove-NetAdapter интерфейс может оставаться в стеке
+	// и блокировать CreateAdapter в sing-box ("Cannot create a file when that file already exists").
+	// WARN[0010] + FATAL[0015] — признак того что интерфейс живёт в стеке от предыдущей сессии.
+	_, _ = runHidden("netsh", "interface", "ip", "delete", "interface", "tun0")
+	_, _ = runHidden("netsh", "interface", "ipv6", "delete", "interface", "tun0")
+
+	// Шаг 2: Удалить адаптер из Device Manager
 	psRemove := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
 	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psRemove)
 
-	// FIX: "A device attached to the system is not functioning" (error 433 / ERROR_DEV_NOT_EXIST)
-	// Причина: WintunOpenAdapter возвращает NULL (probe говорит "free"), но PnP-устройство
-	// сломано — sing-box падает при CreateAdapter с ERROR_DEV_NOT_EXIST.
-	// Решение: убрать сломанное PnP-устройство через Remove-PnpDevice перед стартом.
-	// Remove-PnpDevice работает даже когда Remove-NetAdapter не видит адаптер.
+	// Шаг 3: Remove-PnpDevice для сломанных устройств (error 433 / ERROR_DEV_NOT_EXIST)
 	psPnp := `Get-PnpDevice | Where-Object { $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*tun0*' } | Where-Object { $_.Status -ne 'OK' -or $_.Problem -ne 0 } | ForEach-Object { Remove-PnpDevice -InstanceId $_.InstanceId -Confirm:$false -ErrorAction SilentlyContinue }`
 	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psPnp)
+
+	// Шаг 4: Пауза 1с после агрессивной очистки — даём Windows время применить изменения
+	time.Sleep(1 * time.Second)
 
 	log.Info("TUN cleanup завершён")
 }
@@ -462,6 +494,9 @@ func Shutdown(log logger.Logger) {
 		_ = cmd.Run()
 	}
 	run("sc", "stop", "wintun")
+	// Убираем интерфейс из TCP/IP стека при выходе — ускоряет следующий запуск
+	run("netsh", "interface", "ip", "delete", "interface", "tun0")
+	run("netsh", "interface", "ipv6", "delete", "interface", "tun0")
 	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
 		"Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue")
 	log.Info("TUN shutdown отправлен")
