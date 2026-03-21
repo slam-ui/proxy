@@ -83,6 +83,8 @@ const gapFile = "wintun_gap_ns"
 const minGapBase = 60 * time.Second
 
 // minGapMax — потолок адаптивного gap.
+// 3 минуты: gap сбрасывается после каждого успешного старта (ResetAdaptiveGap),
+// поэтому он растёт только в рамках одной неудачной сессии.
 const minGapMax = 3 * time.Minute
 
 // coldStartThreshold — если StopFile старше этого времени, считаем холодным
@@ -177,8 +179,10 @@ func computeEstimateReadyAt() time.Time {
 	if elapsed > coldStartThreshold {
 		return time.Now()
 	}
-	const estimatedGCTime = 30 * time.Second
-	readyAt := stopTime.Add(estimatedGCTime + 5*time.Second)
+	// Используем полный адаптивный gap как оценку времени готовности.
+	// Это соответствует новой логике PollUntilFree которая ждёт full gap.
+	gap := ReadAdaptiveGap()
+	readyAt := stopTime.Add(gap)
 	if readyAt.Before(time.Now()) {
 		return time.Now()
 	}
@@ -259,7 +263,7 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 	if data, err := os.ReadFile(StopFile); err == nil {
 		if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
 			if elapsed := time.Since(time.Unix(0, ns)); elapsed > coldStartThreshold {
-				log.Info("wintun: холодный старт (%v с остановки) — probe пропущен",
+				log.Info("wintun: холодный старт (%v с остановки) — ожидание пропущено",
 					elapsed.Round(time.Second))
 				return
 			}
@@ -270,35 +274,78 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		return
 	}
 
-	const (
-		probeInterval = 500 * time.Millisecond
-		probeTimeout  = 90 * time.Second  // потолок на случай если DLL не отвечает
-	)
+	// ── Надёжный алгоритм ожидания ──────────────────────────────────────────
+	//
+	// История проблемы:
+	//   v1 (fixed gap): ждали фиксированное время → слишком долго для нормальных случаев
+	//   v2 (adaptive gap + settle): ждали probe→"free" + settle → false-positive на этой машине
+	//   v3 (double verify): probe + netsh двойная верификация → всё равно false-positive
+	//
+	// Ключевое наблюдение из логов: probe=free, netsh=absent, но FATAL[0015] всё равно.
+	// WintunOpenAdapter и netsh не детектируют тот же объект что проверяет CreateAdapter.
+	//
+	// Надёжное решение:
+	//   1. Ждём полный адаптивный gap ГАРАНТИРОВАННО (не сокращаем через probe).
+	//      Gap уже учитывает историю крашей — при первом краше 60s, растёт до 5m.
+	//   2. После gap — требуем стабильное "free" состояние 3 секунды подряд (6 проверок).
+	//      Это защищает от единичного ложного "free" в момент проверки.
+	//   3. Probe+netsh используем только чтобы ПРОДЛИТЬ ожидание, но не сократить.
 
-	log.Info("wintun: ждём освобождения kernel-объекта (probe каждые 500мс, max %v)...", probeTimeout)
-	deadline := time.Now().Add(probeTimeout)
-	for time.Now().Before(deadline) {
-		if kernelObjectFree(ifName) {
-			// Kernel объект свободен — ждём settle delay для надёжности и стартуем.
-			// FIX: используем ReadSettleDelay() вместо захардкоженных 5s.
-			// ReadSettleDelay() возвращает min 15s и растёт вместе с адаптивным gap:
-			// при gap=3m settle=45s. Именно это спасает от ложного "free" от DLL-probe.
-			// Было: minGap=5s → sing-box стартовал, падал через 15s с "file already exists".
-			settle := ReadSettleDelay()
-			log.Info("wintun: kernel объект свободен — пауза %v перед стартом...", settle)
-			if !sleepCtx(ctx, settle) {
-				log.Info("wintun: пауза прервана (выход из приложения)")
-				return
-			}
-			log.Info("wintun: готов к запуску sing-box")
-			return
+	gap := ReadAdaptiveGap()
+	// Учитываем уже прошедшее время с момента остановки (StopFile timestamp).
+	alreadyWaited := time.Duration(0)
+	if data, err := os.ReadFile(StopFile); err == nil {
+		if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
+			alreadyWaited = time.Since(time.Unix(0, ns))
 		}
-		if !sleepCtx(ctx, probeInterval) {
-			log.Info("wintun: probe прерван (выход из приложения)")
+	}
+	remaining := gap - alreadyWaited
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	if remaining > 0 {
+		log.Info("wintun: ждём освобождения kernel-объекта (gap=%v, уже прошло=%v, осталось=%v)...",
+			gap.Round(time.Second), alreadyWaited.Round(time.Second), remaining.Round(time.Second))
+		if !sleepCtx(ctx, remaining) {
+			log.Info("wintun: ожидание прервано (выход из приложения)")
 			return
 		}
 	}
-	log.Warn("wintun: probe timeout %v — kernel объект всё ещё занят по данным DLL, пробуем запустить", probeTimeout)
+
+	// После gap — ждём стабильного "free" состояния.
+	// Требуем 6 последовательных "free" проверок с интервалом 500мс (= 3 секунды стабильности).
+	// Это фильтрует единичные false-positive от WintunOpenAdapter.
+	const (
+		confirmInterval = 500 * time.Millisecond
+		confirmRequired = 6  // 6 × 500мс = 3с стабильного "free"
+		confirmTimeout  = 60 * time.Second
+	)
+	confirmCount := 0
+	confirmDeadline := time.Now().Add(confirmTimeout)
+	log.Info("wintun: gap истёк — ждём стабильного освобождения (%d× probe)...", confirmRequired)
+	for time.Now().Before(confirmDeadline) {
+		probeOK := kernelObjectFree(ifName)
+		netshOK := !InterfaceExists(ifName)
+		if probeOK && netshOK {
+			confirmCount++
+			if confirmCount >= confirmRequired {
+				log.Info("wintun: готов к запуску sing-box (%d× probe=free, netsh=absent)", confirmRequired)
+				return
+			}
+		} else {
+			// Сброс счётчика при любом "занято"
+			if confirmCount > 0 {
+				log.Info("wintun: probe занято после %d подтверждений — сброс счётчика", confirmCount)
+			}
+			confirmCount = 0
+		}
+		if !sleepCtx(ctx, confirmInterval) {
+			log.Info("wintun: ожидание прервано (выход из приложения)")
+			return
+		}
+	}
+	log.Warn("wintun: confirm timeout %v — запускаем несмотря на занятость", confirmTimeout)
 }
 
 // InterfaceExists проверяет через netsh присутствует ли интерфейс в TCP/IP стеке.
@@ -332,6 +379,23 @@ func repairStaleDriver(log logger.Logger) {
 			log.Info("wintun: stale driver registration удалена — будет переустановлена при старте (%s)", strings.TrimSpace(string(delOut)))
 		} else {
 			log.Info("wintun: не удалось удалить stale driver: %s", cleanSCOutput(string(delOut)))
+		}
+	}
+
+	// FIX: дополнительно проверяем через sc query win32_own_service —
+	// если EXIT_CODE содержит 433 (ERROR_DEV_NOT_EXIST) или 31 (ERROR_GEN_FAILURE),
+	// драйвер скорее всего в состоянии ошибки и sc delete нужен даже при STOPPED.
+	cmd2 := exec.Command("sc", "query", "type=", "driver", "name=", "wintun")
+	cmd2.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	out2, _ := cmd2.CombinedOutput()
+	outStr2 := strings.ToUpper(string(out2))
+	if (strings.Contains(outStr2, "WIN32_EXIT_CODE") &&
+		(strings.Contains(outStr2, " 433") || strings.Contains(outStr2, " 31"))) ||
+		strings.Contains(outStr2, "FAILED_PERMANENT") {
+		del2 := exec.Command("sc", "delete", "wintun")
+		del2.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		if delOut2, delErr2 := del2.CombinedOutput(); delErr2 == nil {
+			log.Info("wintun: driver с exit code 433/31 удалён — будет переустановлен (%s)", strings.TrimSpace(string(delOut2)))
 		}
 	}
 }
@@ -375,8 +439,17 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 	}
 
 	// Удалить адаптер из Device Manager (косметика — убирает из списка сетей)
-	ps := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
-	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", ps)
+	// Удалить адаптер из Device Manager через Remove-NetAdapter
+	psRemove := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
+	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psRemove)
+
+	// FIX: "A device attached to the system is not functioning" (error 433 / ERROR_DEV_NOT_EXIST)
+	// Причина: WintunOpenAdapter возвращает NULL (probe говорит "free"), но PnP-устройство
+	// сломано — sing-box падает при CreateAdapter с ERROR_DEV_NOT_EXIST.
+	// Решение: убрать сломанное PnP-устройство через Remove-PnpDevice перед стартом.
+	// Remove-PnpDevice работает даже когда Remove-NetAdapter не видит адаптер.
+	psPnp := `Get-PnpDevice | Where-Object { $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*tun0*' } | Where-Object { $_.Status -ne 'OK' -or $_.Problem -ne 0 } | ForEach-Object { Remove-PnpDevice -InstanceId $_.InstanceId -Confirm:$false -ErrorAction SilentlyContinue }`
+	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psPnp)
 
 	log.Info("TUN cleanup завершён")
 }

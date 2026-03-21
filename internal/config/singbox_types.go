@@ -30,6 +30,7 @@ type SBDNSServer struct {
 	Type       string `json:"type"`
 	Server     string `json:"server,omitempty"`
 	ServerPort int    `json:"server_port,omitempty"`
+	Detour     string `json:"detour,omitempty"` // маршрутизировать DNS через указанный outbound
 }
 
 type SBDNSRule struct {

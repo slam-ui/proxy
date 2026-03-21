@@ -66,16 +66,68 @@ func LoadRoutingConfig(path string) (*RoutingConfig, error) {
 	return &cfg, nil
 }
 
-// SanitizeRoutingConfig исправляет неверно классифицированные правила.
-// Защита от ситуации когда UI или ручное редактирование сохраняет
-// process-имя (например "Spotify.exe") с type="geosite" →
-// генератор пытается найти data/geosite-Spotify.exe.bin → ошибка → старый конфиг.
+// NormalizeRuleValue канонизирует значение правила:
+// убирает URL-схему (https://, http://), query-параметры, fragment, порт и trailing slash.
+// Например: "https://2ip.ru/" → "2ip.ru"
+//           "http://example.com:8080/path?q=1" → "example.com"
+// Процессы (.exe) и geosite: префиксы не затрагиваются.
+func NormalizeRuleValue(val string) string {
+	val = strings.TrimSpace(val)
+	val = strings.TrimPrefix(val, "\xef\xbb\xbf")
+
+	lower := strings.ToLower(val)
+	if strings.HasSuffix(lower, ".exe") || strings.HasPrefix(lower, "geosite:") {
+		return strings.ToLower(val)
+	}
+
+	val = strings.TrimPrefix(val, "https://")
+	val = strings.TrimPrefix(val, "http://")
+	val = strings.TrimPrefix(val, "//")
+
+	if idx := strings.IndexByte(val, '/'); idx != -1 {
+		val = val[:idx]
+	}
+	if idx := strings.IndexAny(val, "?#"); idx != -1 {
+		val = val[:idx]
+	}
+	if !strings.HasPrefix(val, "[") {
+		if idx := strings.LastIndexByte(val, ':'); idx != -1 {
+			host := val[:idx]
+			port := val[idx+1:]
+			isPort := len(port) > 0
+			for _, c := range port {
+				if c < '0' || c > '9' {
+					isPort = false
+					break
+				}
+			}
+			if isPort {
+				val = host
+			}
+		}
+	}
+
+	return strings.ToLower(strings.TrimSpace(val))
+}
+
+// SanitizeRoutingConfig исправляет неверно классифицированные правила и
+// нормализует значения (убирает URL-схемы, порты, пути из domain-правил).
+// Вызывается при загрузке — автоматически мигрирует старые правила.
 func SanitizeRoutingConfig(cfg *RoutingConfig) {
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
+
+		normalized := NormalizeRuleValue(rule.Value)
+		if normalized != "" {
+			rule.Value = normalized
+		}
+
 		detected := DetectRuleType(rule.Value)
 		if rule.Type == RuleTypeGeosite && detected == RuleTypeProcess {
 			rule.Type = RuleTypeProcess
+		}
+		if rule.Type == "" {
+			rule.Type = detected
 		}
 	}
 }

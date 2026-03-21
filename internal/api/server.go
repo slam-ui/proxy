@@ -31,6 +31,7 @@ type Config struct {
 	XRayManager   xray.Manager
 	ProxyManager  proxy.Manager
 	ConfigPath    string
+	SecretKeyPath string // путь до secret.key (active VLESS URL)
 	Logger        logger.Logger
 	EventLog      *eventlog.Log // может быть nil — тогда /api/events недоступен
 	// QuitChan если задан — закрывается при вызове POST /api/quit,
@@ -55,6 +56,8 @@ type Server struct {
 	restartMu        sync.RWMutex
 	restarting       bool
 	restartReadyAt   time.Time
+	tunAttempt       int // текущая попытка поднять TUN
+	tunMaxAttempt    int // максимум попыток
 	// BUG FIX #7: silentCache строится один раз, инвалидируется только при addSilentPath.
 	// Без кэша map пересоздавалась при каждом HTTP-запросе (~30 аллокаций/мин).
 	silentMu         sync.RWMutex
@@ -64,12 +67,12 @@ type Server struct {
 // StatusResponse ответ для /api/status
 type StatusResponse struct {
 	XRay struct {
-		Running bool `json:"running"`
-		PID     int  `json:"pid"`
-		Warming bool `json:"warming"`  // true пока wintun/sing-box ещё инициализируются
-		// ReadyAt — Unix timestamp (секунды) когда прокси ориентировочно будет готов.
-		// 0 если warming=false или ETA уже в прошлом.
-		ReadyAt int64 `json:"ready_at"`
+		Running     bool  `json:"running"`
+		PID         int   `json:"pid"`
+		Warming     bool  `json:"warming"`     // true пока wintun/sing-box ещё инициализируются
+		ReadyAt     int64 `json:"ready_at"`    // Unix timestamp готовности (0 если не в прогреве)
+		TunAttempt  int   `json:"tun_attempt"` // текущая попытка поднять TUN (0 = не в режиме повторов)
+		TunMaxAttempt int `json:"tun_max_attempt"` // максимум попыток
 	} `json:"xray"`
 	Proxy struct {
 		Enabled bool   `json:"enabled"`
@@ -131,6 +134,9 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupProfileRoutes(s)
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
+	if s.config.SecretKeyPath != "" {
+		SetupServerRoutes(s, s.config.SecretKeyPath)
+	}
 	// Geosite endpoints
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")
@@ -224,12 +230,22 @@ func (s *Server) SetRestarting(readyAt time.Time) {
 	s.restartReadyAt = readyAt
 }
 
+// SetTunAttempt обновляет счётчик попыток поднять TUN — отображается в UI.
+func (s *Server) SetTunAttempt(attempt, maxAttempt int) {
+	s.restartMu.Lock()
+	defer s.restartMu.Unlock()
+	s.tunAttempt = attempt
+	s.tunMaxAttempt = maxAttempt
+}
+
 // ClearRestarting сбрасывает флаг перезапуска — вызывается после успешного старта.
 func (s *Server) ClearRestarting() {
 	s.restartMu.Lock()
 	defer s.restartMu.Unlock()
 	s.restarting = false
 	s.restartReadyAt = time.Time{}
+	s.tunAttempt = 0
+	s.tunMaxAttempt = 0
 }
 
 // handleStatus GET /api/status
@@ -263,6 +279,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		if restartReadyAt.After(time.Now()) {
 			response.XRay.ReadyAt = restartReadyAt.Unix()
 		}
+		response.XRay.TunAttempt = s.tunAttempt
+		response.XRay.TunMaxAttempt = s.tunMaxAttempt
 	} else {
 		response.XRay.Running = xrayMgr.IsRunning()
 		response.XRay.PID = xrayMgr.GetPID()

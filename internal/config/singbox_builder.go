@@ -81,7 +81,9 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				// DoT открывает новое TLS соединение на каждый запрос (+50-150мс).
 				// DoH использует HTTP/2 keep-alive — одно соединение для всех запросов.
 				// Type "https" + Server = адрес DoH резолвера (sing-box формирует URL сам).
-				{Tag: "remote", Type: "https", Server: "1.1.1.1"},
+				// remote DNS идёт через прокси-туннель (detour: proxy-out).
+				// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
+				{Tag: "remote", Type: "https", Server: "1.1.1.1", Detour: "proxy-out"},
 				// Прямой UDP для локального трафика (http-in inbound) — без прокси.
 				{Tag: "direct-dns", Type: "udp", Server: "8.8.8.8", ServerPort: 53},
 			},
@@ -279,50 +281,84 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 		}
 	}
 
-	addRule := func(out string, procs, doms, sufs, ips, geos []string) {
-		if len(procs) > 0 {
-			rules = append(rules, SBRouteRule{ProcessName: procs, Outbound: out})
+	// addDomainRule добавляет одно правило только по домен/IP/суффикс критериям.
+	addDomainRule := func(out, action string, doms, sufs, ips []string) {
+		if len(doms)+len(sufs)+len(ips) == 0 {
+			return
 		}
-		if len(doms)+len(sufs)+len(ips) > 0 {
-			r := SBRouteRule{Outbound: out}
-			if len(doms) > 0 {
-				r.Domain = doms
-			}
-			if len(sufs) > 0 {
-				r.DomainSuffix = sufs
-			}
-			if len(ips) > 0 {
-				r.IPCIDR = ips
-			}
-			rules = append(rules, r)
+		r := SBRouteRule{}
+		if out != "" {
+			r.Outbound = out
+		} else {
+			r.Action = action
 		}
-		if len(geos) > 0 {
-			rules = append(rules, SBRouteRule{RuleSet: geos, Outbound: out})
+		if len(doms) > 0 {
+			r.Domain = doms
 		}
-	}
-
-	if len(blockProcs) > 0 {
-		rules = append(rules, SBRouteRule{ProcessName: blockProcs, Action: "reject"})
-	}
-	if len(blockDom)+len(blockSuf)+len(blockIP) > 0 {
-		r := SBRouteRule{Action: "reject"}
-		if len(blockDom) > 0 {
-			r.Domain = blockDom
+		if len(sufs) > 0 {
+			r.DomainSuffix = sufs
 		}
-		if len(blockSuf) > 0 {
-			r.DomainSuffix = blockSuf
-		}
-		if len(blockIP) > 0 {
-			r.IPCIDR = blockIP
+		if len(ips) > 0 {
+			r.IPCIDR = ips
 		}
 		rules = append(rules, r)
 	}
+
+	// ── Умная сортировка правил (Smart Rule Priority) ──────────────────────────
+	//
+	// Порядок важен: sing-box применяет первое совпавшее правило.
+	//
+	// Проблема старого порядка (все direct → все proxy):
+	//   chrome.exe→proxy  +  google.com→direct
+	//   Генерировало: [direct:proc=chrome? нет] → [direct:dom=google] → [proxy:proc=chrome]
+	//   chrome→google.com совпадал с "direct:dom=google" раньше "proxy:proc=chrome" → правильно
+	//   НО: chrome.exe→proxy + youtube.com→proxy (default=direct)
+	//   Генерировало: [direct: ничего] → [proxy:proc=chrome] → [proxy:dom=youtube]
+	//   firefox→youtube: нет proxy:proc → нет proxy:dom (оба в одном правиле)... зависит от порядка
+	//
+	// Правильный порядок по специфичности:
+	//   1. BLOCK всё (процессы, домены, geosite) — безопасность прежде всего
+	//   2. Конкретные domain/IP правила (direct И proxy) — переопределяют process-правила
+	//      Пример: google.com→direct перекрывает chrome.exe→proxy для google.com ✓
+	//              youtube.com→proxy перекрывает default=direct для всех процессов ✓
+	//   3. Process правила (direct и proxy) — широкие правила по источнику
+	//   4. Geosite правила — самые широкие паттерны
+	//
+	// Итог: domain/IP правила всегда применяются раньше process-правил,
+	// что соответствует интуитивному ожиданию пользователя.
+
+	// Шаг 1: BLOCK — процессы
+	if len(blockProcs) > 0 {
+		rules = append(rules, SBRouteRule{ProcessName: blockProcs, Action: "reject"})
+	}
+	// BLOCK — домены/IP
+	addDomainRule("", "reject", blockDom, blockSuf, blockIP)
+	// BLOCK — geosite
 	if len(blockGeosite) > 0 {
 		rules = append(rules, SBRouteRule{RuleSet: blockGeosite, Action: "reject"})
 	}
 
-	addRule("direct", directProcs, directDom, directSuf, directIP, directGeosite)
-	addRule("proxy-out", proxyProcs, proxyDom, proxySuf, proxyIP, proxyGeosite)
+	// Шаг 2: Конкретные domain/IP правила (оба действия — direct и proxy)
+	// direct domain/IP: например google.com→direct при default=proxy
+	addDomainRule("direct", "", directDom, directSuf, directIP)
+	// proxy domain/IP: например youtube.com→proxy при default=direct
+	addDomainRule("proxy-out", "", proxyDom, proxySuf, proxyIP)
+
+	// Шаг 3: Process правила
+	if len(directProcs) > 0 {
+		rules = append(rules, SBRouteRule{ProcessName: directProcs, Outbound: "direct"})
+	}
+	if len(proxyProcs) > 0 {
+		rules = append(rules, SBRouteRule{ProcessName: proxyProcs, Outbound: "proxy-out"})
+	}
+
+	// Шаг 4: Geosite правила (самые широкие)
+	if len(directGeosite) > 0 {
+		rules = append(rules, SBRouteRule{RuleSet: directGeosite, Outbound: "direct"})
+	}
+	if len(proxyGeosite) > 0 {
+		rules = append(rules, SBRouteRule{RuleSet: proxyGeosite, Outbound: "proxy-out"})
+	}
 
 	final := "proxy-out"
 	if routingCfg.DefaultAction == ActionDirect {

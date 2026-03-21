@@ -112,12 +112,7 @@ func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	val := strings.TrimSpace(req.Value)
-	val = strings.TrimPrefix(val, "https://")
-	val = strings.TrimPrefix(val, "http://")
-	if idx := strings.Index(val, "/"); idx != -1 {
-		val = val[:idx]
-	}
+	val := config.NormalizeRuleValue(req.Value)
 
 	// BUG FIX: пустой val после стриппинга URL (например "https://") приводил к добавлению
 	// правила с пустым значением, что генерировало некорректный sing-box конфиг.
