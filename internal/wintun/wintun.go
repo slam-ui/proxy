@@ -40,6 +40,13 @@ import (
 	"proxyclient/internal/logger"
 )
 
+// FastDeleteFile — маркер успешного WintunDeleteAdapter в RemoveStaleTunAdapter.
+// Если файл существует, PollUntilFree пропускает длинный gap (kernel-объект уже
+// освобождён синхронно через DLL) и переходит сразу к confirm-loop + settle-delay.
+// Файл удаляется в PollUntilFree после чтения — одноразовый сигнал.
+// Экспортирован для использования в тестах (аналогично StopFile).
+const FastDeleteFile = "wintun_fast_delete"
+
 // scErrRe извлекает числовой код ошибки из вывода sc.exe
 var scErrRe = regexp.MustCompile(`\b(\d{4,5})\b`)
 
@@ -77,9 +84,11 @@ func RecordStop() {
 // Значение увеличивается при каждом wintun-краше и сбрасывается при чистом выходе.
 const gapFile = "wintun_gap_ns"
 
-// minGapBase — базовый (минимальный) gap без крашей.
-// 60с вместо старых 35с: логи показывают что FATAL[0015] стабильно происходит
-// при gap < 60с — wintun kernel-объект на этой машине живёт дольше 35с.
+// minGapBase — базовый (минимальный) gap без истории крашей.
+// 60с: реальный Windows GC занимает 5–30с; 60с даёт достаточный запас
+// для большинства систем без накопленных крашей.
+// Если 60с окажется мало — адаптивный gap автоматически вырастет через
+// IncreaseAdaptiveGap и запомнит это в wintun_gap_ns для следующих стартов.
 const minGapBase = 60 * time.Second
 
 // minGapMax — потолок адаптивного gap.
@@ -89,7 +98,9 @@ const minGapMax = 3 * time.Minute
 
 // coldStartThreshold — если StopFile старше этого времени, считаем холодным
 // стартом: Windows GC давно отработал, gap не нужен совсем.
-const coldStartThreshold = 5 * time.Minute
+// 2 минуты: снижено с 5 минут — Windows GC освобождает wintun объект
+// за 5–30с; ждать 5 минут чтобы пропустить gap избыточно.
+const coldStartThreshold = 2 * time.Minute
 
 // ReadAdaptiveGap читает текущий адаптивный gap из файла.
 // Возвращает minGapBase если файл не найден или повреждён.
@@ -211,21 +222,6 @@ func ReadSettleDelay() time.Duration {
 	return d
 }
 
-// PollUntilFree обеспечивает три условия перед запуском sing-box:
-//  1. Адаптивный gap от последней остановки (60с..3мин).
-//     Быстрый путь: если StopFile старше coldStartThreshold (5 мин) —
-//     пропускаем ожидание (холодный старт, Windows GC давно завершил работу).
-//     При каждом wintun-краше gap удваивается через IncreaseAdaptiveGap.
-//     При чистом выходе — сбрасывается через ResetAdaptiveGap.
-//  2. Активный polling через netsh — ждём пока tun0 исчезнет из TCP/IP стека.
-//  3. settle delay — дополнительная пауза после исчезновения из netsh,
-//     чтобы kernel успел освободить \Device\WINTUN-{GUID}.
-//
-// Почему netsh, а не Get-NetAdapter:
-//
-//	Get-NetAdapter смотрит в PnP/Device Manager — после Remove-NetAdapter
-//	адаптер там исчезает немедленно, но kernel-объект ещё жив.
-//	netsh держит ссылку дольше и отпускает её синхронно с kernel GC.
 // sleepCtx спит duration или возвращает false если ctx отменён раньше.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	select {
@@ -236,89 +232,96 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// PollUntilFree обеспечивает три условия перед запуском sing-box:
-//  1. Адаптивный gap от последней остановки.
-//  2. Активный polling через netsh — ждём пока tun0 исчезнет из TCP/IP стека.
-//  3. settle delay — дополнительная пауза после исчезновения из netsh.
-//
-// ctx позволяет прервать ожидание при выходе из приложения.
-// Если ctx отменён — функция возвращается немедленно без паники.
 // PollUntilFree ждёт пока wintun kernel-объект реально освободится.
 //
-// v3: прямое зондирование через wintun.dll вместо временного gap.
+// v4: три пути в зависимости от состояния предыдущей очистки:
 //
-// Старый подход (gap): ждать фиксированное время (60-240с) в надежде что GC завершился.
-// Проблема: gap слишком большой для большинства случаев (GC занимает 5-30с),
-//            и слишком маленький в редких случаях (отсюда крашей).
+//  1. FastDeleteFile присутствует → ForceDeleteAdapter вернул true, kernel-объект
+//     уже освобождён синхронно через DLL. Пропускаем adaptive gap полностью,
+//     переходим сразу к confirm-loop (3× probe) + settle-delay.
+//     Типичное ожидание: ~7–12 с вместо ~65 с.
 //
-// Новый подход (probe): вызываем WintunOpenAdapter каждые 500мс.
-//   - Вернул NULL + любая ошибка → kernel объект свободен → старт.
-//   - Вернул handle → объект ещё жив, закрываем handle, ждём.
-// Это точный сигнал без угадывания.
+//  2. Холодный старт (StopFile старше coldStartThreshold) → Windows GC давно отработал,
+//     gap пропускаем, но confirm-loop выполняем — RemoveStaleTunAdapter удаляет адаптер
+//     асинхронно и нужно убедиться что интерфейс исчез. + settle-delay.
 //
-// Минимальный gap (5с) оставлен как защита от race: между "объект свободен"
-// и реальным CreateAdapter в sing-box должно пройти хотя бы несколько секунд.
+//  3. Горячий старт без fast-delete → ждём оставшееся время adaptive gap, затем
+//     confirm-loop + settle-delay.
+//
+// Settle-delay (ReadSettleDelay): дополнительная пауза ПОСЛЕ confirm-loop.
+// Закрывает race-window между "probe=free" и реальным CreateAdapter в sing-box.
+// Без этого WARN[0010]+FATAL[0015] повторяются даже при корректном probe.
+//
+// ctx позволяет прервать ожидание при выходе из приложения.
 func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
-	// Холодный старт: StopFile старше coldStartThreshold → GC давно завершён.
-	if data, err := os.ReadFile(StopFile); err == nil {
-		if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
-			if elapsed := time.Since(time.Unix(0, ns)); elapsed > coldStartThreshold {
-				log.Info("wintun: холодный старт (%v с остановки) — ожидание пропущено",
-					elapsed.Round(time.Second))
-				return
-			}
-		}
-	}
-	// Нет StopFile → первый запуск, ничего ждать не нужно.
+	// Нет StopFile → первый запуск ever, ничего ждать не нужно.
 	if _, err := os.Stat(StopFile); os.IsNotExist(err) {
 		return
 	}
 
-	// ── Надёжный алгоритм ожидания ──────────────────────────────────────────
-	//
-	// История проблемы:
-	//   v1 (fixed gap): ждали фиксированное время → слишком долго для нормальных случаев
-	//   v2 (adaptive gap + settle): ждали probe→"free" + settle → false-positive на этой машине
-	//   v3 (double verify): probe + netsh двойная верификация → всё равно false-positive
-	//
-	// Ключевое наблюдение из логов: probe=free, netsh=absent, но FATAL[0015] всё равно.
-	// WintunOpenAdapter и netsh не детектируют тот же объект что проверяет CreateAdapter.
-	//
-	// Надёжное решение:
-	//   1. Ждём полный адаптивный gap ГАРАНТИРОВАННО (не сокращаем через probe).
-	//      Gap уже учитывает историю крашей — при первом краше 60s, растёт до 5m.
-	//   2. После gap — требуем стабильное "free" состояние 3 секунды подряд (6 проверок).
-	//      Это защищает от единичного ложного "free" в момент проверки.
-	//   3. Probe+netsh используем только чтобы ПРОДЛИТЬ ожидание, но не сократить.
+	// ── Определяем путь ожидания ─────────────────────────────────────────────
 
-	gap := ReadAdaptiveGap()
-	// Учитываем уже прошедшее время с момента остановки (StopFile timestamp).
-	alreadyWaited := time.Duration(0)
-	if data, err := os.ReadFile(StopFile); err == nil {
-		if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
-			alreadyWaited = time.Since(time.Unix(0, ns))
-		}
-	}
-	remaining := gap - alreadyWaited
-	if remaining < 0 {
-		remaining = 0
+	// Путь 1: fast-delete — ForceDeleteAdapter уже освободил kernel-объект синхронно.
+	// Удаляем маркер сразу (одноразовый сигнал) и пропускаем gap.
+	fastDeleted := false
+	if _, err := os.Stat(FastDeleteFile); err == nil {
+		_ = os.Remove(FastDeleteFile)
+		fastDeleted = true
+		log.Info("wintun: fast-delete detected — kernel-объект освобождён через DLL, gap пропущен")
 	}
 
-	if remaining > 0 {
-		log.Info("wintun: ждём освобождения kernel-объекта (gap=%v, уже прошло=%v, осталось=%v)...",
-			gap.Round(time.Second), alreadyWaited.Round(time.Second), remaining.Round(time.Second))
-		if !sleepCtx(ctx, remaining) {
-			log.Info("wintun: ожидание прервано (выход из приложения)")
-			return
+	// Путь 2: холодный старт — Windows GC давно завершён, gap не нужен.
+	// НО confirm-loop всё равно выполняем — RemoveStaleTunAdapter удаляет адаптер
+	// асинхронно и даже при холодном старте нужно убедиться что интерфейс реально
+	// исчез до запуска sing-box. Без этого: холодный старт → gap=0 → sing-box
+	// стартует до того как Windows применил Remove-NetAdapter → WARN[0010] + FATAL[0015].
+	coldStart := false
+	if !fastDeleted {
+		if data, err := os.ReadFile(StopFile); err == nil {
+			if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
+				if elapsed := time.Since(time.Unix(0, ns)); elapsed > coldStartThreshold {
+					log.Info("wintun: холодный старт (%v с остановки) — gap пропущен, проверяем адаптер...",
+						elapsed.Round(time.Second))
+					coldStart = true
+				}
+			}
 		}
 	}
 
-	// После gap — ждём стабильного "free" состояния.
-	// Требуем 6 последовательных "free" проверок с интервалом 500мс (= 3 секунды стабильности).
-	// Это фильтрует единичные false-positive от WintunOpenAdapter.
+	// ── Путь 3: горячий старт без fast-delete — adaptive gap ─────────────────
+	if !fastDeleted && !coldStart {
+		gap := ReadAdaptiveGap()
+		// Учитываем уже прошедшее время с момента остановки (StopFile timestamp).
+		alreadyWaited := time.Duration(0)
+		if data, err := os.ReadFile(StopFile); err == nil {
+			if ns, err2 := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err2 == nil {
+				alreadyWaited = time.Since(time.Unix(0, ns))
+			}
+		}
+		remaining := gap - alreadyWaited
+		if remaining < 0 {
+			remaining = 0
+		}
+
+		if remaining > 0 {
+			log.Info("wintun: ждём освобождения kernel-объекта (gap=%v, уже прошло=%v, осталось=%v)...",
+				gap.Round(time.Second), alreadyWaited.Round(time.Second), remaining.Round(time.Second))
+			if !sleepCtx(ctx, remaining) {
+				log.Info("wintun: ожидание прервано (выход из приложения)")
+				return
+			}
+		}
+	}
+
+	// ── Confirm-loop: стабильное "free" состояние ─────────────────────────────
+	//
+	// Требуем confirmRequired последовательных "free" проверок с интервалом 500мс.
+	// После fast-delete или холодного старта объект почти наверняка уже свободен,
+	// поэтому уменьшили с 6 до 3 (1.5 с стабильности вместо 3 с).
+	// Race-window после gap закрывается settle-delay, а не длиной confirm-loop.
 	const (
 		confirmInterval = 500 * time.Millisecond
-		confirmRequired = 6  // 6 × 500мс = 3с стабильного "free"
+		confirmRequired = 3  // 3 × 500мс = 1.5с стабильного "free" (было 6)
 		confirmTimeout  = 60 * time.Second
 	)
 	confirmCount := 0
@@ -330,6 +333,19 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		if probeOK && netshOK {
 			confirmCount++
 			if confirmCount >= confirmRequired {
+				// ── Settle-delay ───────────────────────────────────────────
+				// Критичная пауза ПОСЛЕ confirm-loop перед возвратом из функции.
+				// Закрывает race-window между "probe=free" и CreateAdapter в sing-box:
+				// WintunOpenAdapter и netsh проверяют объект косвенно; CreateAdapter
+				// работает напрямую с kernel PnP объектом — между их освобождением
+				// может быть несколько секунд. Именно здесь было WARN[0010]+FATAL[0015].
+				settle := ReadSettleDelay()
+				log.Info("wintun: %d× probe=free — settle-delay %v перед запуском...",
+					confirmRequired, settle.Round(time.Second))
+				if !sleepCtx(ctx, settle) {
+					log.Info("wintun: settle прерван (выход из приложения)")
+					return
+				}
 				log.Info("wintun: готов к запуску sing-box (%d× probe=free, netsh=absent)", confirmRequired)
 				return
 			}
@@ -385,13 +401,24 @@ func repairStaleDriver(log logger.Logger) {
 	// FIX: дополнительно проверяем через sc query win32_own_service —
 	// если EXIT_CODE содержит 433 (ERROR_DEV_NOT_EXIST) или 31 (ERROR_GEN_FAILURE),
 	// драйвер скорее всего в состоянии ошибки и sc delete нужен даже при STOPPED.
-	cmd2 := exec.Command("sc", "query", "type=", "driver", "name=", "wintun")
+	// BUG FIX: sc.exe требует "key= value" как один токен без пробела между "=" и значением.
+	// Передача "type=", "driver" как отдельных argv[] разрывала пару — sc игнорировал фильтр.
+	cmd2 := exec.Command("sc", "query", "type= driver", "state= all")
 	cmd2.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 	out2, _ := cmd2.CombinedOutput()
+	// После исправления синтаксиса sc query список включает ВСЕХ драйверов.
+	// Делим вывод на блоки по "SERVICE_NAME:" и ищем только блок wintun.
 	outStr2 := strings.ToUpper(string(out2))
-	if (strings.Contains(outStr2, "WIN32_EXIT_CODE") &&
-		(strings.Contains(outStr2, " 433") || strings.Contains(outStr2, " 31"))) ||
-		strings.Contains(outStr2, "FAILED_PERMANENT") {
+	wintunBlock := ""
+	for _, block := range strings.Split(outStr2, "SERVICE_NAME:") {
+		if strings.Contains(block, "WINTUN") {
+			wintunBlock = block
+			break
+		}
+	}
+	if (strings.Contains(wintunBlock, "WIN32_EXIT_CODE") &&
+		(strings.Contains(wintunBlock, " 433") || strings.Contains(wintunBlock, " 31"))) ||
+		strings.Contains(wintunBlock, "FAILED_PERMANENT") {
 		del2 := exec.Command("sc", "delete", "wintun")
 		del2.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 		if delOut2, delErr2 := del2.CombinedOutput(); delErr2 == nil {
@@ -403,6 +430,13 @@ func repairStaleDriver(log logger.Logger) {
 // RemoveStaleTunAdapter выполняет очистку TUN-адаптера:
 //   - sc stop wintun (для случая когда драйвер всё же в SCM)
 //   - Remove-NetAdapter (убирает из Device Manager)
+//
+// OPT: taskkill и sc stop выполняются параллельно — они не зависят друг от друга.
+// Это сокращает последовательное ожидание с ~5с до ~3с.
+//
+// После ForceDeleteAdapter записываем FastDeleteFile-маркер если DLL-удаление прошло
+// успешно. PollUntilFree читает его и пропускает длинный gap (60–180с), переходя
+// сразу к confirm-loop + settle-delay (~10–15с итого вместо ~65с).
 func RemoveStaleTunAdapter(log logger.Logger) {
 	// Проверяем stale driver registration (ERROR_GEN_FAILURE = error 31).
 	// Симптом: "A device attached to the system is not functioning."
@@ -420,50 +454,80 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 		return strings.TrimSpace(string(out)), err
 	}
 
-	// Убиваем любой оставшийся процесс sing-box.exe перед очисткой TUN.
-	// Это критично: если sing-box ещё жив (даже в состоянии завершения), он держит
-	// WinTun kernel-объект открытым → новый sing-box получает FATAL[0015] через 15с.
-	taskkillOut, _ := runHidden("taskkill", "/F", "/IM", "sing-box.exe", "/T")
-	if strings.Contains(taskkillOut, "SUCCESS") || !strings.Contains(strings.ToLower(taskkillOut), "not found") {
-		log.Info("wintun: sing-box.exe завершён принудительно, ждём выгрузки...")
-		// Ждём пока процесс действительно исчезнет из системы (до 3с)
-		for i := 0; i < 6; i++ {
-			time.Sleep(500 * time.Millisecond)
-			chkOut, _ := runHidden("tasklist", "/FI", "IMAGENAME eq sing-box.exe", "/NH")
-			if !strings.Contains(strings.ToLower(chkOut), "sing-box.exe") {
-				log.Info("wintun: sing-box.exe выгружен из памяти")
-				break
+	// ── Фаза 1: параллельно убиваем sing-box и останавливаем wintun SCM-драйвер ──
+	// Эти два шага независимы друг от друга — выполняем одновременно.
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		// Убиваем любой оставшийся процесс sing-box.exe перед очисткой TUN.
+		// Это критично: если sing-box ещё жив (даже в состоянии завершения), он держит
+		// WinTun kernel-объект открытым → новый sing-box получает FATAL[0015] через 15с.
+		taskkillOut, _ := runHidden("taskkill", "/F", "/IM", "sing-box.exe", "/T")
+		// BUG FIX: убрано второе условие `!strings.Contains(..., "not found")`.
+		// Оно давало true для ЛЮБОГО вывода без "not found" — включая "Access is denied",
+		// "Invalid parameter" и т.д. Код ложно логировал "завершён" и входил в wait-loop.
+		if strings.Contains(taskkillOut, "SUCCESS") {
+			log.Info("wintun: sing-box.exe завершён принудительно, ждём выгрузки...")
+			// Ждём пока процесс действительно исчезнет из системы (до 3с)
+			for i := 0; i < 6; i++ {
+				time.Sleep(500 * time.Millisecond)
+				chkOut, _ := runHidden("tasklist", "/FI", "IMAGENAME eq sing-box.exe", "/NH")
+				if !strings.Contains(strings.ToLower(chkOut), "sing-box.exe") {
+					log.Info("wintun: sing-box.exe выгружен из памяти")
+					break
+				}
 			}
 		}
-	}
-	// Дополнительная пауза для освобождения kernel handles
-	time.Sleep(500 * time.Millisecond)
+	}()
 
-	// Попытка остановить wintun через SCM (работает если драйвер зарегистрирован)
-	out, err := runHidden("sc", "stop", "wintun")
-	if err != nil {
-		log.Info("wintun driver не запущен (%s) — первый запуск или уже остановлен",
-			cleanSCOutput(out))
-	} else {
-		log.Info("wintun driver: отправлена команда остановки")
-		// Ждём STOP_PENDING → STOPPED (до 5 секунд)
-		for i := 0; i < 10; i++ {
-			time.Sleep(500 * time.Millisecond)
-			status, _ := runHidden("sc", "query", "wintun")
-			if strings.Contains(status, "STOPPED") {
-				log.Info("wintun driver остановлен (STOPPED)")
-				break
+	go func() {
+		defer wg.Done()
+		// Попытка остановить wintun через SCM (работает если драйвер зарегистрирован).
+		// Параллельно с taskkill — не зависим от него.
+		out, err := runHidden("sc", "stop", "wintun")
+		if err != nil {
+			log.Info("wintun driver не запущен (%s) — первый запуск или уже остановлен",
+				cleanSCOutput(out))
+		} else {
+			log.Info("wintun driver: отправлена команда остановки")
+			// Ждём STOP_PENDING → STOPPED (до 5 секунд)
+			for i := 0; i < 10; i++ {
+				time.Sleep(500 * time.Millisecond)
+				status, _ := runHidden("sc", "query", "wintun")
+				if strings.Contains(status, "STOPPED") {
+					log.Info("wintun driver остановлен (STOPPED)")
+					break
+				}
 			}
 		}
-	}
+	}()
 
+	wg.Wait()
+	// Дополнительная пауза для освобождения kernel handles после завершения обоих процессов
+	time.Sleep(300 * time.Millisecond)
+
+	// ── Фаза 2: DLL-удаление kernel-объекта ──────────────────────────────────
 	// Шаг 0: WintunDeleteAdapter — удаляем kernel-объект напрямую через DLL.
 	// Это то что не делают ни Remove-NetAdapter, ни netsh, ни taskkill.
 	// WintunDeleteAdapter освобождает \\Device\\WINTUN-{GUID} синхронно, без ожидания Windows GC.
 	// WARN[0010]+FATAL[0015] возникают именно потому что этот объект остаётся занятым.
-	ForceDeleteAdapter("tun0") // config.TunInterfaceName
+	//
+	// Если ForceDeleteAdapter вернул true — kernel-объект освобождён синхронно.
+	// Записываем маркер FastDeleteFile: PollUntilFree увидит его и пропустит длинный
+	// adaptive gap, перейдя сразу к confirm-loop + settle-delay.
+	deleted := ForceDeleteAdapter("tun0") // config.TunInterfaceName
+	if deleted {
+		log.Info("wintun: ForceDeleteAdapter succeeded — kernel-объект освобождён синхронно, gap будет пропущен")
+		_ = os.WriteFile(FastDeleteFile, []byte("1"), 0644)
+	} else {
+		log.Info("wintun: ForceDeleteAdapter не сработал — PollUntilFree применит полный adaptive gap")
+		_ = os.Remove(FastDeleteFile) // Убираем устаревший маркер если есть
+	}
 	time.Sleep(200 * time.Millisecond) // даём DLL завершить освобождение
 
+	// ── Фаза 3: очистка сетевого стека и Device Manager ──────────────────────
 	// Шаг 1: Убрать интерфейс из TCP/IP стека через netsh.
 	// Remove-NetAdapter убирает из Device Manager, но netsh выбрасывает из TCP/IP стека.
 	// Это критично: даже после Remove-NetAdapter интерфейс может оставаться в стеке
@@ -480,8 +544,9 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 	psPnp := `Get-PnpDevice | Where-Object { $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*tun0*' } | Where-Object { $_.Status -ne 'OK' -or $_.Problem -ne 0 } | ForEach-Object { Remove-PnpDevice -InstanceId $_.InstanceId -Confirm:$false -ErrorAction SilentlyContinue }`
 	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psPnp)
 
-	// Шаг 4: Пауза 1с после агрессивной очистки — даём Windows время применить изменения
-	time.Sleep(1 * time.Second)
+	// Шаг 4: Пауза 700мс после агрессивной очистки — даём Windows время применить изменения.
+	// Уменьшено с 1000мс: параллельная Фаза 1 уже дала Windows достаточно времени.
+	time.Sleep(700 * time.Millisecond)
 
 	log.Info("TUN cleanup завершён")
 }

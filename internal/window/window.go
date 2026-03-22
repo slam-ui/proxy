@@ -43,10 +43,21 @@ const (
 	scRestore          = 0xF120
 	showStateMaximized = 3
 
-	dwmwaImmersiveDarkMode = 20
-	dwmwaCaptionColor      = 35
-	dwmwaTextColor         = 36
-	dwmwaBorderColor       = 34
+	dwmwaImmersiveDarkMode  = 20
+	dwmwaCaptionColor       = 35
+	dwmwaTextColor          = 36
+	dwmwaBorderColor        = 34
+	dwmwaSystemBackdropType = 38 // Windows 11 22H2+: 2=Mica, 3=Acrylic, 4=Tabbed
+	dwmwaWindowCornerPref   = 33 // 2=ROUND, 3=ROUNDSMALL
+)
+
+type dwmSystemBackdrop uint32
+
+const (
+	backdropNone    dwmSystemBackdrop = 1
+	backdropMica    dwmSystemBackdrop = 2
+	backdropAcrylic dwmSystemBackdrop = 3
+	backdropTabbed  dwmSystemBackdrop = 4
 )
 
 func colorref(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
@@ -54,12 +65,101 @@ func colorref(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
 func applyDarkTitle(hwnd uintptr) {
 	dark := uint32(1)
 	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
-	capColor := colorref(0x13, 0x13, 0x1e)
+	// Caption (title bar background): почти чёрный — сливается с UI
+	capColor := colorref(0x0c, 0x0c, 0x12)
 	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
-	textColor := colorref(0x6a, 0x6a, 0x8a)
+	// Title text: акцентный фиолетовый
+	textColor := colorref(0x7c, 0x6c, 0xff)
 	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
-	borderColor := colorref(0x1f, 0x1f, 0x30)
+	// Border: тёмная акцентная рамка
+	borderColor := colorref(0x2a, 0x2a, 0x40)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	// Скруглённые углы (Windows 11)
+	cornerPref := uint32(2) // DWMWCP_ROUND
+	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	// Пробуем Mica backdrop (Windows 11 22H2+) — при неудаче молча игнорируется
+	backdrop := uint32(backdropMica)
+	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+}
+
+func applyLightTitle(hwnd uintptr) {
+	dark := uint32(0)
+	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	// Caption: светлый фон — сливается с UI
+	capColor := colorref(0xf0, 0xf2, 0xf8)
+	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	// Title text: тёмный акцентный
+	textColor := colorref(0x5b, 0x4d, 0xcc)
+	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	// Border: светлая рамка
+	borderColor := colorref(0xc8, 0xcc, 0xe0)
+	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	// Скруглённые углы (Windows 11)
+	cornerPref := uint32(2) // DWMWCP_ROUND
+	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	backdrop := uint32(backdropMica)
+	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+}
+
+// applyThemeByName применяет стили titlebar по имени пресета.
+func applyThemeByName(hwnd uintptr, name string) {
+	switch name {
+	case "light":
+		applyLightTitle(hwnd)
+	case "hacker":
+		applyHackerTitle(hwnd)
+	case "midnight":
+		applyMidnightTitle(hwnd)
+	case "sepia":
+		applySepiaTitle(hwnd)
+	default:
+		applyDarkTitle(hwnd)
+	}
+}
+
+func applyHackerTitle(hwnd uintptr) {
+	dark := uint32(1)
+	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	capColor := colorref(0x00, 0x00, 0x00)
+	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	textColor := colorref(0x00, 0xff, 0x41)
+	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	borderColor := colorref(0x0d, 0x22, 0x00)
+	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	cornerPref := uint32(2)
+	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	backdrop := uint32(backdropMica)
+	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+}
+
+func applyMidnightTitle(hwnd uintptr) {
+	dark := uint32(1)
+	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	capColor := colorref(0x08, 0x08, 0x18)
+	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	textColor := colorref(0xa7, 0x8b, 0xfa)
+	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	borderColor := colorref(0x1a, 0x1a, 0x40)
+	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	cornerPref := uint32(2)
+	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	backdrop := uint32(backdropMica)
+	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+}
+
+func applySepiaTitle(hwnd uintptr) {
+	dark := uint32(1)
+	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	capColor := colorref(0x1c, 0x15, 0x10)
+	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	textColor := colorref(0xc4, 0x93, 0x3f)
+	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	borderColor := colorref(0x3a, 0x2e, 0x1e)
+	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	cornerPref := uint32(2)
+	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	backdrop := uint32(backdropMica)
+	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
 
 // windowState хранит позицию и размер окна.
@@ -164,6 +264,9 @@ func Open(url string) {
 
 		applyDarkTitle(rootHwnd)
 
+		// Устанавливаем заголовок окна
+		w.SetTitle("Proxy Client")
+
 		// Применяем сохранённую позицию/размер.
 		// SetWindowPos с SWP_NOZORDER|SWP_NOACTIVATE — без показа окна,
 		// потому что WebView2 сам покажет окно при Navigate/Run.
@@ -198,6 +301,11 @@ func Open(url string) {
 
 		// windowClose из JS сохраняет состояние прямо перед закрытием
 		// (на случай если periodic ещё не успел сохранить последнее положение).
+		// setTitleTheme вызывается из JS при смене темы — мгновенно меняет цвет нативного titlebar.
+		w.Bind("setTitleTheme", func(name string) {
+			applyThemeByName(rootHwnd, name)
+		})
+
 		w.Bind("windowClose", func() {
 			if s, ok := readRect(rootHwnd); ok {
 				writeState(s)

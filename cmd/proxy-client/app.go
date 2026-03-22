@@ -165,11 +165,7 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 	}
 
 	lastOut := currentMgr.LastOutput()
-	isTunConflict := strings.Contains(lastOut, "Cannot create a file when that file already exists") ||
-		strings.Contains(lastOut, "configure tun interface") ||
-		// ERROR_GEN_FAILURE (error 31): stale wintun driver registration после Windows update.
-		// Лечится через sc delete wintun в RemoveStaleTunAdapter → repairStaleDriver.
-		strings.Contains(lastOut, "A device attached to the system is not functioning")
+	isTunConflict := xray.IsTunConflict(lastOut)
 
 	if isTunConflict {
 		wintun.RecordStop()
@@ -241,15 +237,17 @@ func (a *App) handleCrash(crashErr error, proxyConfig proxy.Config) {
 	}
 }
 
-// startBackground запускает фоновую горутину: wintun cleanup → sing-box → proxy enable.
-// UI уже работает пока эта горутина выполняется — пользователь видит ПРОГРЕВ...
+// startBackground запускает фоновую инициализацию.
+// Wintun cleanup стартует НЕМЕДЛЕННО — параллельно с подъёмом API-сервера.
+// Sing-box запускается когда выполнены ОБА условия: apiReady И wintunReady.
 func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, apiReady <-chan struct{}) {
+	// Wintun cleanup — запускаем сразу, не ждём API.
+	wintunReady := make(chan struct{})
 	go func() {
-		<-apiReady
+		defer close(wintunReady)
 
-		a.mainLogger.Info("Фоновая инициализация: проверка движка sing-box...")
-		tray.SetEnabled(false)
-		// Auto-Engine: скачиваем sing-box.exe если отсутствует
+		// Auto-Engine: скачиваем sing-box.exe если отсутствует.
+		// Проверяем до wintun — нет смысла чистить wintun если движка нет.
 		if engine.NeedsDownload(a.cfg.SingBoxPath) {
 			a.mainLogger.Info("sing-box.exe не найден — автоматическая загрузка...")
 			notification.Send("Proxy", "Загружаем sing-box.exe...")
@@ -269,6 +267,7 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Info("sing-box.exe успешно загружен ✓")
 			notification.Send("Proxy", "sing-box.exe загружен ✓")
 		}
+
 		a.mainLogger.Info("Фоновая инициализация: wintun cleanup...")
 
 		if _, err := os.Stat(a.cfg.ConfigPath + ".pending"); err == nil {
@@ -276,22 +275,23 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Info("Удалён осиротевший .pending конфиг от предыдущего запуска")
 		}
 
-		// Оптимизация: генерируем конфиг ПАРАЛЛЕЛЬНО с wintun cleanup/gap-ожиданием.
-		// На обычном перезапуске gap+settle = 15-240с — всё это время CPU простаивает.
-		// Канал configReady доставляет результат (error или nil) после завершения poll.
-		// BUG FIX #15: configResult.configPath было мёртвым полем (писалось, никогда не читалось).
-		// Передаём просто error — это всё что нужно вызывающему коду.
-		// Ожидаем наличия VLESS ключа перед стартом — для wizard-сценария,
-		// когда пользователь ещё не вставил ключ пока шла загрузка движка (~60с).
-		// Ожидаем VLESS ключа — для wizard-сценария когда пользователь ещё не вставил ключ.
-		// Запускаем wintun cleanup параллельно — не теряем время.
 		wintun.RemoveStaleTunAdapter(a.mainLogger)
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+	}()
 
-		// Ждём ключ ПОСЛЕ PollUntilFree: wizard мог сохранить ключ пока шёл wintun cleanup.
+	go func() {
+		// Ждём и API, и wintun — оба нужны перед запуском sing-box.
+		// Wintun cleanup начался раньше, так что к моменту apiReady
+		// часть gap уже может быть отработана.
+		<-apiReady
+		tray.SetEnabled(false)
+
+		<-wintunReady
+
+		// Ждём ключ после wintun: wizard мог сохранить ключ пока шёл cleanup.
 		a.waitForSecretKey()
 
-		// Генерируем конфиг ТОЛЬКО после того как ключ точно есть.
+		// Генерируем конфиг только после того как ключ точно есть.
 		routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
 		if err != nil {
 			a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
@@ -322,7 +322,7 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		}
 
 		killswitch.Disable(a.mainLogger)
-		wintun.ResetAdaptiveGap() // успешный первый старт → сбрасываем накопленный gap
+		wintun.ResetAdaptiveGap()
 		if err := a.proxyManager.Enable(proxyConfig); err != nil {
 			a.mainLogger.Warn("Не удалось включить системный прокси: %v", err)
 		} else {
@@ -333,9 +333,6 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		notification.Send("Proxy", "Прокси готов ✓")
 		a.mainLogger.Info("Фоновая инициализация завершена")
 
-		// Pre-warm: устанавливаем VLESS/Reality TLS соединение с сервером сразу после старта.
-		// Без этого первый реальный запрос пользователя оплачивает TLS handshake (~100-200мс).
-		// Запускаем в отдельной горутине — не блокируем UI.
 		go preWarmProxyConnection(config.ProxyAddr, a.mainLogger)
 	}()
 }
@@ -439,6 +436,8 @@ func (a *App) waitForSecretKey() {
 
 // extractServerIP читает IP прокси-сервера из secret.key для Kill Switch allowlist.
 // При ошибке возвращает пустую строку — Kill Switch всё равно активируется, но только loopback.
+// DNS lookup выполняется синхронно только при наличии IP — для hostname используется
+// горутина с таймаутом чтобы не блокировать crash handler на десятки секунд.
 func extractServerIP(secretFile string) string {
 	data, err := os.ReadFile(secretFile)
 	if err != nil {
@@ -459,15 +458,27 @@ func extractServerIP(secretFile string) string {
 	if err != nil {
 		return hostPort // возможно уже без порта
 	}
-	// Резолвим если это hostname
-	if net.ParseIP(host) == nil {
-		addrs, err := net.LookupHost(host)
-		if err == nil && len(addrs) > 0 {
-			return addrs[0]
-		}
-		return "" // не смогли резолвить — не добавляем в allowlist
+	// Если уже IP — возвращаем сразу без DNS
+	if net.ParseIP(host) != nil {
+		return host
 	}
-	return host
+	// Hostname: резолвим с таймаутом 3с чтобы не блокировать crash handler
+	type result struct{ ip string }
+	ch := make(chan result, 1)
+	go func() {
+		addrs, err := net.LookupHost(host)
+		if err != nil || len(addrs) == 0 {
+			ch <- result{""}
+			return
+		}
+		ch <- result{addrs[0]}
+	}()
+	select {
+	case r := <-ch:
+		return r.ip
+	case <-time.After(3 * time.Second):
+		return "" // таймаут — не блокируем KillSwitch, просто без allowlist для сервера
+	}
 }
 
 // preWarmProxyConnection устанавливает соединение через HTTP прокси сразу после старта.
@@ -511,6 +522,10 @@ func preWarmProxyConnection(proxyAddr string, log logger.Logger) {
 		log.Info("pre-warm: соединение не установлено (%v) — пропускаем", err)
 		return
 	}
-	resp.Body.Close()
+	// BUG FIX: тело нужно прочитать до конца перед Close() чтобы HTTP transport
+	// мог вернуть TCP-соединение в keep-alive пул. Без этого VLESS TLS-соединение
+	// не переиспользуется — цель прогрева не достигается.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 	log.Info("pre-warm: VLESS соединение прогрето ✓ (статус %d)", resp.StatusCode)
 }

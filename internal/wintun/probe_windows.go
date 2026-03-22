@@ -3,6 +3,7 @@
 package wintun
 
 import (
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -29,7 +30,10 @@ var (
 //
 // OPT #7: UTF16PtrFromString кэшируется по имени интерфейса — при polling каждые 500мс
 // это 180 лишних аллокаций за 90с. Имя интерфейса (tun0) фиксировано на весь сеанс.
+// BUG FIX: кэш защищён мьютексом — PollUntilFree может вызываться из нескольких горутин
+// одновременно (handleCrash + BeforeRestart), что давало data race на cachedIfName/Ptr.
 var (
+	cachedMu        sync.Mutex
 	cachedIfName    string
 	cachedIfNamePtr *uint16
 )
@@ -37,24 +41,30 @@ var (
 // ForceDeleteAdapter принудительно удаляет TUN-адаптер через WinTun DLL.
 // В отличие от Remove-NetAdapter который убирает из Device Manager,
 // WintunDeleteAdapter удаляет именно тот kernel-объект который блокирует CreateAdapter.
-// Fail-silent: ошибки игнорируются — если не получилось, продолжаем обычную очистку.
-func ForceDeleteAdapter(ifName string) {
+// Возвращает true если WintunDeleteAdapter выполнился успешно — в этом случае
+// kernel-объект освобождён синхронно и PollUntilFree может пропустить длинный gap.
+// Возвращает false если DLL не найдена, адаптер не существовал, или Delete вернул ошибку.
+func ForceDeleteAdapter(ifName string) bool {
 	if err := modwintun.Load(); err != nil {
-		return // wintun.dll не найдена
+		return false // wintun.dll не найдена
 	}
 	ptr, err := syscall.UTF16PtrFromString(ifName)
 	if err != nil {
-		return
+		return false
 	}
 	// Сначала открываем адаптер
 	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
 	if r0 == 0 {
-		return // уже не существует
+		// NULL → адаптер уже не существует; с точки зрения очистки это успех —
+		// kernel-объект точно свободен.
+		return true
 	}
 	// Удаляем: WintunDeleteAdapter(adapter) — освобождает kernel-объект синхронно
-	_, _, _ = procDeleteAdapter.Call(r0)
+	r1, _, _ := procDeleteAdapter.Call(r0)
 	// Закрываем handle (на случай если Delete не закрыл)
 	_, _, _ = procCloseAdapter.Call(r0)
+	// WintunDeleteAdapter возвращает TRUE (non-zero) при успехе
+	return r1 != 0
 }
 
 func kernelObjectFree(ifName string) bool {
@@ -62,17 +72,23 @@ func kernelObjectFree(ifName string) bool {
 		return true // wintun.dll не найдена, fail-open
 	}
 
-	// Кэшируем конвертацию UTF-16 — ifName никогда не меняется в рамках одного запуска.
+	// BUG FIX: захватываем мьютекс перед работой с кэшем.
+	// kernelObjectFree вызывается из PollUntilFree который может запускаться
+	// в нескольких горутинах одновременно — без мьютекса data race на cachedIfName/Ptr.
+	cachedMu.Lock()
 	if cachedIfNamePtr == nil || cachedIfName != ifName {
 		ptr, err := syscall.UTF16PtrFromString(ifName)
 		if err != nil {
+			cachedMu.Unlock()
 			return true
 		}
 		cachedIfName = ifName
 		cachedIfNamePtr = ptr
 	}
+	ptr := cachedIfNamePtr
+	cachedMu.Unlock()
 
-	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(cachedIfNamePtr)))
+	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
 	if r0 == 0 {
 		// NULL → kernel-объект не существует → свободен
 		return true

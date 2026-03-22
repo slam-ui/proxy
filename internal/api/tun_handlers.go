@@ -187,12 +187,15 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Валидируем каждое правило
+	// Валидируем и нормализуем каждое правило.
+	// BUG FIX: handleAddRule вызывает NormalizeRuleValue + DetectRuleType,
+	// bulk replace не вызывал — правила сохранялись с URL-префиксами и
+	// неверными типами, sing-box их не матчил.
 	for i, rule := range req.Rules {
-		val := strings.TrimSpace(rule.Value)
+		val := config.NormalizeRuleValue(rule.Value)
 		if val == "" {
 			h.server.respondError(w, http.StatusBadRequest,
-				fmt.Sprintf("правило #%d: пустое значение", i+1))
+				fmt.Sprintf("правило #%d: пустое значение после нормализации", i+1))
 			return
 		}
 		if !isValidAction(rule.Action) {
@@ -200,6 +203,8 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 				fmt.Sprintf("правило #%d: неверный action (proxy|direct|block)", i+1))
 			return
 		}
+		req.Rules[i].Value = val
+		req.Rules[i].Type = config.DetectRuleType(strings.ToLower(val))
 	}
 
 	// Валидируем default_action (пустая строка → оставляем текущий)
@@ -467,19 +472,23 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 
 // handleApplyStatus GET /api/tun/apply/status — состояние последнего применения
 func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) {
+	// BUG FIX: startedAt и estimatedDone читаются под мьютексом — они записываются
+	// в handleApply под тем же мьютексом; чтение вне мьютекса было data race.
 	h.apply.mu.Lock()
 	running := h.apply.running
 	lastErr := h.apply.lastErr
 	lastPID := h.apply.lastPID
+	startedAt := h.apply.startedAt
+	estimatedDone := h.apply.estimatedDone
 	h.apply.mu.Unlock()
 
 	elapsedMs := int64(0)
 	estimatedRemainMs := int64(0)
-	if !h.apply.startedAt.IsZero() {
-		elapsedMs = time.Since(h.apply.startedAt).Milliseconds()
+	if !startedAt.IsZero() {
+		elapsedMs = time.Since(startedAt).Milliseconds()
 	}
-	if !h.apply.estimatedDone.IsZero() && running {
-		remaining := time.Until(h.apply.estimatedDone).Milliseconds()
+	if !estimatedDone.IsZero() && running {
+		remaining := time.Until(estimatedDone).Milliseconds()
 		if remaining < 0 { remaining = 0 }
 		estimatedRemainMs = remaining
 	}

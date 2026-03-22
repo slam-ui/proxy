@@ -133,6 +133,61 @@ func TestIsTooManyRestarts_TypeCheck(t *testing.T) {
 	}
 }
 
+// ─── IsTunConflict ─────────────────────────────────────────────────────────
+
+func TestIsTunConflict_MatchesKnownSignatures(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name:   "Cannot create a file",
+			output: "FATAL[0015] start service: start inbound/tun[tun-in]: configure tun interface: Cannot create a file when that file already exists.",
+			want:   true,
+		},
+		{
+			name:   "configure tun interface alone",
+			output: "FATAL[0015] start inbound/tun[tun-in]: configure tun interface: some other error",
+			want:   true,
+		},
+		{
+			name:   "ERROR_GEN_FAILURE",
+			output: "FATAL[0001] A device attached to the system is not functioning.",
+			want:   true,
+		},
+		{
+			name:   "normal startup error",
+			output: "FATAL[0000] dial tcp: connection refused",
+			want:   false,
+		},
+		{
+			name:   "empty output",
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "unrelated WARN",
+			output: "WARN[0010] inbound/tun[tun-in]: open interface take too much time to finish!",
+			want:   false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := IsTunConflict(c.output)
+			if got != c.want {
+				t.Errorf("IsTunConflict(%q) = %v, want %v", c.output[:min(60, len(c.output))], got, c.want)
+			}
+		})
+	}
+}
+
+func TestTunConflictSignatures_NotEmpty(t *testing.T) {
+	if len(TunConflictSignatures) == 0 {
+		t.Error("TunConflictSignatures не должен быть пустым")
+	}
+}
+
 // helpers
 func min(a, b int) int {
 	if a < b {

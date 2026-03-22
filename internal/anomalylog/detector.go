@@ -66,7 +66,7 @@ type Detector struct {
 // New создаёт детектор.
 // dir — директория для файлов аномалий (обычно filepath.Dir(os.Executable())).
 func New(evLog *eventlog.Log, dir string) *Detector {
-	return &Detector{
+	d := &Detector{
 		evLog:        evLog,
 		dir:          dir,
 		sessionTS:    time.Now(),
@@ -74,6 +74,34 @@ func New(evLog *eventlog.Log, dir string) *Detector {
 		writtenFiles: make(map[string]bool),
 		anomalyCount: make(map[string]int),
 		stopCh:       make(chan struct{}),
+	}
+	// Ротация: удаляем anomaly-файлы старше 7 дней чтобы не засорять папку.
+	d.rotateOldFiles(7 * 24 * time.Hour)
+	return d
+}
+
+// rotateOldFiles удаляет файлы anomaly-*.log старше maxAge.
+func (d *Detector) rotateOldFiles(maxAge time.Duration) {
+	entries, err := os.ReadDir(d.dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) < 8 || name[:8] != "anomaly-" || filepath.Ext(name) != ".log" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(d.dir, name))
+		}
 	}
 }
 

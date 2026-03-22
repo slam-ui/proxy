@@ -379,3 +379,70 @@ func TestDetector_FileFormat(t *testing.T) {
 		}
 	}
 }
+
+// ─── rotateOldFiles ────────────────────────────────────────────────────────
+
+func TestRotateOldFiles_DeletesOldLogs(t *testing.T) {
+	dir := t.TempDir()
+
+	// Создаём три файла: два старых и один свежий
+	old1 := filepath.Join(dir, "anomaly-2025-01-01_00-00-00_crash.log")
+	old2 := filepath.Join(dir, "anomaly-2025-06-15_12-00-00_error.log")
+	fresh := filepath.Join(dir, "anomaly-2026-03-22_09-14-58_crash.log")
+	other := filepath.Join(dir, "proxy-client.log") // не anomaly-файл — не трогаем
+
+	for _, f := range []string{old1, old2, fresh, other} {
+		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+			t.Fatalf("WriteFile %s: %v", f, err)
+		}
+	}
+
+	// Ставим mtime на старые файлы явно в прошлое
+	past := time.Now().Add(-10 * 24 * time.Hour)
+	for _, f := range []string{old1, old2} {
+		if err := os.Chtimes(f, past, past); err != nil {
+			t.Fatalf("Chtimes %s: %v", f, err)
+		}
+	}
+
+	evLog := eventlog.New(100)
+	d := New(evLog, dir) // New вызывает rotateOldFiles(7d)
+	_ = d
+
+	if _, err := os.Stat(old1); !os.IsNotExist(err) {
+		t.Errorf("old1 должен быть удалён")
+	}
+	if _, err := os.Stat(old2); !os.IsNotExist(err) {
+		t.Errorf("old2 должен быть удалён")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("свежий файл не должен быть удалён: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("не-anomaly файл не должен быть удалён: %v", err)
+	}
+}
+
+func TestRotateOldFiles_KeepsFreshLogs(t *testing.T) {
+	dir := t.TempDir()
+
+	f := filepath.Join(dir, "anomaly-2026-03-22_09-14-58_crash.log")
+	if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	evLog := eventlog.New(100)
+	d := New(evLog, dir)
+	_ = d
+
+	if _, err := os.Stat(f); err != nil {
+		t.Errorf("свежий файл не должен быть удалён: %v", err)
+	}
+}
+
+func TestRotateOldFiles_SafeOnEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	evLog := eventlog.New(100)
+	d := New(evLog, dir) // не должен паниковать
+	_ = d
+}
