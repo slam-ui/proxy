@@ -21,11 +21,16 @@ func TestNormalizePattern_LowercasesInput(t *testing.T) {
 	}
 }
 
-func TestNormalizePattern_ConvertBackslashToSlash(t *testing.T) {
+// TestNormalizePattern_ForwardSlashUnchanged проверяет что пути с прямыми слешами
+// (уже нормализованные) не меняются — это кросс-платформенное поведение.
+// Конвертация обратных слешей → прямые выполняется filepath.ToSlash только на Windows;
+// Windows-специфичный тест см. в matcher_windows_test.go.
+func TestNormalizePattern_ForwardSlashUnchanged(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{`C:\Program Files\app.exe`, "c:/program files/app.exe"},
-		{`C:\Windows\System32\cmd.exe`, "c:/windows/system32/cmd.exe"},
-		{`app.exe`, "app.exe"}, // нет слешей — без изменений
+		{"c:/program files/app.exe", "c:/program files/app.exe"},
+		{"c:/windows/system32/cmd.exe", "c:/windows/system32/cmd.exe"},
+		{"app.exe", "app.exe"},
+		{"*.exe", "*.exe"},
 	}
 	for _, tc := range cases {
 		got := NormalizePattern(tc.in)
@@ -54,17 +59,19 @@ func TestNormalizePattern_Idempotent(t *testing.T) {
 
 // ─── Matcher: полные пути Windows ─────────────────────────────────────────
 
+// TestMatcher_WindowsFullPath_MatchesByBasename проверяет что паттерн по basename
+// работает с полными Windows-путями в value. Паттерны — нормализованные (lowercase,
+// без бэкслешей). Тест прохода полного пути как паттерна — в matcher_windows_test.go,
+// т.к. filepath.Base на Linux не понимает бэкслеши как разделители.
 func TestMatcher_WindowsFullPath_MatchesByBasename(t *testing.T) {
 	m := NewMatcher()
 	cases := []struct {
 		pattern, value string
 		want           bool
 	}{
-		// Windows-путь с бэкслешами в value
+		// Простое имя файла совпадает с value — полным Windows-путём
 		{"chrome.exe", `C:\Program Files\Google\Chrome\chrome.exe`, true},
 		{"cmd.exe", `C:\Windows\System32\cmd.exe`, true},
-		// Паттерн с полным путём
-		{`C:\Windows\System32\cmd.exe`, `C:\Windows\System32\cmd.exe`, true},
 		// Не то приложение
 		{"chrome.exe", `C:\Program Files\Mozilla\firefox.exe`, false},
 	}
