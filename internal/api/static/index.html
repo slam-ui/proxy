@@ -13,6 +13,7 @@
             --accent:#7c6cff; --block:#ff6b35;
             --text:#e8ecff; --muted:#6868a0; --muted2:#9090be;
             --input-bg:#0f0f1a;
+            --ui-mono:'JetBrains Mono';
         }
         .light{--bg:#f0f2f8;--surface:#fff;--surface2:#f5f7fc;--border:#dde0f0;--border2:#c8cce0;--text:#0d0d20;--muted:#5a6080;--muted2:#3a4060;--input-bg:#fff}
         .light body::before{background-image:linear-gradient(rgba(0,0,0,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.04) 1px,transparent 1px)}
@@ -77,7 +78,7 @@
         .sc-dn{font-size:11px;font-weight:700;color:#00e676;font-family:'JetBrains Mono',monospace}
         .sc-arr{font-size:8px;opacity:.4}
         .ss-sep{width:1px;background:var(--border);align-self:stretch;margin:0 8px}
-        .ss-ip{font-size:9px;color:var(--muted2);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px}
+        .ss-ip{font-size:9px;color:var(--muted2);padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px}
         .ss-test{background:none;border:1px solid var(--border);border-radius:3px;padding:2px 7px;font-size:9px;color:var(--muted2);cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
         .ss-test:hover{border-color:var(--accent);color:var(--accent)}
         .ss-offline{font-size:9px;color:var(--muted);margin-left:4px}
@@ -151,10 +152,10 @@
         .rdel{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 4px;border-radius:2px;width:20px;height:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
         .rdel:hover{color:var(--off);background:rgba(255,61,87,.08)}
         .rempty{padding:24px 14px;text-align:center}.rempty-ico{color:var(--muted);margin-bottom:8px}.rempty-t{font-size:12px;color:var(--muted2);margin-bottom:6px}.rempty-h{font-size:10px;color:var(--muted);line-height:1.6}
-        .rfoot{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0}
+        .rfoot{display:flex;align-items:center;justify-content:space-between;padding:8px 14px;background:var(--surface2);border-top:1px solid var(--border);flex-shrink:0;position:sticky;bottom:0;z-index:10}
         .fhint{font-size:10px;color:var(--muted2);font-family:'JetBrains Mono',monospace}
         .apply-btn{display:flex;align-items:center;gap:6px;background:rgba(124,108,255,.1);border:1px solid rgba(124,108,255,.2);border-radius:4px;padding:6px 16px;font-size:12px;color:var(--accent);cursor:pointer;transition:all .2s;font-weight:700;letter-spacing:.04em}
-        .apply-btn.dirty{background:rgba(124,108,255,.25);border-color:var(--accent);box-shadow:0 0 14px rgba(124,108,255,.25);animation:pulse-apply 2s ease-in-out infinite}
+        .apply-btn.dirty{background:rgba(124,108,255,.25);border-color:var(--accent);box-shadow:0 0 14px rgba(124,108,255,.25);animation:pulse-apply 2s ease-in-out infinite;font-size:13px;padding:8px 20px}
         @keyframes pulse-apply{0%,100%{box-shadow:0 0 8px rgba(124,108,255,.2)}50%{box-shadow:0 0 18px rgba(124,108,255,.4)}}
         .apply-btn:disabled{opacity:.3;cursor:not-allowed}
         .adot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
@@ -233,7 +234,7 @@
         .chart-legend-line{width:16px;height:2px;border-radius:1px}
         .chart-peak{font-size:9px;font-family:var(--ui-mono,'JetBrains Mono'),monospace;color:var(--muted);display:flex;gap:10px}
         .chart-peak span b{color:var(--text)}
-        .chart-wrap{position:relative;height:76px;width:100%;overflow:hidden}
+        .chart-wrap{position:relative;height:120px;width:100%;overflow:hidden}
         .chart-wrap canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 
         /* ── Server Manager ─── */
@@ -318,7 +319,7 @@
         .log-body::-webkit-scrollbar-thumb{background:var(--border2)}
         .log-vp{display:flex;flex-direction:column}
         .log-empty{padding:20px;text-align:center;font-size:11px;color:var(--muted)}
-        .log-row{display:flex;align-items:baseline;gap:6px;padding:3px 12px;border-bottom:1px solid rgba(255,255,255,.02);font-size:10px;font-family:'JetBrains Mono',monospace;line-height:1.6;transition:background .1s}
+        .log-row{display:flex;align-items:baseline;gap:6px;padding:3px 12px;border-bottom:1px solid rgba(255,255,255,.02);font-size:10px;font-family:'JetBrains Mono',monospace;line-height:1.6;transition:background .1s;cursor:pointer}
         .log-row:hover{background:rgba(255,255,255,.025)}
         .log-row.level-info .log-lvl{color:#60a5fa}
         .log-row.level-warn{background:rgba(255,179,0,.04)}
@@ -407,7 +408,7 @@
 
     <!-- Top bar -->
     <div class="topbar" id="dragTopbar">
-        <button class="pwr-btn" id="rb" onclick="toggleProxy()">
+        <button class="pwr-btn" id="rb" onclick="toggleProxy()" title="Включить/выключить прокси">
             <svg class="pwr off" id="pi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
             </svg>
@@ -420,10 +421,11 @@
             </div>
         </div>
         <div class="topbar-actions">
-            <button class="tbtn-sm on-btn" id="be" onclick="enableProxy()" title="Включить прокси">ВКЛ</button>
-            <button class="tbtn-sm off-btn" id="bd" onclick="disableProxy()" title="Выключить прокси">ВЫКЛ</button>
-            <button class="theme-sm" id="themeBtn" onclick="toggleTheme()" title="Тема">☀</button>
-
+            <button class="theme-sm" id="themeBtn" onclick="toggleTheme()" title="Тема"
+              style="width:auto;padding:0 8px;border-radius:12px;gap:4px;display:flex;align-items:center;font-size:10px">
+              <span id="themeBtnIcon">☀</span>
+              <span id="themeBtnLabel" style="font-family:'JetBrains Mono',monospace">light</span>
+            </button>
         </div>
     </div>
 
@@ -459,6 +461,7 @@
                 <div class="sc-vals">
                     <span class="sc-arr">↑</span><span class="sc-up" id="sessUp" style="font-size:10px">0B</span>
                     <span class="sc-arr">↓</span><span class="sc-dn" id="sessDn" style="font-size:10px">0B</span>
+                    <span style="font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;margin-left:4px" id="sessTotal"></span>
                 </div>
             </div>
             <div style="flex:1"></div>
@@ -548,7 +551,7 @@
                     <input class="inp" id="ai" type="text"
                            placeholder="chrome.exe · google.com · 8.8.8.8"
                            autocomplete="off" spellcheck="false"
-                           oninput="checkGeoHint()" onkeydown="if(event.key==='Enter')addRule()"/>
+                    oninput="checkGeoHint();if(selectedType==='auto'){const ico=typeIcon(detectType(this.value));const icoEl=this.parentElement.querySelector('.inp-ico');if(icoEl)icoEl.innerHTML=ico.svg;}" onkeydown="if(event.key==='Enter')addRule()"/>
                     <span class="inp-ico">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px">
                         <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
@@ -622,6 +625,8 @@
             <input class="proc-search" id="procSearch" type="text" placeholder="фильтр по имени..."
                    oninput="renderProcesses()" autocomplete="off" spellcheck="false"/>
             <button class="proc-refresh" onclick="refreshProcesses()">↺ обновить</button>
+            <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--muted2);cursor:pointer">
+              <input type="checkbox" id="procAutoRefresh" onchange="toggleProcAutoRefresh(this.checked)">авто</label>
         </div>
         <div class="proc-fbar">
             <button class="fbtn fa" id="pf-all"     onclick="setProcFilter('all')">все</button>
@@ -671,8 +676,15 @@
 
     <!-- TAB: Профили -->
     <div class="tab-content" id="tc-settings">
+        <!-- Settings sub-nav -->
+        <div style="display:flex;gap:0;background:var(--surface2);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;scrollbar-width:none;position:sticky;top:0;z-index:20">
+          <button class="tbtn-sm" onclick="scrollToSection('srvSection')" style="border:none;border-bottom:2px solid transparent;padding:8px 14px;border-radius:0">Серверы</button>
+          <button class="tbtn-sm" onclick="scrollToSection('securitySection')" style="border:none;border-bottom:2px solid transparent;padding:8px 14px;border-radius:0">Безопасность</button>
+          <button class="tbtn-sm" onclick="scrollToSection('diagSection')" style="border:none;border-bottom:2px solid transparent;padding:8px 14px;border-radius:0">Диагностика</button>
+          <button class="tbtn-sm" onclick="scrollToSection('themeSection')" style="border:none;border-bottom:2px solid transparent;padding:8px 14px;border-radius:0">Внешний вид</button>
+        </div>
         <!-- Theme Editor -->
-        <div class="section">
+        <div class="section" id="themeSection">
             <div class="sec-title"><div class="sec-dot"></div>Внешний вид</div>
             <div class="theme-editor">
                 <!-- Presets -->
@@ -762,7 +774,7 @@
             </div>
         </div>
         <!-- Server Manager -->
-        <div class="section" style="padding:0">
+        <div class="section" id="srvSection" style="padding:0">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px 8px">
                 <div class="sec-title" style="margin:0"><div class="sec-dot"></div>Серверы</div>
                 <button class="srv-ping-all" id="pingAllBtn" onclick="pingAllServers()">⚡ пинг всех</button>
@@ -943,22 +955,33 @@
 
     // ── Theme ──────────────────────────────────────────────────
     // ── Theme quick-toggle (dark ↔ light) ──────────────────────
+    function updateThemeBtn() {
+        const isLight = localStorage.getItem('activePreset') === 'light';
+        const icon = $('themeBtnIcon'), label = $('themeBtnLabel');
+        if (icon) icon.textContent = isLight ? '🌙' : '☀';
+        if (label) label.textContent = isLight ? 'dark' : 'light';
+    }
     function toggleTheme(){
         const active = localStorage.getItem('activePreset') || 'dark';
         applyPreset(active === 'light' ? 'dark' : 'light');
-        const btn = $('themeBtn');
-        if (btn) btn.textContent = (localStorage.getItem('activePreset') === 'light') ? '🌙' : '☀';
+        updateThemeBtn();
     }
     // themeBtn text will be set after loadSavedTheme in init()
 
     // ── Tabs ───────────────────────────────────────────────────
     let activeTab='main';
+    let procAutoInterval = null;
+    function toggleProcAutoRefresh(on) {
+        if(on) procAutoInterval = setInterval(fetchProcesses, 5000);
+        else { clearInterval(procAutoInterval); procAutoInterval = null; }
+    }
     function switchTab(name){
         activeTab=name;
         ['main','rules','proc','logs','settings'].forEach(t=>{
             $('tab-'+t).className='tab'+(t===name?' active':'');
             $('tc-'+t).className='tab-content'+(t===name?' active':'');
         });
+        if(name!=='proc'){ clearInterval(procAutoInterval); procAutoInterval=null; const cb=$('procAutoRefresh'); if(cb)cb.checked=false; }
         if(name==='proc'&&procData.length===0)fetchProcesses();
         if(name==='settings'){loadProfiles();loadSettings();loadServers();}
         if(name==='logs'){logPaused=false;updateLogPauseBtn();startLogPolling();}
@@ -1019,7 +1042,7 @@
             ? `${ps.addr||'127.0.0.1:10807'} · pid ${ps.pid}`
             : (warming ? `wintun cleanup · ожидание TUN${attemptMeta}` : 'sing-box · vless · reality');
         const b=ps.pending||warming;
-        $('rb').disabled=b||!ps.conn;$('be').disabled=b||ps.enabled||!ps.conn;$('bd').disabled=b||!ps.enabled||!ps.conn;
+        $('rb').disabled=b||!ps.conn;
         updateWarmBar();
     }
 
@@ -1090,8 +1113,9 @@
     let tt;
     function toast(text,type=''){
         clearTimeout(tt);const t=$('toast');
-        t.textContent=text;t.className='toast '+type+' show';
-        tt=setTimeout(()=>t.className='toast',2800);
+        t.innerHTML=text;t.className='toast '+type+' show';
+        t.style.pointerEvents='auto';
+        tt=setTimeout(()=>{t.className='toast';t.style.pointerEvents='none';},2800);
     }
     const showToast=toast; // alias
 
@@ -1271,6 +1295,9 @@
         requestAnimationFrame(drawChart);
         localStorage.setItem('customTheme', JSON.stringify(p));
         localStorage.setItem('activePreset', name);
+        updateThemeBtn();
+        // Мгновенно меняем цвет нативного titlebar Windows
+        if (typeof setTitleTheme === 'function') setTitleTheme(name);
     }
 
     function syncHex(colorInput, hexId) {
@@ -1368,6 +1395,8 @@
         const activePreset = localStorage.getItem('activePreset') || 'dark';
         const presetBtn = $('preset-' + activePreset);
         if (presetBtn) presetBtn.classList.add('active');
+        // Синхронизируем цвет нативного titlebar с текущей темой при загрузке
+        if (typeof setTitleTheme === 'function') setTitleTheme(activePreset);
 
         // sync color pickers from live CSS vars
         THEME_IDS.forEach(id => {
@@ -1377,6 +1406,7 @@
             if (cp && /^#/.test(live)) cp.value = live;
             if (hp) hp.value = live;
         });
+        updateThemeBtn();
     }
 
     async function fetchStats(){
@@ -1391,7 +1421,12 @@
             $('stToU').textContent=fmtBytes(j.up);
             $('stToD').textContent=fmtBytes(j.down);
             pushChartPoint(j.up||0, j.down||0);
-            if(j.sess_up_bytes!=null){$('sessUp').textContent=fmtBytesTotal(j.sess_up_bytes);$('sessDn').textContent=fmtBytesTotal(j.sess_dn_bytes);}
+            if(j.sess_up_bytes!=null){
+                const upBytes=j.sess_up_bytes, dnBytes=j.sess_dn_bytes;
+                $('sessUp').textContent=fmtBytesTotal(upBytes);
+                $('sessDn').textContent=fmtBytesTotal(dnBytes);
+                $('sessTotal') && ($('sessTotal').textContent = '= ' + fmtBytesTotal(upBytes + dnBytes));
+            }
             if(j.active_connections!==undefined&&$('connCount'))
                 $('connCount').textContent=j.active_connections+' активных';
         }catch{}
@@ -1449,7 +1484,8 @@
             if(j.ok){
                 const msg=`✓ ${j.latency_ms}ms`;
                 if(res)res.textContent=msg+` · IP: ${j.external_ip}`;
-                $('ssIP').textContent=j.external_ip||'—';
+                const ipEl=$('ssIP');
+                if(ipEl){ipEl.textContent=j.external_ip||'—';ipEl.title=j.external_ip||'';}
                 toast(msg,'ok');
             }else{
                 if(res)res.textContent=`✗ ${j.error||'нет соединения'}`;
@@ -1597,8 +1633,13 @@
     function setType(t){
         selectedType=t;
         Object.entries(TYPE_CFG).forEach(([k,c])=>{$(c.id).className='tbtn'+(k===t?' tsel '+(c.cls||''):'');});
-        $('ai').placeholder=TYPE_CFG[t]?.ph||'';
-        $('ai').focus();
+        const inp=$('ai');
+        if(t==='auto'){
+            inp.placeholder='chrome.exe · google.com · 8.8.8.8 · geosite:discord';
+        } else {
+            inp.placeholder=TYPE_CFG[t]?.ph||'';
+        }
+        inp.focus();
     }
 
     // ── Detect type ────────────────────────────────────────────
@@ -1728,7 +1769,22 @@
     }
 
     // ── Remove rule ────────────────────────────────────────────
-    function removeRule(v){rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();}
+    let deletedRules = [];
+    function removeRule(v){
+        const rule = rules.find(r=>r.value===v);
+        if(rule){
+            deletedRules.push(rule);
+            if(deletedRules.length>5)deletedRules.shift();
+        }
+        rules=rules.filter(r=>r.value!==v);dirty=true;renderRules();
+        toast('Правило удалено · <u onclick="undoDelete()" style="cursor:pointer">Отменить</u>','inf');
+    }
+    function undoDelete(){
+        const rule=deletedRules.pop();
+        if(!rule)return;
+        rules.push(rule);dirty=true;renderRules();
+        toast('Правило восстановлено','ok');
+    }
 
     // ── Apply ──────────────────────────────────────────────────
     async function applyRules(){
@@ -2728,6 +2784,8 @@
         arrow.textContent = wrap.classList.contains('collapsed') ? '▼' : '▲';
     }
 
+    function scrollToSection(id){ document.getElementById(id)?.scrollIntoView({behavior:'smooth'}); }
+
     // ── Init & polling ─────────────────────────────────────────
 
     // ── Logs System ────────────────────────────────────────────
@@ -2853,18 +2911,23 @@
         const RENDER_MAX = 200;
         const slice = visible.length > RENDER_MAX ? visible.slice(-RENDER_MAX) : visible;
 
-        vp.innerHTML = slice.map(ev => {
+        vp.innerHTML = '';
+        slice.forEach(ev => {
             const lvl = inferLevel(ev);
             const src = (ev.source || 'main').slice(0, 8);
             const msg = highlightSearch(ev.message, q);
-            const ts = logShowTs ? `<span class="log-ts">${fmtLogTs(ev.ts)}</span>` : '';
-            return `<div class="log-row level-${lvl}">
-                ${ts}
-                <span class="log-src">[${esc(src)}]</span>
-                <span class="log-lvl">${lvl}</span>
-                <span class="log-msg">${msg}</span>
-            </div>`;
-        }).join('');
+            const tsText = fmtLogTs(ev.ts);
+            const ts = logShowTs ? `<span class="log-ts">${tsText}</span>` : '';
+            const el = document.createElement('div');
+            el.className = `log-row level-${lvl}`;
+            el.title = 'Нажмите чтобы скопировать';
+            el.innerHTML = `${ts}<span class="log-src">[${esc(src)}]</span><span class="log-lvl">${lvl}</span><span class="log-msg">${msg}</span>`;
+            el.onclick = () => {
+                navigator.clipboard.writeText(tsText + ' ' + src + ' ' + lvl + ' ' + ev.message);
+                toast('Скопировано', 'inf');
+            };
+            vp.appendChild(el);
+        });
 
         // Auto-scroll
         if (logAutoScroll && !logPaused) {

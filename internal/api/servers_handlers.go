@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"proxyclient/internal/fileutil"
+
 	"github.com/gorilla/mux"
 )
 
@@ -65,7 +67,9 @@ func saveServers(list []ServerEntry) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(serversFile, data, 0644)
+	// BUG FIX: os.WriteFile не атомарен — при крэше в середине записи servers.json
+	// будет повреждён. fileutil.WriteAtomic использует MoveFileExW (NTFS-транзакция).
+	return fileutil.WriteAtomic(serversFile, data, 0644)
 }
 
 // activeServerID возвращает ID активного сервера (совпадение URL с secret.key)
@@ -157,8 +161,10 @@ func (h *ServersHandlers) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Если это первый сервер и secret.key не существует — активируем автоматически
+	// BUG FIX: используем fileutil.WriteAtomic — secret.key критичен, его повреждение
+	// делает приложение неработоспособным.
 	if len(list) == 1 {
-		_ = os.WriteFile(h.secretKey, []byte(entry.URL), 0644)
+		_ = fileutil.WriteAtomic(h.secretKey, []byte(entry.URL), 0644)
 	}
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
@@ -222,8 +228,10 @@ func (h *ServersHandlers) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Записываем URL в secret.key
-	if err := os.WriteFile(h.secretKey, []byte(target.URL), 0644); err != nil {
+	// Записываем URL в secret.key атомарно.
+	// BUG FIX: os.WriteFile не атомарен — при крэше secret.key будет повреждён
+	// и приложение не запустится. fileutil.WriteAtomic использует MoveFileExW.
+	if err := fileutil.WriteAtomic(h.secretKey, []byte(target.URL), 0644); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "не удалось обновить secret.key: "+err.Error())
 		return
 	}

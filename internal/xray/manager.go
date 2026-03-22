@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -522,4 +523,30 @@ func isStdoutValid() bool {
 	}
 	_, err := os.Stdout.Stat()
 	return err == nil
+}
+
+// TunConflictSignatures — набор строк в выводе sing-box, указывающих на конфликт
+// wintun kernel-объекта. Вынесены как единственный источник истины: если sing-box
+// изменит формат сообщений, достаточно обновить этот список в одном месте.
+//
+// Признаки конфликта:
+//   - "Cannot create a file when that file already exists" — CreateAdapter падает,
+//     т.к. kernel-объект \\Device\\WINTUN-{GUID} ещё занят предыдущей сессией.
+//   - "configure tun interface" — обёртка sing-box вокруг той же ошибки.
+//   - "A device attached to the system is not functioning" — ERROR_GEN_FAILURE (error 31),
+//     stale wintun driver registration после Windows update; лечится через sc delete wintun.
+var TunConflictSignatures = []string{
+	"Cannot create a file when that file already exists",
+	"configure tun interface",
+	"A device attached to the system is not functioning",
+}
+
+// IsTunConflict проверяет, содержит ли вывод sing-box признаки wintun-конфликта.
+func IsTunConflict(output string) bool {
+	for _, sig := range TunConflictSignatures {
+		if strings.Contains(output, sig) {
+			return true
+		}
+	}
+	return false
 }

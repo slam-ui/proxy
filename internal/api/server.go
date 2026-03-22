@@ -264,6 +264,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	s.restartMu.RLock()
 	restarting := s.restarting
 	restartReadyAt := s.restartReadyAt
+	// BUG FIX: tunAttempt/tunMaxAttempt записываются под restartMu в SetTunAttempt,
+	// поэтому читать их нужно тоже под restartMu — иначе data race с handleCrash горутиной.
+	tunAttempt := s.tunAttempt
+	tunMaxAttempt := s.tunMaxAttempt
 	s.restartMu.RUnlock()
 
 	if xrayMgr == nil {
@@ -280,8 +284,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		if restartReadyAt.After(time.Now()) {
 			response.XRay.ReadyAt = restartReadyAt.Unix()
 		}
-		response.XRay.TunAttempt = s.tunAttempt
-		response.XRay.TunMaxAttempt = s.tunMaxAttempt
+		response.XRay.TunAttempt = tunAttempt
+		response.XRay.TunMaxAttempt = tunMaxAttempt
 	} else {
 		response.XRay.Running = xrayMgr.IsRunning()
 		response.XRay.PID = xrayMgr.GetPID()

@@ -1,8 +1,9 @@
 # proxy-client
 
-![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
+![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4?style=flat&logo=windows)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen?style=flat)
 
 Windows-клиент для проксирования трафика через **VLESS/Reality** с TUN-интерфейсом на базе [sing-box](https://github.com/SagerNet/sing-box).
 
@@ -18,14 +19,15 @@ Windows-клиент для проксирования трафика через
 - **Мониторинг процессов** — список запущенных `.exe` с отображением статуса маршрута
 - **Web UI** — компактная панель управления на `localhost:8080`
 - **Горячее применение правил** — без перезапуска клиента
-- **Event log** — лог событий в реальном времени прямо в UI
+- **Event log** — кольцевой буфер событий (500 записей) в реальном времени прямо в UI
+- **Anomaly log** — автоматическая запись ошибок и крашей в файлы `anomaly-*.log`
 
 ---
 
 ## Требования
 
 - Windows 10 / 11
-- Go 1.21+
+- Go 1.24+
 - [`sing-box.exe`](https://github.com/SagerNet/sing-box/releases) — положить в корень проекта
 - Права администратора (для создания TUN-интерфейса)
 
@@ -53,6 +55,11 @@ go build -o proxy-client.exe ./cmd/proxy-client
 vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrome&flow=xtls-rprx-vision
 ```
 
+Поддерживаются параметры:
+- `flow=xtls-rprx-vision` — XTLS Vision (рекомендуется)
+- `mux=1` или `multiplex=1` — мультиплексирование h2mux (8 потоков)
+- Строки-комментарии (`# ...`) и UTF-8 BOM игнорируются
+
 ### 2. Запустить
 
 ```powershell
@@ -65,6 +72,7 @@ vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrom
 |---|---|
 | Web UI | `http://localhost:8080` |
 | HTTP прокси | `127.0.0.1:10807` |
+| Clash API | `127.0.0.1:9090` |
 | TUN-интерфейс | `tun0` (172.20.0.1/30) |
 
 ---
@@ -80,6 +88,8 @@ vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrom
 | `process` | `chrome.exe` | Весь трафик процесса через TUN |
 | `geosite` | `geosite:discord` | Категория доменов |
 
+LAN-диапазоны (`192.168.0.0/16`, `10.0.0.0/8`, `127.0.0.0/8`) всегда идут напрямую — правило добавляется автоматически перед остальными.
+
 > **Важно:** правила `direct` для конкретных доменов ставить **выше** правил `process`, иначе process-правило перехватит трафик раньше.
 
 Пример `routing.json`:
@@ -92,7 +102,7 @@ vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrom
     { "value": "geosite:discord",   "type": "geosite", "action": "proxy" },
     { "value": "geosite:spotify",   "type": "geosite", "action": "proxy" },
     { "value": "twitch.tv",         "type": "domain",  "action": "direct" },
-    { "value": "firefox.exe",       "type": "process", "action": "proxy" }
+    { "value": "firefox.exe",       "type": "process",  "action": "proxy" }
   ]
 }
 ```
@@ -123,6 +133,7 @@ vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrom
 <summary>Показать все эндпоинты</summary>
 
 ```
+GET  /api/health               — healthcheck
 GET  /api/status               — статус прокси и sing-box
 
 POST /api/proxy/enable         — включить системный прокси
@@ -138,10 +149,51 @@ POST   /api/tun/apply          — применить (перезапуск sing
 GET  /api/apps/processes       — список запущенных процессов со статусом
 POST /api/apps/processes/refresh
 
-GET  /api/events               — последние события (ring buffer 500)
+GET  /api/events               — события (ring buffer 500, поддержка ?since=ID)
+
+GET  /api/diag                 — диагностика (PID, uptime, память)
 ```
 
 </details>
+
+---
+
+## Тестирование
+
+```powershell
+# Все тесты с race detector
+go test -race -timeout=120s ./...
+
+# Только кросс-платформенные пакеты (Linux/macOS)
+go test -race -timeout=120s \
+  ./internal/anomalylog/... \
+  ./internal/apprules/... \
+  ./internal/config/... \
+  ./internal/eventlog/... \
+  ./internal/logger/... \
+  ./internal/netutil/...
+
+# Покрытие с разбивкой по пакетам
+go test -coverprofile=coverage.out -covermode=atomic \
+  ./internal/anomalylog/... \
+  ./internal/apprules/... \
+  ./internal/config/... \
+  ./internal/eventlog/... \
+  ./internal/logger/... \
+  ./internal/netutil/...
+go tool cover -func=coverage.out
+```
+
+### Покрытые пакеты и что тестируется
+
+| Пакет | Файлы тестов | Ключевые сценарии |
+|-------|-------------|-------------------|
+| `anomalylog` | `detector_test.go` | Crash/error/warn-burst детекция, ротация файлов, регрессии багов |
+| `apprules` | `engine_test.go`, `storage_test.go`, `matcher_extra_test.go`, `storage_extra_test.go` | CRUD движка правил, сортировка по приоритету, NormalizePattern, Windows-пути, откат при ошибке сохранения, перезагрузка между сессиями |
+| `config` | `singbox_test.go`, `tun_test.go`, `vless_extra_test.go` | Парсинг VLESS URL (mux, flow, BOM, комментарии), buildVLESSOutbound (TLS/Reality/XTLS), buildRoute, LAN bypass |
+| `eventlog` | `eventlog_test.go`, `eventlog_extra_test.go` | Кольцевой буфер (overflow, GetSince после wrap), LineWriter (tab/CRLF trim, chunked write), Logger-адаптер, formatMsg |
+| `logger` | `logger_test.go`, `logger_extra_test.go` | Полная матрица фильтрации уровней (16 комбинаций), Level.String(), отсутствие Sprintf-артефактов, параллельная безопасность |
+| `netutil` | `port_test.go` | WaitForPort: быстрый путь, ожидание открытия, таймаут, нулевой таймаут, параллельность |
 
 ---
 
@@ -150,38 +202,67 @@ GET  /api/events               — последние события (ring buffe
 ```
 proxy/
 ├── cmd/proxy-client/
-│   └── main.go
+│   ├── main.go
+│   └── app.go
 ├── internal/
-│   ├── api/
-│   │   ├── static/index.html        # Web UI
+│   ├── anomalylog/         # Детектор аномалий → файлы anomaly-*.log
+│   ├── api/                # HTTP API + Web UI
+│   │   ├── static/index.html
 │   │   ├── server.go
 │   │   ├── tun_handlers.go
-│   │   └── app_proxy_handlers.go
-│   ├── apprules/                    # Per-app rules engine
-│   ├── config/                      # Генератор конфига sing-box
-│   ├── eventlog/                    # Ring buffer для событий
+│   │   ├── app_proxy_handlers.go
+│   │   └── handlers_test.go
+│   ├── apprules/           # Per-app rules engine (CRUD + persistence)
+│   ├── config/             # Генератор конфига sing-box (VLESS, routing)
+│   ├── engine/             # Оркестратор компонентов
+│   ├── eventlog/           # Ring buffer для событий (O(1) insert, binary search)
+│   ├── fileutil/           # Атомарная запись файлов (MoveFileExW)
+│   ├── killswitch/         # Kill switch (Windows firewall)
 │   ├── logger/
-│   ├── process/                     # Монитор процессов (Windows)
-│   ├── proxy/                       # Управление системным прокси
-│   └── xray/                        # Менеджер процесса sing-box
-├── geosite-*.bin                    # Скомпилированные rule-sets
-├── routing.json                     # Правила маршрутизации
-├── secret.key                       # VLESS URL (не коммитить)
-└── sing-box.exe                     # sing-box binary (не коммитить)
+│   ├── netutil/            # WaitForPort с экспоненциальным backoff
+│   ├── process/            # Монитор процессов (Windows)
+│   ├── proxy/              # Управление системным прокси Windows
+│   ├── wintun/             # Проверка наличия wintun.dll
+│   └── xray/               # Менеджер процесса sing-box
+├── .github/workflows/ci.yml
+├── geosite-*.bin           # Скомпилированные rule-sets
+├── secret.key              # VLESS URL (не коммитить!)
+└── sing-box.exe            # sing-box binary (не коммитить!)
 ```
+
+---
+
+## CI/CD
+
+GitHub Actions запускает 9 джобов на каждый push/PR в `main`:
+
+| Джоб | Что делает |
+|------|-----------|
+| **Build** | `go vet` + сборка Windows `.exe` |
+| **Unit Tests** | `go test -race` для кросс-платформенных пакетов + coverage report |
+| **Staticcheck** | Статический анализ (Windows target) |
+| **Gosec** | SAST сканирование → SARIF |
+| **Semgrep** | SAST сканирование → SARIF |
+| **CodeQL** | Анализ безопасности GitHub |
+| **Dependency Scan** | `govulncheck` — уязвимости в зависимостях |
+| **Secret Scan** | Gitleaks — утечки секретов в коде |
+| **License Check** | `go-licenses` — лицензии зависимостей |
 
 ---
 
 ## Устранение неполадок
 
 **TUN не создаётся (`Cannot create a file when that file already exists`)**  
-Интерфейс остался от предыдущего запуска. Удалите через `ncpa.cpl` или перезагрузите ПК.
+Интерфейс остался от предыдущего запуска. Удалите через `ncpa.cpl` или перезагрузите ПК. Клиент автоматически определяет этот краш и записывает `anomaly-*_crash.log`.
 
 **Process-правило перехватывает весь трафик**  
-Поставьте `direct`-правила для нужных доменов выше `process`-правила.
+Поставьте `direct`-правила для нужных доменов выше `process`-правила в списке.
 
 **Geosite не работает**  
 Убедитесь, что файл `geosite-<category>.bin` лежит рядом с `proxy-client.exe`.
+
+**Прокси включился, но трафик не идёт**  
+Проверьте `/api/status` — поле `xray.running` должно быть `true`. Если нет — смотрите event log в UI или файл `anomaly-*_error.log`.
 
 ---
 

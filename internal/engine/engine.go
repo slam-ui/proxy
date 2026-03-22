@@ -13,6 +13,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,6 +112,17 @@ func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress
 		return e
 	}
 
+	// Верифицируем SHA256 перед распаковкой
+	send(Progress{Stage: "extract", Message: "Проверяем контрольную сумму...", Percent: 87, Version: version})
+	if asset.Checksum == "" {
+		send(Progress{Stage: "extract", Message: "⚠️ .sha256 не найден в релизе — верификация пропущена", Percent: 87, Version: version})
+	}
+	if err := verifyChecksum(zipData, asset.Checksum); err != nil {
+		e := fmt.Errorf("ошибка верификации: %w", err)
+		send(Progress{Stage: "error", Message: e.Error(), Err: e})
+		return e
+	}
+
 	// Извлекаем sing-box.exe из zip
 	send(Progress{Stage: "extract", Message: "Распаковываем...", Percent: 88, Version: version})
 	if err := extractExeFromZip(zipData, execPath); err != nil {
@@ -128,6 +141,8 @@ type githubAsset struct {
 	Name        string `json:"name"`
 	DownloadURL string `json:"browser_download_url"`
 	Size        int64  `json:"size"`
+	// Checksum заполняется из отдельного .sha256 asset'а (если есть в релизе).
+	Checksum string `json:"-"`
 }
 
 type githubRelease struct {
@@ -159,14 +174,80 @@ func fetchLatestAsset(ctx context.Context) (githubAsset, string, error) {
 		return githubAsset{}, "", fmt.Errorf("ошибка разбора ответа GitHub: %w", err)
 	}
 
-	// Ищем zip для windows-amd64
-	for _, a := range release.Assets {
+	// Ищем zip для windows-amd64 и соответствующий .sha256 asset
+	var found *githubAsset
+	checksumURLs := map[string]string{} // zipName → sha256DownloadURL
+
+	for i, a := range release.Assets {
 		n := strings.ToLower(a.Name)
+		if strings.HasSuffix(n, ".sha256") {
+			// sing-box-1.2.3-windows-amd64.zip.sha256 → ключ без .sha256
+			base := a.Name[:len(a.Name)-7]
+			checksumURLs[strings.ToLower(base)] = a.DownloadURL
+		}
 		if strings.Contains(n, assetOS) && strings.Contains(n, assetArch) && strings.HasSuffix(n, ".zip") {
-			return a, release.TagName, nil
+			found = &release.Assets[i]
 		}
 	}
-	return githubAsset{}, "", fmt.Errorf("не найден asset windows-amd64 в релизе %s", release.TagName)
+
+	if found == nil {
+		return githubAsset{}, "", fmt.Errorf("не найден asset windows-amd64 в релизе %s", release.TagName)
+	}
+
+	// Подтягиваем SHA256 если он есть в релизе
+	if shaURL, ok := checksumURLs[strings.ToLower(found.Name)]; ok {
+		if sum, err := fetchChecksumFile(ctx, shaURL, client); err == nil {
+			found.Checksum = sum
+		}
+		// Ошибка получения контрольной суммы не блокирует загрузку —
+		// но будет задокументирована в verifyChecksum.
+	}
+
+	return *found, release.TagName, nil
+}
+
+// fetchChecksumFile скачивает .sha256-файл и возвращает hex-строку контрольной суммы.
+// Формат файла: "<hex64>  filename" (стандартный sha256sum).
+func fetchChecksumFile(ctx context.Context, url string, client *http.Client) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", userAgent)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256))
+	if err != nil {
+		return "", err
+	}
+	// Берём первые 64 символа (hex SHA256)
+	line := strings.TrimSpace(string(body))
+	if len(line) >= 64 {
+		return strings.ToLower(line[:64]), nil
+	}
+	return "", fmt.Errorf("неожиданный формат .sha256: %q", line)
+}
+
+// verifyChecksum сравнивает SHA256 данных с ожидаемой суммой.
+// Если ожидаемая сумма пуста — верификация пропускается с предупреждением.
+func verifyChecksum(data []byte, expected string) error {
+	if expected == "" {
+		// .sha256 asset не был найден в релизе — продолжаем без верификации.
+		// Это допустимо для старых релизов, но логируется в вызывающей стороне.
+		return nil
+	}
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	if got != expected {
+		return fmt.Errorf("контрольная сумма не совпадает: ожидалось %s, получено %s", expected, got)
+	}
+	return nil
 }
 
 // ── Download ─────────────────────────────────────────────────────────────────

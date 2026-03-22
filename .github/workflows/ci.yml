@@ -74,7 +74,8 @@ jobs:
             ./internal/apprules/... \
             ./internal/config/... \
             ./internal/eventlog/... \
-            ./internal/logger/...
+            ./internal/logger/... \
+            ./internal/netutil/...
 
       - name: Generate coverage report
         run: |
@@ -85,7 +86,11 @@ jobs:
             ./internal/apprules/... \
             ./internal/config/... \
             ./internal/eventlog/... \
-            ./internal/logger/...
+            ./internal/logger/... \
+            ./internal/netutil/...
+          echo "── Coverage by package ──────────────────────────────────────"
+          go tool cover -func=coverage.out | grep -v "^total" | awk '{print $1, $3}' | sort -t: -k1
+          echo "────────────────────────────────────────────────────────────"
           go tool cover -func=coverage.out | tail -1
 
       - uses: actions/upload-artifact@v4

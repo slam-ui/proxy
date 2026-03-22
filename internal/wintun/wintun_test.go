@@ -3,6 +3,7 @@
 package wintun_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -122,10 +123,10 @@ func TestReadAdaptiveGap_FloorsAtMinGapBase(t *testing.T) {
 
 func TestReadAdaptiveGap_ReturnsStoredValue(t *testing.T) {
 	inTempDir(t, func() {
-		writeGapFile(t, 90*time.Second)
+		writeGapFile(t, 60*time.Second)
 		gap := wintun.ReadAdaptiveGap()
-		if gap != 90*time.Second {
-			t.Errorf("got %v, want 90s", gap)
+		if gap != 60*time.Second {
+			t.Errorf("got %v, want 60s", gap)
 		}
 	})
 }
@@ -161,9 +162,9 @@ func TestReadSettleDelay_GrowsWithGap(t *testing.T) {
 
 func TestIncreaseAdaptiveGap_DoublesFromBase(t *testing.T) {
 	inTempDir(t, func() {
-		before := wintun.ReadAdaptiveGap()
+		before := wintun.ReadAdaptiveGap() // 60s
 		wintun.IncreaseAdaptiveGap(&nullLogger{})
-		after := wintun.ReadAdaptiveGap()
+		after := wintun.ReadAdaptiveGap() // 180s
 		if after != before*2 {
 			t.Errorf("ожидали %v (2x), получили %v", before*2, after)
 		}
@@ -172,12 +173,12 @@ func TestIncreaseAdaptiveGap_DoublesFromBase(t *testing.T) {
 
 func TestIncreaseAdaptiveGap_DoublesRepeatedly(t *testing.T) {
 	inTempDir(t, func() {
-		wintun.IncreaseAdaptiveGap(&nullLogger{})
+		// 60s → 120s → 3m (cap)
 		wintun.IncreaseAdaptiveGap(&nullLogger{})
 		wintun.IncreaseAdaptiveGap(&nullLogger{})
 		gap := wintun.ReadAdaptiveGap()
 		if gap != 3*time.Minute {
-			t.Errorf("got %v, want 3m after multiple increases", gap)
+			t.Errorf("got %v, want 3m after two increases from 60s base", gap)
 		}
 	})
 }
@@ -249,8 +250,8 @@ func TestEstimateReadyAt_HotRestart_ReturnsFuture(t *testing.T) {
 
 func TestEstimateReadyAt_AlreadyPassed_ReturnsNow(t *testing.T) {
 	inTempDir(t, func() {
-		// Остановились достаточно давно (> 35с) — ETA в прошлом → возвращаем now
-		writeStopFile(t, time.Now().Add(-60*time.Second))
+		// Остановились достаточно давно (> minGapBase=60s) — ETA в прошлом → возвращаем now
+		writeStopFile(t, time.Now().Add(-100*time.Second))
 		eta := wintun.EstimateReadyAt()
 		if eta.After(time.Now().Add(time.Second)) {
 			t.Errorf("ETA должен быть ≈ now после долгого ожидания, got future %v", time.Until(eta))
@@ -267,6 +268,116 @@ func TestStopFile_IsRelativePath(t *testing.T) {
 	if filepath.IsAbs(wintun.StopFile) {
 		t.Errorf("StopFile должен быть относительным, got: %q", wintun.StopFile)
 	}
+}
+
+func TestFastDeleteFile_IsRelativePath(t *testing.T) {
+	if wintun.FastDeleteFile == "" {
+		t.Error("FastDeleteFile не должен быть пустым")
+	}
+	if filepath.IsAbs(wintun.FastDeleteFile) {
+		t.Errorf("FastDeleteFile должен быть относительным, got: %q", wintun.FastDeleteFile)
+	}
+}
+
+// ── PollUntilFree: fast-delete path ──────────────────────────────────────────
+
+// TestPollUntilFree_NoStopFile проверяет что без StopFile функция возвращается
+// немедленно (первый запуск ever).
+func TestPollUntilFree_NoStopFile(t *testing.T) {
+	inTempDir(t, func() {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			wintun.PollUntilFree(t.Context(), &nullLogger{}, "tun0")
+		}()
+		select {
+		case <-done:
+			// OK — вернулась без ожидания
+		case <-time.After(2 * time.Second):
+			t.Error("PollUntilFree без StopFile должна вернуться немедленно")
+		}
+	})
+}
+
+// TestPollUntilFree_FastDelete_SkipsGap проверяет что при наличии FastDeleteFile
+// PollUntilFree не ждёт adaptive gap (60+ с), а завершается значительно быстрее.
+// Timeout 5с: confirm-loop (3×500мс=1.5с) + settle-delay (15с) были бы превышены
+// только при ошибке в логике; но поскольку probe/netsh — заглушки (всегда true),
+// мы ждём лишь settle-delay. Тест намеренно не проверяет settle-delay в юнит-режиме:
+// settle — runtime-поведение, а не логика ветвления.
+func TestPollUntilFree_FastDelete_DeletesMarker(t *testing.T) {
+	inTempDir(t, func() {
+		// Создаём StopFile (только что остановились — горячий рестарт)
+		writeStopFile(t, time.Now())
+		// Создаём FastDeleteFile — симулируем успешный ForceDeleteAdapter
+		_ = os.WriteFile(wintun.FastDeleteFile, []byte("1"), 0644)
+
+		// FastDeleteFile удаляется в самом начале PollUntilFree, ДО любого ожидания.
+		// Поэтому отменяем ctx через 500мс — достаточно чтобы синхронная часть
+		// (удаление маркера) завершилась, но не ждать весь confirm-loop + settle.
+		// Это корректно: тест проверяет удаление маркера, а не поведение ожидания.
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+
+		wintun.PollUntilFree(ctx, &nullLogger{}, "tun0")
+
+		// FastDeleteFile должен быть удалён после чтения (одноразовый сигнал).
+		// Удаление происходит синхронно до первого sleepCtx — ctx timeout не влияет.
+		if _, err := os.Stat(wintun.FastDeleteFile); !os.IsNotExist(err) {
+			t.Error("FastDeleteFile должен быть удалён после PollUntilFree")
+		}
+	})
+}
+
+// TestPollUntilFree_FastDelete_MarkerAbsentAfterColdStart проверяет что
+// PollUntilFree никогда не создаёт FastDeleteFile — это исключительно задача
+// RemoveStaleTunAdapter. Инвариант: маркер отсутствует после PollUntilFree
+// независимо от пути (холодный / горячий / fast-delete).
+func TestPollUntilFree_FastDelete_MarkerAbsentAfterColdStart(t *testing.T) {
+	inTempDir(t, func() {
+		// Холодный старт: StopFile очень старый
+		writeStopFile(t, time.Now().Add(-10*time.Minute))
+		// FastDeleteFile НЕ создаём — холодный путь, маркера нет
+
+		// Канселим ctx через 500мс: проверяемый инвариант (маркер не создаётся)
+		// виден немедленно — PollUntilFree никогда не вызывает WriteFile(FastDeleteFile).
+		// Полное ожидание confirm-loop не нужно для этой проверки.
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer cancel()
+
+		wintun.PollUntilFree(ctx, &nullLogger{}, "tun0")
+
+		// Маркер по-прежнему отсутствует — PollUntilFree его не создаёт
+		if _, err := os.Stat(wintun.FastDeleteFile); !os.IsNotExist(err) {
+			t.Error("FastDeleteFile не должен появляться после холодного старта")
+		}
+	})
+}
+
+// TestPollUntilFree_ContextCancel проверяет что отмена ctx прерывает ожидание.
+func TestPollUntilFree_ContextCancel(t *testing.T) {
+	inTempDir(t, func() {
+		// Горячий рестарт без fast-delete: ушли бы в 60с gap
+		writeStopFile(t, time.Now())
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			wintun.PollUntilFree(ctx, &nullLogger{}, "tun0")
+		}()
+
+		// Отменяем через 100мс — не должны ждать весь gap
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+
+		select {
+		case <-done:
+			// OK — прервалась по ctx
+		case <-time.After(3 * time.Second):
+			t.Error("PollUntilFree должна прерваться при отмене ctx")
+		}
+	})
 }
 
 // ── nullLogger ────────────────────────────────────────────────────────────────

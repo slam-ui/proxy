@@ -21,6 +21,7 @@ import (
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
+	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/process"
@@ -157,11 +158,17 @@ func run(output io.Writer) error {
 		app.mainLogger.Info("Автозапуск: включён")
 	}
 
-	// Убиваем осиротевший sing-box и сразу фиксируем время остановки.
-	// RecordStop() вызывается ВСЕГДА — гарантирует минимальный gap при следующем старте
-	// даже если приложение упало без graceful shutdown.
-	killOrphanSingBox(app.mainLogger)
-	wintun.RecordStop()
+	// Убиваем осиротевший sing-box.
+	// RecordStop() вызываем ТОЛЬКО если реально убили процесс —
+	// иначе перезаписываем timestamp и лишаем себя быстрого холодного старта.
+	if killed := killOrphanSingBox(app.mainLogger); killed {
+		wintun.RecordStop()
+	}
+
+	// Kill Switch: удаляем правила брандмауэра от предыдущего сеанса.
+	// Если приложение упало с активным Kill Switch, правила netsh остаются в системе
+	// и блокируют весь трафик до следующего запуска. CleanupOnStart устраняет это.
+	killswitch.CleanupOnStart(app.mainLogger)
 
 	// Загружаем app rules параллельно (I/O, не зависит от wintun).
 	type appRulesResult struct {
@@ -348,8 +355,19 @@ func killProcessesByName(targetName string, log interface{ Info(string, ...inter
 	}
 	// Ждём завершения всех убитых процессов — без этого kernel WinTun объект
 	// остаётся живым и sing-box падает с FATAL[0015] через 15с после старта.
-	for _, proc := range procs {
-		_, _ = proc.Wait()
+	// BUG FIX: proc.Wait() без таймаута может заблокировать main() навсегда
+	// (zombie-процесс или kernel lock). Используем горутину + select с таймаутом 5с.
+	for _, p := range procs {
+		done := make(chan struct{}, 1)
+		go func(proc *os.Process) {
+			_, _ = proc.Wait()
+			close(done)
+		}(p)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			log.Info("Таймаут ожидания завершения sing-box.exe (PID: %d) — продолжаем", p.Pid)
+		}
 	}
 	// Дополнительная пауза для освобождения kernel handles после Wait
 	time.Sleep(1 * time.Second)

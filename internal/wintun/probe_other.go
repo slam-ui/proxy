@@ -9,4 +9,4 @@ func kernelObjectFree(_ string) bool {
 	return true
 }
 
-func ForceDeleteAdapter(_ string) {}
+func ForceDeleteAdapter(_ string) bool { return false }
