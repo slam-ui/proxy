@@ -311,12 +311,6 @@ func FuzzParseVLESSURL(f *testing.F) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func FuzzRoutingRoundTrip(f *testing.F) {
-	type ruleInput struct {
-		value  string
-		action string
-		note   string
-	}
-
 	seeds := []struct{ value, action, note string }{
 		{"google.com", "proxy", ""},
 		{"telegram.exe", "direct", "мессенджер"},
