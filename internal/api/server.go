@@ -408,6 +408,11 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 			}
+			// BUG FIX #9: заголовки методов/хедеров ставим ТОЛЬКО для разрешённых origins.
+			// Ранее они ставились безусловно — заблокированные origins получали
+			// Allow-Methods/Allow-Headers без Allow-Origin, что вводило в заблуждение.
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		} else {
 			// Запрос с чужого origin — отклоняем preflight, для остальных не ставим заголовок.
 			if r.Method == http.MethodOptions {
@@ -416,8 +421,6 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			}
 			// Остальные запросы пропускаем без CORS заголовков — браузер заблокирует сам.
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

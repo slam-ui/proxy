@@ -64,6 +64,30 @@ func disableSystemProxy() error {
 	return nil
 }
 
+// getSystemProxyState читает текущее состояние системного прокси из реестра.
+// BUG FIX #6: используется при создании Manager чтобы синхронизировать
+// in-memory состояние с реальным состоянием реестра Windows.
+// Защита от ситуации когда приложение упало с включённым прокси — при следующем
+// запуске manager.enabled=false хотя реестр говорит ProxyEnable=1.
+func getSystemProxyState() (enabled bool, address string) {
+	key, err := registry.OpenKey(registry.CURRENT_USER, registryPath, registry.READ)
+	if err != nil {
+		return false, ""
+	}
+	defer key.Close()
+
+	val, _, err := key.GetIntegerValue("ProxyEnable")
+	if err != nil || val == 0 {
+		return false, ""
+	}
+
+	addr, _, err := key.GetStringValue("ProxyServer")
+	if err != nil {
+		return true, ""
+	}
+	return true, addr
+}
+
 // notifyWindows уведомляет Windows об изменении настроек прокси
 func notifyWindows() error {
 	// InternetSetOption(NULL, INTERNET_OPTION_SETTINGS_CHANGED, NULL, 0)

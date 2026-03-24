@@ -7,11 +7,28 @@ import (
 	"syscall"
 )
 
+// notifySem ограничивает количество одновременных PowerShell-процессов уведомлений.
+// BUG FIX #NEW-F: при TUN retry loop вызывается до 10+ Send() подряд (~2 уведомления
+// × 5 попыток). Каждый PowerShell-процесс блокирует горутину на ~4.5с (Start-Sleep 4s).
+// Без семафора: 10 горутин × 4.5с = 45с жизни PS-процессов одновременно.
+// С буфером 2: новые уведомления пропускаются если уже показываются 2 — пользователь
+// всё равно не успевает прочитать их все, зато система не перегружается.
+var notifySem = make(chan struct{}, 2)
+
 // Send показывает Windows-уведомление в системном трее.
-// Использует PowerShell BurntToast или встроенный WScript.Shell balloon tip.
+// Использует PowerShell + System.Windows.Forms.NotifyIcon (Win10+).
 // Не блокирует — запускается в фоновой горутине.
+// При переполнении (>2 одновременных) уведомление пропускается без ошибки.
 func Send(title, message string) {
 	go func() {
+		// Пробуем занять слот — если заняты оба, уведомление пропускаем.
+		select {
+		case notifySem <- struct{}{}:
+			defer func() { <-notifySem }()
+		default:
+			return // уже показываются 2 уведомления — пропускаем
+		}
+
 		// Пробуем через Windows Runtime Toast API (Win10+)
 		script := `
 $ErrorActionPreference='SilentlyContinue'
@@ -28,7 +45,12 @@ $notify.Dispose()
 			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 			HideWindow:    true,
 		}
-		_ = cmd.Start()
+		// BUG FIX #B-30: вызываем Wait() чтобы освободить HANDLE процесса.
+		// Start() без Wait() оставляет kernel HANDLE открытым до завершения
+		// родительского процесса — при частых уведомлениях накапливаются утечки.
+		if err := cmd.Start(); err == nil {
+			_ = cmd.Wait()
+		}
 	}()
 }
 

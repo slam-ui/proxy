@@ -30,12 +30,20 @@ type manager struct {
 	mu      sync.RWMutex
 }
 
-// NewManager создаёт новый менеджер прокси
+// NewManager создаёт новый менеджер прокси.
+// BUG FIX #6: при создании читаем реальное состояние из реестра Windows.
+// Без этого если предыдущий сеанс завершился аварийно (panic, kill),
+// прокси оставался включён в реестре но manager.enabled=false — рассинхрон.
 func NewManager(log logger.Logger) Manager {
-	return &manager{
+	enabled, addr := getSystemProxyState()
+	m := &manager{
 		logger:  log,
-		enabled: false,
+		enabled: enabled,
 	}
+	if enabled && addr != "" {
+		m.config = Config{Address: addr}
+	}
+	return m
 }
 
 // Enable включает системный прокси

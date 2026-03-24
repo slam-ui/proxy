@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -40,8 +41,12 @@ var (
 	procProcess32First = kern32.NewProc("Process32FirstW")
 	procProcess32Next  = kern32.NewProc("Process32NextW")
 	procCreateSnapshot = kern32.NewProc("CreateToolhelp32Snapshot")
+	// BUG FIX #NEW-J: переиспользуем глобальный kern32 вместо повторного NewLazyDLL
+	// в createSingleInstanceMutex. LoadLibrary вызывается ровно один раз.
+	// Имя procCreateMutexW (не procCreateMutex) — чтобы не конфликтовать с
+	// одноимённой переменной в orphan_test.go.
+	procCreateMutexW = kern32.NewProc("CreateMutexW")
 )
-
 const (
 	logFile         = "proxy-client.log"
 	shutdownTimeout = 10 * time.Second
@@ -158,12 +163,16 @@ func run(output io.Writer) error {
 		app.mainLogger.Info("Автозапуск: включён")
 	}
 
-	// Убиваем осиротевший sing-box.
-	// RecordStop() вызываем ТОЛЬКО если реально убили процесс —
-	// иначе перезаписываем timestamp и лишаем себя быстрого холодного старта.
-	if killed := killOrphanSingBox(app.mainLogger); killed {
-		wintun.RecordStop()
-	}
+	// ОПТИМИЗАЦИЯ: убиваем осиротевший sing-box ПАРАЛЛЕЛЬНО с загрузкой Rules engine.
+	// killProcessesByName блокируется на proc.Wait() + time.Sleep(1s) — ~1.2с в логе.
+	// Rules engine (I/O: читает app_rules.json) тоже можно запустить сразу.
+	// Результат orphan kill нужен ДО старта wintun cleanup — ждём через канал.
+	type orphanResult struct{ killed bool }
+	orphanCh := make(chan orphanResult, 1)
+	go func() {
+		killed := killOrphanSingBox(app.mainLogger)
+		orphanCh <- orphanResult{killed}
+	}()
 
 	// Kill Switch: удаляем правила брандмауэра от предыдущего сеанса.
 	// Если приложение упало с активным Kill Switch, правила netsh остаются в системе
@@ -181,6 +190,20 @@ func run(output io.Writer) error {
 		eng, err := apprules.NewPersistentEngine(storage)
 		appRulesCh <- appRulesResult{eng, err}
 	}()
+
+	// Ждём завершения orphan kill — нужно до wintun cleanup чтобы корректно
+	// установить RecordStop/FastDeleteFile перед тем как RemoveStaleTunAdapter начнёт работу.
+	orphanRes := <-orphanCh
+	if orphanRes.killed {
+		wintun.RecordStop()
+		// После kill orphan пробуем синхронно освободить wintun kernel-объект.
+		// proc.Wait() уже вернулся — sing-box выгрузил wintun.dll handle.
+		// Если ForceDeleteAdapter успешен — PollUntilFree пропустит полный gap (60с → ~7-10с).
+		if wintun.ForceDeleteAdapter(config.TunInterfaceName) {
+			app.mainLogger.Info("wintun: orphan kill → ForceDeleteAdapter succeeded — gap будет пропущен")
+			_ = os.WriteFile(wintun.FastDeleteFile, []byte("1"), 0644)
+		}
+	}
 
 	xrayCfg := app.buildXRayCfg()
 	proxyConfig := proxy.Config{Address: config.ProxyAddr, Override: "<local>"}
@@ -241,7 +264,7 @@ func run(output io.Writer) error {
 		}
 	}()
 	go func() {
-		if waitErr := netutil.WaitForPort("localhost"+cfg.APIAddress, 5*time.Second); waitErr == nil {
+		if waitErr := netutil.WaitForPort(ctx, "localhost"+cfg.APIAddress, 5*time.Second); waitErr == nil {
 			app.mainLogger.Info("API сервер готов на %s", cfg.APIAddress)
 		} else {
 			app.mainLogger.Warn("API сервер не ответил за 5с: %v", waitErr)
@@ -264,6 +287,11 @@ func run(output io.Writer) error {
 	}()
 
 	tray.SetProxyAddr(proxyConfig.Address)
+	// BUG FIX #NEW-3: OnQuit callback трея не был защищён sync.Once.
+	// handleQuit (POST /api/quit) уже использует s.quitOnce.Do(...).
+	// Если systray вызвал бы OnQuit дважды (двойной клик, некоторые версии Windows)
+	// → close(уже закрытого канала) → panic: close of closed channel.
+	var trayQuitOnce sync.Once
 	tray.Run(tray.Callbacks{
 		OnOpen: func() { window.Open(cfg.WebUIURL) },
 		OnCopyAddr: func(addr string) {
@@ -297,7 +325,7 @@ func run(output io.Writer) error {
 				notification.Send("Proxy", "Прокси отключён")
 			}
 		},
-		OnQuit: func() { close(app.quit) },
+		OnQuit: func() { trayQuitOnce.Do(func() { close(app.quit) }) },
 	})
 
 	<-app.quit
@@ -394,13 +422,12 @@ func isRunningAsAdmin() bool {
 }
 
 func createSingleInstanceMutex(name string) (syscall.Handle, error) {
-	k32 := syscall.NewLazyDLL("kernel32.dll")
-	createMutex := k32.NewProc("CreateMutexW")
+	// BUG FIX #NEW-J: используем глобальный procCreateMutexW вместо повторного NewLazyDLL.
 	namePtr, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
 		return 0, err
 	}
-	h, _, lastErr := createMutex.Call(0, 0, uintptr(unsafe.Pointer(namePtr)))
+	h, _, lastErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(namePtr)))
 	if h == 0 {
 		return 0, lastErr
 	}

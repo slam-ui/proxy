@@ -15,9 +15,11 @@ func TestNewManager(t *testing.T) {
 		t.Fatal("Expected manager, got nil")
 	}
 
-	if mgr.IsEnabled() {
-		t.Error("Expected proxy to be disabled initially")
-	}
+	// BUG FIX #6: NewManager теперь читает реальное состояние из реестра Windows.
+	// Тест больше не может считать что начальное состояние всегда false —
+	// оно отражает реальное состояние системного прокси на машине.
+	// Проверяем только что менеджер создаётся без паники и IsEnabled() не паникует.
+	_ = mgr.IsEnabled()
 }
 
 func TestManager_Enable(t *testing.T) {

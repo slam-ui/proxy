@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -628,14 +629,14 @@ func TestHandleLeak_WaitSolvesProblem(t *testing.T) {
 		var resourceReleased int32
 		go func() {
 			time.Sleep(releaseDelay)
-			resourceReleased = 1 // atomic write, read below on same goroutine implicitly
+			atomic.StoreInt32(&resourceReleased, 1)
 		}()
 
 		time.Sleep(waitAfterKill)
 
 		// Polling: ждём пока ресурс освободится
 		freed := pollWithMock(func() bool {
-			return resourceReleased == 0 // занят пока == 0
+			return atomic.LoadInt32(&resourceReleased) == 0 // занят пока == 0
 		}, 20, 10)
 		return freed
 	}
