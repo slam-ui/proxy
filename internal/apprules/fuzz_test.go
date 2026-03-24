@@ -183,12 +183,8 @@ func FuzzMatcherSafety(f *testing.F) {
 			done <- result
 		}()
 
-		select {
-		case <-done:
-			// OK — завершилось
-		// Нет таймера здесь — go test -fuzz сам управляет временем
-		// Если зависнет — fuzz runner обнаружит это
-		}
+		// S1000: простой receive вместо select с одним case
+		<-done
 	})
 }
 

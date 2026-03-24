@@ -219,12 +219,15 @@ func (e *engine) listRulesUnsorted() []Rule {
 // BUG FIX #12: сортировка вынесена в rebuildSorted() которая вызывается
 // только при мутациях. Match теперь просто читает уже отсортированный срез —
 // O(n) вместо O(n log n) на каждый вызов от process monitor.
+// BUG FIX #RACE: RLock удерживается на всё время итерации (включая *rule copy).
+// Ранее: e.mu.RUnlock() до цикла — DisableRule мог записать rule.Enabled=false
+// пока Match читал поля того же Rule-объекта → data race под -race флагом.
+// Matcher.Match не захватывает никаких мьютексов, поэтому deadlock невозможен.
 func (e *engine) Match(processName string) RuleMatch {
 	e.mu.RLock()
-	sorted := e.sorted
-	e.mu.RUnlock()
+	defer e.mu.RUnlock()
 
-	for _, rule := range sorted {
+	for _, rule := range e.sorted {
 		if e.matcher.Match(rule.Pattern, processName) {
 			ruleCopy := *rule
 			return RuleMatch{Matched: true, Rule: &ruleCopy}

@@ -18,12 +18,21 @@ func NewMatcher() Matcher {
 	return &matcher{}
 }
 
+// toSlash заменяет все обратные слеши на прямые.
+// BUG FIX (Linux/CI): filepath.ToSlash заменяет только os.PathSeparator.
+// На Linux PathSeparator='/' — обратные слеши остаются нетронутыми.
+// Это ломает матчинг Windows-путей вида "C:\Program Files\app.exe" в тестах
+// и при кросс-компиляции. strings.ReplaceAll всегда работает корректно.
+func toSlash(s string) string {
+	return strings.ReplaceAll(s, "\\", "/")
+}
+
 // NormalizePattern нормализует паттерн один раз при сохранении правила.
 // OPT #1: ранее filepath.ToSlash + ToLower вызывались при КАЖДОМ Match() —
 // ~8000 аллокаций на запрос /api/apps/processes (400 процессов × 20 правил).
 // Теперь нормализация выполняется один раз в AddRule/restoreRule.
 func NormalizePattern(pattern string) string {
-	return filepath.ToSlash(strings.ToLower(pattern))
+	return toSlash(strings.ToLower(pattern))
 }
 
 // matchWildcard проверяет wildcard-паттерн против строки.
@@ -80,7 +89,7 @@ func wildcardMatch(pattern, s string) bool {
 // Значение нормализуется здесь — оно приходит из ОС и не кэшируется.
 func (m *matcher) Match(pattern string, value string) bool {
 	normPattern := NormalizePattern(pattern)
-	normValue := filepath.ToSlash(strings.ToLower(value))
+	normValue := toSlash(strings.ToLower(value))
 
 	// Точное побайтовое совпадение (до любой нормализации).
 	if pattern == value {
