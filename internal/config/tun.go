@@ -75,6 +75,20 @@ func NormalizeRuleValue(val string) string {
 	val = strings.TrimSpace(val)
 	val = strings.TrimPrefix(val, "\xef\xbb\xbf")
 
+	// BUG FIX (фаззер): нулевые байты (\x00) в значении правила ломают
+	// JSON-сериализацию конфига и маршрутизацию sing-box. Удаляем их.
+	val = strings.ReplaceAll(val, "\x00", "")
+
+	// BUG FIX (фаззер #97190ed3c6c50eca): strip inline comments (#...) ПЕРЕД TrimSpace.
+	// Без этого ":0 #" → strip '#' → ":0 " → TrimSpace → ":0" (первый вызов).
+	// Второй вызов NormalizeRuleValue(":0"): нет '#', strip порта ":0" → "" — нарушение идемпотентности.
+	// С исправлением: ":0 #" → strip '#' → ":0 " → TrimSpace → ":0" → strip порта → "" (первый вызов).
+	// Второй вызов NormalizeRuleValue("") = "" — идемпотентность восстановлена.
+	if idx := strings.IndexByte(val, '#'); idx != -1 {
+		val = val[:idx]
+	}
+	val = strings.TrimSpace(val)
+
 	lower := strings.ToLower(val)
 	if strings.HasSuffix(lower, ".exe") {
 		// Process names: сохраняем оригинальный регистр — sing-box матчит с учётом регистра
@@ -88,14 +102,24 @@ func NormalizeRuleValue(val string) string {
 	val = strings.TrimPrefix(val, "http://")
 	val = strings.TrimPrefix(val, "//")
 
-	if idx := strings.IndexByte(val, '/'); idx != -1 {
+	// Не трогаем CIDR-нотацию (10.0.0.0/8, 2001:db8::/32) —
+	// для них слеш является частью значения, а не разделителем пути.
+	if idx := strings.IndexByte(val, '/'); idx != -1 && !isIPOrCIDR(val) {
 		val = val[:idx]
 	}
-	if idx := strings.IndexAny(val, "?#"); idx != -1 {
+	if idx := strings.IndexByte(val, '?'); idx != -1 {
 		val = val[:idx]
 	}
 	if !strings.HasPrefix(val, "[") {
-		if idx := strings.LastIndexByte(val, ':'); idx != -1 {
+		// BUG FIX (фаззер #F-5): стриппинг порта выполняем в цикле до стабильности.
+		// Без цикла: ":0:0" → strip последнего порта → ":0" → первый вызов вернул ":0",
+		// но второй вызов NormalizeRuleValue(":0") = "" → нарушение идемпотентности.
+		// С циклом: ":0:0" → ":0" → "" → стабильно (оба вызова дают "").
+		for {
+			idx := strings.LastIndexByte(val, ':')
+			if idx < 0 {
+				break
+			}
 			host := val[:idx]
 			port := val[idx+1:]
 			isPort := len(port) > 0
@@ -105,9 +129,10 @@ func NormalizeRuleValue(val string) string {
 					break
 				}
 			}
-			if isPort {
-				val = host
+			if !isPort {
+				break
 			}
+			val = host
 		}
 	}
 
@@ -118,6 +143,10 @@ func NormalizeRuleValue(val string) string {
 // нормализует значения (убирает URL-схемы, порты, пути из domain-правил).
 // Вызывается при загрузке — автоматически мигрирует старые правила.
 func SanitizeRoutingConfig(cfg *RoutingConfig) {
+	validTypes := map[RuleType]bool{
+		RuleTypeProcess: true, RuleTypeDomain: true,
+		RuleTypeIP: true, RuleTypeGeosite: true,
+	}
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
 
@@ -127,11 +156,17 @@ func SanitizeRoutingConfig(cfg *RoutingConfig) {
 		}
 
 		detected := DetectRuleType(rule.Value)
+		// BUG FIX (фаззер): ранее исправлялся только пустой тип ("").
+		// Невалидный тип ("unknown", произвольная строка) оставался нетронутым —
+		// sing-box не мог маршрутизировать такое правило.
+		// Теперь: любой не-валидный тип перезаписывается автодетектом.
+		if !validTypes[rule.Type] {
+			rule.Type = detected
+		}
+		// Специальный случай: geosite-правило классифицировано как process (редко,
+		// но возможно при старых форматах данных)
 		if rule.Type == RuleTypeGeosite && detected == RuleTypeProcess {
 			rule.Type = RuleTypeProcess
-		}
-		if rule.Type == "" {
-			rule.Type = detected
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package netutil
 
 import (
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestWaitForPort_PortAlreadyOpen(t *testing.T) {
 	defer ln.Close()
 
 	start := time.Now()
-	if err := WaitForPort(addr, 2*time.Second); err != nil {
+	if err := WaitForPort(context.Background(), addr, 2*time.Second); err != nil {
 		t.Fatalf("WaitForPort(%q) = %v, want nil", addr, err)
 	}
 	// Должно вернуться очень быстро (< 300 мс) — первая попытка без sleep
@@ -51,7 +52,7 @@ func TestWaitForPort_PortOpensAfterDelay(t *testing.T) {
 		time.Sleep(2 * time.Second) // держим открытым пока WaitForPort не подключится
 	}()
 
-	if err := WaitForPort(addr, 3*time.Second); err != nil {
+	if err := WaitForPort(context.Background(), addr, 3*time.Second); err != nil {
 		t.Fatalf("WaitForPort(%q) = %v, want nil (port opened after delay)", addr, err)
 	}
 }
@@ -67,7 +68,7 @@ func TestWaitForPort_Timeout(t *testing.T) {
 
 	timeout := 300 * time.Millisecond
 	start := time.Now()
-	err := WaitForPort(addr, timeout)
+	err := WaitForPort(context.Background(), addr, timeout)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -85,7 +86,7 @@ func TestWaitForPort_ErrorContainsAddr(t *testing.T) {
 	ln, addr := startTCPListener(t)
 	ln.Close()
 
-	err := WaitForPort(addr, 100*time.Millisecond)
+	err := WaitForPort(context.Background(), addr, 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("ожидали ошибку")
 	}
@@ -101,7 +102,7 @@ func TestWaitForPort_ZeroTimeout(t *testing.T) {
 	defer ln.Close()
 
 	// Порт открыт + нулевой таймаут: первая попытка без sleep должна успеть
-	err := WaitForPort(addr, 0)
+	err := WaitForPort(context.Background(), addr, 0)
 	// Нулевой таймаут может как успеть (первая попытка), так и не успеть —
 	// главное что функция не паникует и не зависает.
 	_ = err // оба исхода допустимы при 0-таймауте
@@ -113,7 +114,7 @@ func TestWaitForPort_NegativeTimeout(t *testing.T) {
 	ln.Close()
 
 	// Не должен паниковать
-	_ = WaitForPort(addr, -time.Second)
+	_ = WaitForPort(context.Background(), addr, -time.Second)
 }
 
 // ─── Параллельность ────────────────────────────────────────────────────────
@@ -127,7 +128,7 @@ func TestWaitForPort_Concurrent(t *testing.T) {
 	errCh := make(chan error, 5)
 	for i := 0; i < 5; i++ {
 		go func() {
-			errCh <- WaitForPort(addr, 2*time.Second)
+			errCh <- WaitForPort(context.Background(), addr, 2*time.Second)
 		}()
 	}
 	for i := 0; i < 5; i++ {

@@ -55,6 +55,11 @@ type Config struct {
 	// OnCrash вызывается если sing-box завершился сам (не через Stop()).
 	// Вызывается из отдельной горутины — не блокирует monitor().
 	OnCrash func(err error)
+	// OnGracefulStop вызывается после успешного graceful shutdown (CTRL_BREAK → Wait).
+	// Используется для записи маркера CleanShutdownFile — гарантирует что следующий
+	// старт не будет ждать gap/settle (wintun корректно освобождён через WintunCloseAdapter).
+	// nil = ничего не делать.
+	OnGracefulStop func()
 	// BeforeRestart вызывается перед каждым запуском sing-box (Start/doStart).
 	// Используется для wintun cleanup без импорта wintun в api пакет.
 	// ctx позволяет прервать ожидание при выходе из приложения.
@@ -115,7 +120,12 @@ func (tw *tailWriter) Write(p []byte) (int, error) {
 		if idx := bytes.IndexByte(trimmed, '\n'); idx >= 0 {
 			trimmed = trimmed[idx+1:]
 		}
-		tw.buf = trimmed
+		// BUG FIX #3: копируем в новый срез чтобы освободить старый backing array.
+		// Без copy() tw.buf держит ссылку на весь предыдущий массив (32KB+),
+		// который GC не может освободить — накапливается утечка памяти.
+		newBuf := make([]byte, len(trimmed))
+		copy(newBuf, trimmed)
+		tw.buf = newBuf
 	}
 	return len(p), nil
 }
@@ -251,18 +261,15 @@ func (m *manager) StartAfterManualCleanup() error {
 	m.mu.Lock()
 	m.done = make(chan struct{})
 	m.stopped = false
-	prevFirst := m.firstStart
-	m.firstStart = true // пропускаем BeforeRestart на этот раз
+	// BUG FIX #5: firstStart=true пропускает BeforeRestart в doStart.
+	// Убрана логика с prevFirst: она создавала иллюзию отката, но между
+	// Unlock() и doStart() другая горутина могла изменить firstStart — race.
+	// Если doStart упал, firstStart остаётся true — корректно: вызывающий
+	// (handleCrash) уже сделал cleanup вручную для этой попытки.
+	m.firstStart = true
 	m.mu.Unlock()
 	m.crashes.Reset()
-	err := m.doStart()
-	if err != nil {
-		// восстанавливаем значение если старт не удался
-		m.mu.Lock()
-		m.firstStart = prevFirst
-		m.mu.Unlock()
-	}
-	return err
+	return m.doStart()
 }
 
 func (m *manager) doStart() error {
@@ -389,7 +396,12 @@ func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
 	}
 	m.logger.Info("Краш #%d — перезапуск через %v...", count, backoff)
 	go func() {
-		time.Sleep(backoff)
+		select {
+		case <-time.After(backoff):
+		case <-m.lifecycleCtx.Done():
+			// Приложение завершается — не запускаем OnCrash после Shutdown.
+			return
+		}
 		onCrash(err)
 	}()
 }
@@ -444,6 +456,11 @@ func (m *manager) Stop() error {
 		select {
 		case <-doneCh:
 			m.logger.Info("Процесс XRay корректно завершился (graceful)")
+			// ОПТИМИЗАЦИЯ: уведомляем wintun о чистом завершении.
+			// Следующий PollUntilFree пропустит все задержки (gap=0, settle=0).
+			if m.config.OnGracefulStop != nil {
+				m.config.OnGracefulStop()
+			}
 			return nil
 		case <-time.After(3 * time.Second):
 			m.logger.Info("Graceful shutdown timeout — принудительная остановка")

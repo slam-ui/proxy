@@ -47,6 +47,12 @@ import (
 // Экспортирован для использования в тестах (аналогично StopFile).
 const FastDeleteFile = "wintun_fast_delete"
 
+// tunInterfaceName — имя TUN-адаптера.
+// BUG FIX #5: ранее строка "tun0" была захардкожена в нескольких местах.
+// Вынесено в константу чтобы при смене имени адаптера достаточно было
+// обновить одно место. Должна совпадать с config.TunInterfaceName.
+const tunInterfaceName = "tun0"
+
 // scErrRe извлекает числовой код ошибки из вывода sc.exe
 var scErrRe = regexp.MustCompile(`\b(\d{4,5})\b`)
 
@@ -64,6 +70,12 @@ func cleanSCOutput(raw string) string {
 
 const (
 	StopFile = "wintun_stopped_at" // файл с timestamp последней остановки
+	// CleanShutdownFile — маркер корректного завершения sing-box (graceful stop).
+	// При наличии этого маркера PollUntilFree знает что wintun был закрыт через
+	// WintunCloseAdapter/WintunDeleteAdapter, PnP-запись чистая → gap=0, settle=0.
+	// Это самый быстрый путь: следующий старт начнётся без какого-либо ожидания.
+	// Файл удаляется в начале PollUntilFree (одноразовый сигнал).
+	CleanShutdownFile = "wintun_clean_shutdown"
 	// BUG FIX #14: PollInterval и PollTimeout были экспортированы но нигде
 	// не использовались снаружи пакета. После рефакторинга на DLL-probe
 	// PollUntilFree использует локальные константы probeInterval/probeTimeout.
@@ -76,6 +88,18 @@ const (
 func RecordStop() {
 	data := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
 	_ = os.WriteFile(StopFile, data, 0644)
+	// При RecordStop сбрасываем маркер чистого завершения — он будет установлен
+	// позже через RecordCleanShutdown если остановка была корректной.
+	_ = os.Remove(CleanShutdownFile)
+}
+
+// RecordCleanShutdown записывает маркер корректного завершения sing-box.
+// Вызывается ТОЛЬКО когда sing-box остановлен штатно через Stop() (CTRL_BREAK → Wait).
+// При наличии этого маркера следующий PollUntilFree пропустит все задержки —
+// wintun kernel-объект уже освобождён через WintunCloseAdapter, PnP-запись чистая.
+// Аналог подхода WireGuard для Windows: корректная остановка = быстрый следующий старт.
+func RecordCleanShutdown() {
+	_ = os.WriteFile(CleanShutdownFile, []byte("1"), 0644)
 }
 
 // ── Адаптивный gap ────────────────────────────────────────────────────────────
@@ -157,7 +181,19 @@ var estimateCache struct {
 
 // EstimateReadyAt возвращает приблизительное время готовности.
 // Кэш инвалидируется когда mtime StopFile изменяется (новая остановка sing-box).
+//
+// Маркерные файлы (CleanShutdownFile, FastDeleteFile) проверяются без кэша —
+// они могут появиться/исчезнуть независимо от StopFile, и их изменение должно
+// немедленно отражаться в ETA (иначе UI покажет неверное время прогресс-бара).
 func EstimateReadyAt() time.Time {
+	// Маркеры проверяем без кэша — быстро (только stat, не ReadFile).
+	if _, err := os.Stat(CleanShutdownFile); err == nil {
+		return time.Now()
+	}
+	if _, err := os.Stat(FastDeleteFile); err == nil {
+		return time.Now().Add(8 * time.Second)
+	}
+
 	estimateCache.mu.Lock()
 	defer estimateCache.mu.Unlock()
 
@@ -177,6 +213,19 @@ func EstimateReadyAt() time.Time {
 
 // computeEstimateReadyAt выполняет фактическое вычисление ETA.
 func computeEstimateReadyAt() time.Time {
+	// Путь 0: CleanShutdownFile → запуск мгновенный (path 0 в PollUntilFree).
+	// UI не должен показывать прогресс-бар — ETA = now.
+	if _, err := os.Stat(CleanShutdownFile); err == nil {
+		return time.Now()
+	}
+
+	// Путь 1: FastDeleteFile → kernel-объект уже освобождён синхронно через DLL.
+	// Ожидание: только confirm-loop (1.5с) + settle (5с) ≈ 7с.
+	// Для UI это достаточно близко к "сейчас" чтобы не показывать долгий прогресс.
+	if _, err := os.Stat(FastDeleteFile); err == nil {
+		return time.Now().Add(8 * time.Second)
+	}
+
 	data, err := os.ReadFile(StopFile)
 	if err != nil {
 		return time.Now()
@@ -202,11 +251,13 @@ func computeEstimateReadyAt() time.Time {
 
 // settleDelay — базовая пауза ПОСЛЕ того как netsh сообщил "интерфейс свободен".
 //
-// Логи показывают что 5с недостаточно: два краша подряд с settle 5с.
-// settleDelay адаптивен: растёт пропорционально gap (25% от gap, min 15с, max 45с).
-// Это отражает реальность — чем больше gap нужен, тем медленнее Windows GC на данной машине.
-const settleDelayBase = 15 * time.Second
-const settleDelayMax  = 45 * time.Second
+// ОПТИМИЗАЦИЯ: снижено с 15с до 5с — RemoveStaleTunAdapter теперь ждёт реального
+// завершения pnputil /remove-device синхронно, поэтому к моменту settle PnP уже чист.
+// 5с остаётся как страховка: SWD bus driver иногда ещё 1-3с финализирует registry
+// entries после того как Get-PnpDevice уже говорит absent.
+// settleDelay адаптивен: растёт пропорционально gap (25% от gap, min 5с, max 20с).
+const settleDelayBase = 5 * time.Second
+const settleDelayMax  = 20 * time.Second
 
 // readSettleDelay вычисляет актуальный settle delay на основе текущего адаптивного gap.
 // settle = max(settleDelayBase, gap * 0.25), не более settleDelayMax.
@@ -234,7 +285,12 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 
 // PollUntilFree ждёт пока wintun kernel-объект реально освободится.
 //
-// v4: три пути в зависимости от состояния предыдущей очистки:
+// v5: четыре пути в зависимости от состояния предыдущей очистки:
+//
+//  0. CleanShutdownFile присутствует → sing-box остановлен штатно через Stop().
+//     WintunCloseAdapter уже вызван, PnP-запись в порядке.
+//     Пропускаем ВСЁ (gap + confirm-loop + settle) — идём прямо к запуску.
+//     Типичное ожидание: ~0 мс. Аналог WireGuard для Windows: fixed GUID + reuse.
 //
 //  1. FastDeleteFile присутствует → ForceDeleteAdapter вернул true, kernel-объект
 //     уже освобождён синхронно через DLL. Пропускаем adaptive gap полностью,
@@ -256,6 +312,18 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 	// Нет StopFile → первый запуск ever, ничего ждать не нужно.
 	if _, err := os.Stat(StopFile); os.IsNotExist(err) {
+		return
+	}
+
+	// ── Путь 0: чистое завершение — самый быстрый старт ─────────────────────
+	// ОПТИМИЗАЦИЯ: аналог WireGuard для Windows (fixed GUID + WintunCloseAdapter).
+	// При штатной остановке sing-box через Stop() (CTRL_BREAK → Wait) xray.Manager
+	// вызывает RecordCleanShutdown(). Это гарантирует что WintunCloseAdapter выполнен,
+	// kernel-объект корректно освобождён, PnP-запись в порядке.
+	// Следующий WintunCreateAdapter не найдёт конфликтов → никакого ожидания.
+	if _, err := os.Stat(CleanShutdownFile); err == nil {
+		_ = os.Remove(CleanShutdownFile) // одноразовый сигнал
+		log.Info("wintun: чистое завершение — пропускаем все задержки (gap=0, settle=0)")
 		return
 	}
 
@@ -325,6 +393,7 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		confirmTimeout  = 60 * time.Second
 	)
 	confirmCount := 0
+	pnpRetry := false // флаг: уже делали pnputil sync removal → используем короткий settle
 	confirmDeadline := time.Now().Add(confirmTimeout)
 	log.Info("wintun: gap истёк — ждём стабильного освобождения (%d× probe)...", confirmRequired)
 	for time.Now().Before(confirmDeadline) {
@@ -333,20 +402,51 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		if probeOK && netshOK {
 			confirmCount++
 			if confirmCount >= confirmRequired {
+				// ── PnP проверка ДО settle-delay ──────────────────────────
+				// ОПТИМИЗАЦИЯ: проверяем PnP-уровень СРАЗУ после confirm-loop,
+				// а не после 15с settle-delay. Это экономит ~15с в случае
+				// "removal pending" — найденном в логе 20:19:17→20:19:32.
+				// kernel+netsh свободны (probeOK+netshOK), но PnP база ещё не обновлена.
+				// Проверяем сразу → если pending → pnputil → короткий settle.
+				if NetAdapterExists(ifName) {
+					log.Warn("wintun: PnP устройство %s в состоянии removal pending — pnputil sync removal...", ifName)
+					psForce := `$ids = (Get-PnpDevice | Where-Object { $_.FriendlyName -like '*` + ifName + `*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*sing-tun*' }).InstanceId; if ($ids) { $ids | ForEach-Object { pnputil /remove-device $_ 2>&1 | Out-Null } }`
+					cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psForce)
+					cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+					_, _ = cmd.CombinedOutput()
+					pnpRetry = true
+					// Поллим пока Get-PnpDevice не вернёт absent (до 10с).
+					for i := 0; i < 20; i++ {
+						if !sleepCtx(ctx, 500*time.Millisecond) {
+							return
+						}
+						if !NetAdapterExists(ifName) {
+							log.Info("wintun: PnP устройство удалено через pnputil (%d× 500мс)", i+1)
+							break
+						}
+					}
+					// Сбрасываем счётчик — нужен ещё один раунд подтверждений
+					confirmCount = 0
+					continue
+				}
+
 				// ── Settle-delay ───────────────────────────────────────────
-				// Критичная пауза ПОСЛЕ confirm-loop перед возвратом из функции.
-				// Закрывает race-window между "probe=free" и CreateAdapter в sing-box:
-				// WintunOpenAdapter и netsh проверяют объект косвенно; CreateAdapter
-				// работает напрямую с kernel PnP объектом — между их освобождением
-				// может быть несколько секунд. Именно здесь было WARN[0010]+FATAL[0015].
+				// PnP чист (pnp=absent) — ждём settle перед запуском sing-box.
+				// Закрывает race-window между "probe=free" и CreateAdapter:
+				// kernel+netsh+pnp свободны, но Windows может ещё не завершить
+				// все внутренние операции. После pnputil retry — короткий settle (3с).
 				settle := ReadSettleDelay()
+				if pnpRetry {
+					settle = 3 * time.Second
+				}
 				log.Info("wintun: %d× probe=free — settle-delay %v перед запуском...",
 					confirmRequired, settle.Round(time.Second))
 				if !sleepCtx(ctx, settle) {
 					log.Info("wintun: settle прерван (выход из приложения)")
 					return
 				}
-				log.Info("wintun: готов к запуску sing-box (%d× probe=free, netsh=absent)", confirmRequired)
+
+				log.Info("wintun: готов к запуску sing-box (%d× probe=free, netsh=absent, pnp=absent)", confirmRequired)
 				return
 			}
 		} else {
@@ -373,6 +473,32 @@ func InterfaceExists(ifName string) bool {
 		return false // "The specified interface does not exist" → свободен
 	}
 	return strings.Contains(string(out), ifName)
+}
+
+// NetAdapterExists проверяет существование адаптера на уровне PnP / Device Manager
+// через Get-PnpDevice — надёжнее чем Get-NetAdapter и netsh для обнаружения
+// устройств в любом состоянии, включая "removal pending".
+//
+// BUG FIX: Get-NetAdapter и InterfaceExists (netsh) видят устройство как ОТСУТСТВУЮЩЕЕ
+// сразу после Remove-PnpDevice, хотя PnP manager ещё не завершил удаление из своей базы.
+// В этом состоянии WintunCreateAdapter("tun0") получает ответ PnP "removal pending, wait"
+// и делает 5 попыток × 3с = 15с ожидания → WARN[0010] → FATAL[0015].
+//
+// Get-PnpDevice возвращает устройства в ЛЮБОМ состоянии, включая "removal pending".
+// Это позволяет confirm-loop корректно ждать пока PnP НА САМОМ ДЕЛЕ завершит удаление.
+func NetAdapterExists(ifName string) bool {
+	// Ищем любое wintun/tun0/sing-tun устройство через PnP (а не Get-NetAdapter).
+	// sing-tun: TunnelType="sing-tun" → FriendlyName="sing-tun Tunnel" в Device Manager.
+	// Возвращает True пока устройство присутствует в PnP в ЛЮБОМ состоянии.
+	cmd := exec.Command("powershell",
+		"-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		`(Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+ifName+`*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*sing-tun*' } | Measure-Object).Count -gt 0`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "True"
 }
 
 // repairStaleDriver удаляет устаревшую запись wintun из SCM если она сломана.
@@ -517,7 +643,7 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 	// Если ForceDeleteAdapter вернул true — kernel-объект освобождён синхронно.
 	// Записываем маркер FastDeleteFile: PollUntilFree увидит его и пропустит длинный
 	// adaptive gap, перейдя сразу к confirm-loop + settle-delay.
-	deleted := ForceDeleteAdapter("tun0") // config.TunInterfaceName
+	deleted := ForceDeleteAdapter(tunInterfaceName) // BUG FIX #5: используем константу вместо "tun0"
 	if deleted {
 		log.Info("wintun: ForceDeleteAdapter succeeded — kernel-объект освобождён синхронно, gap будет пропущен")
 		_ = os.WriteFile(FastDeleteFile, []byte("1"), 0644)
@@ -527,26 +653,96 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 	}
 	time.Sleep(200 * time.Millisecond) // даём DLL завершить освобождение
 
-	// ── Фаза 3: очистка сетевого стека и Device Manager ──────────────────────
-	// Шаг 1: Убрать интерфейс из TCP/IP стека через netsh.
-	// Remove-NetAdapter убирает из Device Manager, но netsh выбрасывает из TCP/IP стека.
-	// Это критично: даже после Remove-NetAdapter интерфейс может оставаться в стеке
-	// и блокировать CreateAdapter в sing-box ("Cannot create a file when that file already exists").
-	// WARN[0010] + FATAL[0015] — признак того что интерфейс живёт в стеке от предыдущей сессии.
-	_, _ = runHidden("netsh", "interface", "ip", "delete", "interface", "tun0")
-	_, _ = runHidden("netsh", "interface", "ipv6", "delete", "interface", "tun0")
+	// ── Фаза 3: очистка сетевого стека, Device Manager и SWD реестра ─────────
 
-	// Шаг 2: Удалить адаптер из Device Manager
-	psRemove := `Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue`
+	// Шаг 1: TCP/IP стек через netsh.
+	_, _ = runHidden("netsh", "interface", "ip", "delete", "interface", tunInterfaceName)
+	_, _ = runHidden("netsh", "interface", "ipv6", "delete", "interface", tunInterfaceName)
+
+	// Шаг 2: Device Manager — синхронное удаление через pnputil.
+	//
+	// КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ ПОРЯДКА:
+	// Предыдущий код делал Remove-PnpDevice (async) → psGetIds → pnputil.
+	// Проблема: после Remove-PnpDevice устройство мгновенно исчезает из Get-PnpDevice
+	// (логически удалено), поэтому psGetIds возвращал пустой список и pnputil
+	// никогда не вызывался. Физическое удаление оставалось pending.
+	//
+	// Правильный порядок:
+	//   1. Получить InstanceId СНАЧАЛА (пока устройство видно Get-PnpDevice)
+	//   2. pnputil /remove-device — синхронная операция (блокирует до завершения PnP)
+	//   3. Проверить что устройство исчезло из Get-PnpDevice
+	//
+	// Remove-NetAdapter убирает из TCP/IP стека (не нужно отдельного netsh для этого).
+	psRemove := `Remove-NetAdapter -Name '` + tunInterfaceName + `' -Confirm:$false -ErrorAction SilentlyContinue`
 	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psRemove)
 
-	// Шаг 3: Remove-PnpDevice для сломанных устройств (error 433 / ERROR_DEV_NOT_EXIST)
-	psPnp := `Get-PnpDevice | Where-Object { $_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*tun0*' } | Where-Object { $_.Status -ne 'OK' -or $_.Problem -ne 0 } | ForEach-Object { Remove-PnpDevice -InstanceId $_.InstanceId -Confirm:$false -ErrorAction SilentlyContinue }`
-	_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psPnp)
+	// Шаг 2a: Получаем InstanceId-ы ПЕРЕД удалением — пока устройства ещё видны.
+	// BUG FIX: sing-box = "sing-tun Tunnel", не "wintun"/"WireGuard".
+	pnpFilter := `$_.FriendlyName -like '*WireGuard*' -or $_.FriendlyName -like '*wintun*' -or $_.FriendlyName -like '*tun0*' -or $_.FriendlyName -like '*sing-tun*'`
+	psGetIds := `(Get-PnpDevice | Where-Object { ` + pnpFilter + ` }).InstanceId -join "|"`
+	idsOut, _ := runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psGetIds)
 
-	// Шаг 4: Пауза 700мс после агрессивной очистки — даём Windows время применить изменения.
-	// Уменьшено с 1000мс: параллельная Фаза 1 уже дала Windows достаточно времени.
-	time.Sleep(700 * time.Millisecond)
+	if idsOut != "" {
+		// Шаг 2b: pnputil /remove-device — синхронный, блокирует до реального завершения PnP.
+		// В отличие от Remove-PnpDevice (async), pnputil ждёт пока PnP database обновится.
+		for _, instanceID := range strings.Split(idsOut, "|") {
+			instanceID = strings.TrimSpace(instanceID)
+			if instanceID == "" {
+				continue
+			}
+			out, err := runHidden("pnputil", "/remove-device", instanceID)
+			if err == nil {
+				log.Info("wintun: pnputil синхронно удалил PnP устройство: %s", instanceID)
+			} else {
+				// pnputil вернул ошибку — fallback на async Remove-PnpDevice
+				log.Info("wintun: pnputil /remove-device: %s (%v) — fallback на Remove-PnpDevice", strings.TrimSpace(out), err)
+				psRm := `Remove-PnpDevice -InstanceId '` + instanceID + `' -Confirm:$false -ErrorAction SilentlyContinue`
+				_, _ = runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command", psRm)
+			}
+		}
+
+		// Шаг 2c: Поллим Get-PnpDevice до реального исчезновения (до 5с).
+		// Подтверждает что PnP database обновлена — PollUntilFree не увидит removal pending.
+		for i := 0; i < 10; i++ {
+			time.Sleep(500 * time.Millisecond)
+			checkOut, _ := runHidden("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+				`(Get-PnpDevice | Where-Object { `+pnpFilter+` } | Measure-Object).Count -gt 0`)
+			if strings.TrimSpace(checkOut) != "True" {
+				log.Info("wintun: PnP устройства удалены из Device Manager (%d× 500мс)", i+1)
+				break
+			}
+		}
+	} else {
+		log.Info("wintun: PnP устройств для удаления не найдено")
+	}
+
+	// Шаг 3: КЛЮЧЕВОЙ ФИКС — прямая очистка SWD (Software Device) реестра.
+	//
+	// Исследование Tailscale/sing-box/wireguard-windows issues подтвердило:
+	//   - FATAL[0015] "Cannot create a file when that file already exists" происходит
+	//     внутри wintun.dll при SetupDiCallClassInstaller(DIF_INSTALLDEVICE) когда
+	//     HKLM\...\Enum\SWD\Wintun\ содержит запись от предыдущей сессии.
+	//   - Get-PnpDevice / kernelObjectFree / netsh — все могут вернуть "absent" РАНЬШЕ
+	//     чем SWD bus driver очищает свои registry entries.
+	//   - Procmon trace (sing-box issue #3725) наглядно показывает: wintun обращается
+	//     к HKLM\System\CurrentControlSet\Enum\SWD\Wintun\{NetCfgInstanceId}. При наличии
+	//     stale ключа → ERROR_ALREADY_EXISTS (0xB7) → FATAL[0015].
+	//   - Аналогичный подход используется в Cloudflare WARP fix:
+	//     `pnputil /delete-driver oem##.inf` + `pnputil /scan-devices`.
+	//
+	// reg delete SWD\Wintun — убирает все stale registry entries напрямую.
+	// После этого wintun при следующем CreateAdapter создаёт запись с нуля.
+	swdKey := `HKLM\SYSTEM\CurrentControlSet\Enum\SWD\Wintun`
+	if out, err := runHidden("reg", "delete", swdKey, "/f"); err == nil {
+		log.Info("wintun: SWD\\Wintun реестровые записи удалены (%s)", strings.TrimSpace(out))
+	} else {
+		// Ключ не существует — нормально для первого запуска
+		log.Info("wintun: SWD\\Wintun ключ уже чист или не найден")
+	}
+
+	// Шаг 4 (финал): короткая пауза — даём Windows время применить все изменения.
+	// pnputil уже отработал синхронно, 300мс достаточно для финального оседания.
+	time.Sleep(300 * time.Millisecond)
 
 	log.Info("TUN cleanup завершён")
 }
@@ -560,9 +756,9 @@ func Shutdown(log logger.Logger) {
 	}
 	run("sc", "stop", "wintun")
 	// Убираем интерфейс из TCP/IP стека при выходе — ускоряет следующий запуск
-	run("netsh", "interface", "ip", "delete", "interface", "tun0")
-	run("netsh", "interface", "ipv6", "delete", "interface", "tun0")
+	run("netsh", "interface", "ip", "delete", "interface", tunInterfaceName)
+	run("netsh", "interface", "ipv6", "delete", "interface", tunInterfaceName)
 	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		"Remove-NetAdapter -Name 'tun0' -Confirm:$false -ErrorAction SilentlyContinue")
+		"Remove-NetAdapter -Name '"+tunInterfaceName+"' -Confirm:$false -ErrorAction SilentlyContinue")
 	log.Info("TUN shutdown отправлен")
 }

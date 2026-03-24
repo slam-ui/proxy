@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"proxyclient/internal/fileutil"
@@ -202,11 +203,18 @@ func (pe *PersistentEngine) loadRules() error {
 		return err
 	}
 
+	// BUG FIX #8: ранее ошибки при restoreRule молча игнорировались (continue).
+	// Теперь собираем все ошибки и возвращаем их, чтобы повреждённый app_rules.json
+	// не терял правила незаметно для пользователя/логов.
+	var loadErrors []string
 	for _, rule := range rules {
 		if err := pe.engine.restoreRule(rule); err != nil {
-			continue
+			loadErrors = append(loadErrors, fmt.Sprintf("rule %q (id=%s): %v", rule.Name, rule.ID, err))
 		}
 	}
-
+	if len(loadErrors) > 0 {
+		return fmt.Errorf("некоторые правила не загружены (%d): %s",
+			len(loadErrors), strings.Join(loadErrors, "; "))
+	}
 	return nil
 }

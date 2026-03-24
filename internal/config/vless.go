@@ -110,7 +110,7 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 	if muxParam == "" {
 		muxParam = queryParams.Get("multiplex")
 	}
-	return &VLESSParams{
+	params := &VLESSParams{
 		Address:   parsedURL.Hostname(),
 		Port:      port,
 		UUID:      parsedURL.User.Username(),
@@ -119,27 +119,43 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 		ShortID:   queryParams.Get("sid"),
 		Flow:      queryParams.Get("flow"),
 		Mux:       muxParam == "1" || muxParam == "true",
-	}, nil
+	}
+
+	// BUG FIX (фаззер): readAndParseVLESS возвращал params с port=0 / port=99999
+	// / пустым Address без ошибки. Вызывающий код (parseVLESSKey) вызывал
+	// validateVLESSParams отдельно, но это создавало окно где params != nil && invalid.
+	// Теперь базовая проверка выполняется здесь — fail-fast при парсинге.
+	if params.Address == "" {
+		return nil, fmt.Errorf("пустой адрес сервера в URL")
+	}
+	if params.Port <= 0 || params.Port > 65535 {
+		return nil, fmt.Errorf("некорректный порт %d: допустимо 1–65535", params.Port)
+	}
+
+	return params, nil
 }
 
 // validateVLESSParams проверяет параметры на корректность
 func validateVLESSParams(params *VLESSParams) error {
-	if params.Address == "" {
+	// BUG FIX: используем TrimSpace чтобы отловить whitespace-only значения.
+	// Без TrimSpace: " " != "" — поле казалось непустым, но sing-box падал
+	// при старте с cryptic ошибкой вместо понятного сообщения здесь.
+	if strings.TrimSpace(params.Address) == "" {
 		return fmt.Errorf("отсутствует адрес сервера")
 	}
 	if params.Port <= 0 || params.Port > 65535 {
 		return fmt.Errorf("некорректный порт: %d", params.Port)
 	}
-	if params.UUID == "" {
+	if strings.TrimSpace(params.UUID) == "" {
 		return fmt.Errorf("отсутствует UUID")
 	}
-	if params.SNI == "" {
+	if strings.TrimSpace(params.SNI) == "" {
 		return fmt.Errorf("отсутствует SNI")
 	}
-	if params.PublicKey == "" {
+	if strings.TrimSpace(params.PublicKey) == "" {
 		return fmt.Errorf("отсутствует публичный ключ")
 	}
-	if params.ShortID == "" {
+	if strings.TrimSpace(params.ShortID) == "" {
 		return fmt.Errorf("отсутствует ShortID")
 	}
 	return nil

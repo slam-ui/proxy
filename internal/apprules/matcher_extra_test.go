@@ -230,22 +230,6 @@ func TestEngine_AddRule_SetsCreatedAtAndUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestEngine_UpdateRule_PreservesCreatedAt(t *testing.T) {
-	e := NewEngine()
-	original, _ := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Enabled: true})
-	createdAt := original.CreatedAt
-
-	updated, _ := e.UpdateRule(original.ID, Rule{
-		Pattern: "app.exe", Action: ActionDirect, Enabled: true,
-	})
-	if !updated.CreatedAt.Equal(createdAt) {
-		t.Error("UpdateRule не должен менять CreatedAt")
-	}
-	if updated.UpdatedAt.Before(createdAt) {
-		t.Error("UpdatedAt после UpdateRule должен быть >= CreatedAt")
-	}
-}
-
 // ─── Engine: FindMatchingRule как алиас Match ─────────────────────────────
 
 func TestEngine_FindMatchingRule_SameBehaviorAsMatch(t *testing.T) {

@@ -42,6 +42,10 @@ type Log struct {
 
 // New создаёт буфер на maxSize событий
 func New(maxSize int) *Log {
+	// BUG FIX: New(0) вызывал panic при первом Add — деление на ноль в %maxSize.
+	if maxSize <= 0 {
+		maxSize = 1
+	}
 	return &Log{
 		maxSize: maxSize,
 		events:  make([]Event, maxSize),

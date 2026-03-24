@@ -13,6 +13,7 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 
 	"github.com/gorilla/mux"
@@ -68,7 +69,10 @@ func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
 	// Используется фронтендом вместо N последовательных DELETE+POST, что устраняет
 	// зависание WebView2 при большом количестве правил (JS-тред блокировался на 30+ секунд).
 	s.router.HandleFunc("/api/tun/rules", h.handleBulkReplaceRules).Methods("PUT", "OPTIONS")
-	s.router.HandleFunc("/api/tun/rules/{value}", h.handleDeleteRule).Methods("DELETE", "OPTIONS")
+	// BUG FIX #NEW-I: {value:.+} вместо {value} — позволяет удалять CIDR правила с '/'
+	// (например 192.168.1.0/24). Без .+ горилла-mux интерпретирует /24 как отдельный
+	// сегмент пути и возвращает 404 для DELETE /api/tun/rules/192.168.1.0/24.
+	s.router.HandleFunc("/api/tun/rules/{value:.+}", h.handleDeleteRule).Methods("DELETE", "OPTIONS")
 	s.router.HandleFunc("/api/tun/default", h.handleSetDefault).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/tun/apply", h.handleApply).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/tun/apply/status", h.handleApplyStatus).Methods("GET", "OPTIONS")
@@ -191,6 +195,10 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 	// BUG FIX: handleAddRule вызывает NormalizeRuleValue + DetectRuleType,
 	// bulk replace не вызывал — правила сохранялись с URL-префиксами и
 	// неверными типами, sing-box их не матчил.
+	// BUG FIX #NEW-1: добавлено приведение к lowercase для non-process правил —
+	// аналогично handleAddRule и handleImport. Без этого drag-and-drop реорганизация
+	// правил через PUT /api/tun/rules сохраняла uppercase домены которые sing-box
+	// не матчил (domain matching регистрозависимый в sing-box).
 	for i, rule := range req.Rules {
 		val := config.NormalizeRuleValue(rule.Value)
 		if val == "" {
@@ -203,8 +211,14 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 				fmt.Sprintf("правило #%d: неверный action (proxy|direct|block)", i+1))
 			return
 		}
+		ruleType := config.DetectRuleType(strings.ToLower(val))
+		// FIX: process rules сохраняем в оригинальном регистре (Windows process_name чувствителен).
+		// Домены и IP приводим к lowercase.
+		if ruleType != config.RuleTypeProcess {
+			val = strings.ToLower(val)
+		}
 		req.Rules[i].Value = val
-		req.Rules[i].Type = config.DetectRuleType(strings.ToLower(val))
+		req.Rules[i].Type = ruleType
 	}
 
 	// Валидируем default_action (пустая строка → оставляем текущий)
@@ -404,6 +418,12 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 		}
 	}
 
+	// BUG FIX #4: сообщаем UI что идёт перезапуск (wintun cleanup ≈ 30с).
+	// Без этого /api/status возвращает running=false, warming=false — пользователь
+	// не понимает что происходит. ClearRestarting вызывается через defer.
+	h.server.SetRestarting(wintun.EstimateReadyAt())
+	defer h.server.ClearRestarting()
+
 	// BeforeRestart выполняет wintun cleanup (RecordStop + RemoveStaleTunAdapter + PollUntilFree).
 	// Инъектируется через xray.Config.BeforeRestart из main.go —
 	// api пакет больше не зависит от wintun напрямую.
@@ -450,12 +470,10 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 		return
 	}
 
-	// Ждём готовности sing-box.
-	if err := netutil.WaitForPort(DefaultProxyAddress, 15*time.Second); err != nil {
-		h.server.logger.Warn("sing-box не ответил за 15с после перезапуска: %v", err)
-	}
-
-	// Атомарно заменяем менеджер.
+	// BUG FIX #1: регистрируем менеджер ДО WaitForPort.
+	// patchedCfg.OnCrash читает h.server.config.XRayManager — если sing-box упадёт
+	// во время 15-секундного ожидания, OnCrash увидит nil и не запустит handleCrash.
+	// Устанавливаем менеджер сразу после успешного Start() чтобы OnCrash работал с первой секунды.
 	h.server.configMu.Lock()
 	h.server.config.XRayManager = newManager
 	h.server.configMu.Unlock()
@@ -463,6 +481,11 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	h.apply.mu.Lock()
 	h.apply.lastPID = newManager.GetPID()
 	h.apply.mu.Unlock()
+
+	// Ждём готовности sing-box (порт поднялся).
+	if err := netutil.WaitForPort(h.server.lifecycleCtx, DefaultProxyAddress, 15*time.Second); err != nil {
+		h.server.logger.Warn("sing-box не ответил за 15с после перезапуска: %v", err)
+	}
 
 	h.server.logger.Info("Sing-box перезапущен (PID: %d), правил: %d", newManager.GetPID(), len(snapshot.Rules))
 
@@ -548,8 +571,12 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Прямая отправка JSON
+		// BUG FIX #NEW-B: ограничиваем размер тела до 1MB чтобы предотвратить OOM.
+		// Multipart-путь выше уже ограничен (ParseMultipartForm(1<<20)).
+		// Без LimitReader злоумышленник из локальной сети может отправить гигантский
+		// JSON и вызвать исчерпание памяти.
 		var err error
-		raw, err = io.ReadAll(r.Body)
+		raw, err = io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB max
 		if err != nil {
 			h.server.respondError(w, http.StatusBadRequest, "failed to read body")
 			return
@@ -562,15 +589,18 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация
+	// Валидация и нормализация (аналогично handleBulkReplaceRules).
+	// BUG FIX #3: без нормализации импортированные правила с URL-префиксами
+	// (напр. "https://google.com" вместо "google.com") не матчились sing-box.
 	if !isValidAction(incoming.DefaultAction) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid default_action")
 		return
 	}
 	for i, rule := range incoming.Rules {
-		if rule.Value == "" {
+		val := config.NormalizeRuleValue(rule.Value)
+		if val == "" {
 			h.server.respondError(w, http.StatusBadRequest,
-				fmt.Sprintf("rule[%d]: value is empty", i))
+				fmt.Sprintf("rule[%d]: value is empty after normalization", i))
 			return
 		}
 		if !isValidAction(rule.Action) {
@@ -578,6 +608,12 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("rule[%d]: invalid action %q", i, rule.Action))
 			return
 		}
+		ruleType := config.DetectRuleType(strings.ToLower(val))
+		if ruleType != config.RuleTypeProcess {
+			val = strings.ToLower(val)
+		}
+		incoming.Rules[i].Value = val
+		incoming.Rules[i].Type = ruleType
 	}
 
 	h.mu.Lock()

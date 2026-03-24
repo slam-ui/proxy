@@ -36,7 +36,12 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 	// Multiplex (mux): поддерживается с sing-box 1.6+.
 	// Включается только при явном ?mux=1 в VLESS URL — безопасно для любой версии.
 	// Без явного запроса — не включаем, чтобы не ломать старые версии sing-box.
-	if params.Mux {
+	//
+	// BUG FIX: XTLS Vision (flow=xtls-rprx-vision) несовместим с multiplexing.
+	// Если пользователь задал оба параметра (?flow=xtls-rprx-vision&mux=1),
+	// sing-box падает при старте с ошибкой конфигурации.
+	// Flow имеет приоритет — отключаем mux при наличии flow.
+	if params.Mux && params.Flow == "" {
 		out.Multiplex = &SBMultiplex{
 			Enabled:    true,
 			Protocol:   "h2mux",

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -64,6 +63,12 @@ func (s *Server) handleEngineDownload(w http.ResponseWriter, r *http.Request) {
 	globalEngine.mu.Unlock()
 
 	execPath := req.ExecPath
+	// BUG FIX #NEW-2: используем lifecycleCtx вместо context.Background().
+	// EnsureEngine выполняет HTTP-запрос с таймаутом 120с. Без lifecycle context
+	// при Shutdown приложения горутина продолжала работать до 2 минут, блокируя
+	// завершение процесса. lifecycleCtx отменяется при вызове Shutdown() и прерывает
+	// HTTP-соединение немедленно — аналогично singbox-launcher который передаёт ctx в download.
+	downloadCtx := s.lifecycleCtx
 	progress := make(chan engine.Progress, 20)
 	go func() {
 		defer func() {
@@ -79,7 +84,7 @@ func (s *Server) handleEngineDownload(w http.ResponseWriter, r *http.Request) {
 				globalEngine.mu.Unlock()
 			}
 		}()
-		_ = engine.EnsureEngine(context.Background(), execPath, progress)
+		_ = engine.EnsureEngine(downloadCtx, execPath, progress)
 	}()
 
 	s.respondJSON(w, http.StatusOK, MessageResponse{Success: true, Message: "загрузка начата"})
