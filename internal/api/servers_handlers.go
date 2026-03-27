@@ -236,10 +236,29 @@ func (h *ServersHandlers) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// BUG FIX: автоматически регенерируем конфиг sing-box и перезапускаем процесс.
+	// Ранее handleConnect только писал secret.key и возвращал restart_required=true,
+	// не выполняя никакого рестарта — трафик продолжал идти через старый сервер.
+	// TriggerApply воспроизводит логику handleApply: GenerateSingBoxConfig → doApply.
+	applyMsg := fmt.Sprintf("переключение на %q запущено — перезапуск sing-box", target.Name)
+	restartRequired := false
+	if h.server.tunHandlers != nil {
+		if applyErr := h.server.tunHandlers.TriggerApply(); applyErr != nil {
+			// TriggerApply уже запущен (конкурентный вызов) — пользователь должен подождать.
+			h.server.logger.Warn("handleConnect: TriggerApply: %v", applyErr)
+			applyMsg = fmt.Sprintf("secret.key обновлён для %q, но применение уже выполняется — подождите", target.Name)
+			restartRequired = true
+		}
+	} else {
+		// tunHandlers не инициализирован (например в тестах без TUN) — fallback на ручной рестарт.
+		applyMsg = fmt.Sprintf("активен %q — перезапустите прокси чтобы применить", target.Name)
+		restartRequired = true
+	}
+
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("активен %q — перезапустите прокси чтобы применить", target.Name),
-		"restart_required": true,
+		"success":          true,
+		"message":          applyMsg,
+		"restart_required": restartRequired,
 	})
 }
 

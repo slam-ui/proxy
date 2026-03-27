@@ -242,13 +242,22 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 					blockSuf = append(blockSuf, sfx)
 				}
 			} else {
+				// BUG FIX: ранее plain-домен (без точки) попадал ТОЛЬКО в Domain["twitch.tv"],
+				// что в sing-box матчит ТОЛЬКО точное совпадение.
+				// Субдомены ("gql.twitch.tv", "video-edge-47127a.twitch.tv" и др.) —
+				// не матчились → продолжали идти через прокси даже при правиле direct.
+				// Исправление: добавляем также в DomainSuffix — покрывает и сам домен,
+				// и все поддомены одновременно.
 				switch rule.Action {
 				case ActionProxy:
 					proxyDom = append(proxyDom, val)
+					proxySuf = append(proxySuf, val)
 				case ActionDirect:
 					directDom = append(directDom, val)
+					directSuf = append(directSuf, val)
 				case ActionBlock:
 					blockDom = append(blockDom, val)
+					blockSuf = append(blockSuf, val)
 				}
 			}
 		case RuleTypeGeosite:

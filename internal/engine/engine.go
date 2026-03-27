@@ -25,8 +25,10 @@ import (
 	"time"
 )
 
+// githubAPI — var (не const) чтобы тесты могли подменять на httptest.Server.
+var githubAPI = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+
 const (
-	githubAPI   = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 	assetName   = "sing-box"
 	assetOS     = "windows"
 	assetArch   = "amd64"
@@ -244,7 +246,7 @@ func verifyChecksum(data []byte, expected string) error {
 	}
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
-	if got != expected {
+	if !strings.EqualFold(got, expected) {
 		return fmt.Errorf("контрольная сумма не совпадает: ожидалось %s, получено %s", expected, got)
 	}
 	return nil

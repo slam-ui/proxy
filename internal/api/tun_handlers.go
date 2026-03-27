@@ -79,7 +79,53 @@ func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
 	s.router.HandleFunc("/api/tun/export", h.handleExport).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/tun/import", h.handleImport).Methods("POST", "OPTIONS")
 
+	// Сохраняем ссылку чтобы handleConnect мог вызвать TriggerApply при смене сервера.
+	s.tunHandlers = h
+
 	return h
+}
+
+// TriggerApply запускает перегенерацию конфига и перезапуск sing-box без HTTP-контекста.
+// Вызывается из handleConnect после обновления secret.key.
+// Возвращает ошибку если применение уже запущено (не блокирует).
+func (h *TunHandlers) TriggerApply() error {
+	h.apply.mu.Lock()
+	if h.apply.running {
+		h.apply.mu.Unlock()
+		return fmt.Errorf("применение уже выполняется")
+	}
+	h.apply.running = true
+	h.apply.lastErr = ""
+	h.apply.startedAt = time.Now()
+	h.apply.estimatedDone = time.Now().Add(35 * time.Second)
+	h.apply.mu.Unlock()
+
+	h.mu.RLock()
+	snapshot := &config.RoutingConfig{
+		DefaultAction: h.routing.DefaultAction,
+		Rules:         make([]config.RoutingRule, len(h.routing.Rules)),
+	}
+	copy(snapshot.Rules, h.routing.Rules)
+	h.mu.RUnlock()
+
+	tmpConfigPath := h.xrayConfig.ConfigPath + ".pending"
+	if err := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, tmpConfigPath, snapshot); err != nil {
+		if _, statErr := os.Stat(h.xrayConfig.ConfigPath); statErr != nil {
+			// Старого конфига нет и новый сгенерировать не удалось — критично.
+			h.apply.mu.Lock()
+			h.apply.running = false
+			h.apply.lastErr = err.Error()
+			h.apply.mu.Unlock()
+			return fmt.Errorf("GenerateSingBoxConfig: %w", err)
+		}
+		// Новый конфиг не сгенерировался, но старый есть — применяем с ним.
+		h.server.logger.Warn("TriggerApply: pre-validate не прошла (%v) — применим с существующим конфигом", err)
+		_ = os.Remove(tmpConfigPath)
+		tmpConfigPath = ""
+	}
+
+	go h.doApply(snapshot, tmpConfigPath)
+	return nil
 }
 
 // RulesResponse ответ GET /api/tun/rules
@@ -512,16 +558,18 @@ func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	if !estimatedDone.IsZero() && running {
 		remaining := time.Until(estimatedDone).Milliseconds()
-		if remaining < 0 { remaining = 0 }
+		if remaining < 0 {
+			remaining = 0
+		}
 		estimatedRemainMs = remaining
 	}
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"running":              running,
-		"last_err":             lastErr,
-		"last_pid":             lastPID,
-		"elapsed_ms":           elapsedMs,
-		"estimated_remain_ms":  estimatedRemainMs,
-		"estimated_total_ms":   35000,
+		"running":             running,
+		"last_err":            lastErr,
+		"last_pid":            lastPID,
+		"elapsed_ms":          elapsedMs,
+		"estimated_remain_ms": estimatedRemainMs,
+		"estimated_total_ms":  35000,
 	})
 }
 

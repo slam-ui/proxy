@@ -432,14 +432,14 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
 			a.mainLogger.Error("Ошибка при остановке API сервера: %v", err)
 		}
+		if xrayMgr := a.apiServer.GetXRayManager(); xrayMgr != nil {
+			if err := xrayMgr.Stop(); err != nil {
+				a.mainLogger.Error("Ошибка при остановке sing-box: %v", err)
+			}
+		}
 	}
 	if processMonitor != nil {
 		processMonitor.Stop()
-	}
-	if xrayMgr := a.apiServer.GetXRayManager(); xrayMgr != nil {
-		if err := xrayMgr.Stop(); err != nil {
-			a.mainLogger.Error("Ошибка при остановке sing-box: %v", err)
-		}
 	}
 
 	wintun.RecordStop()
@@ -553,6 +553,9 @@ func extractServerIP(secretFile string) string {
 // должен идти через proxy-out (он не попадает ни в один прямой маршрут),
 // и одновременно проверяем что внешний IP сменился на серверный.
 func preWarmProxyConnection(proxyAddr string, log logger.Logger) {
+	if log == nil {
+		log = logger.NewNop()
+	}
 	// Даём TUN интерфейсу время подняться (~2-10с после HTTP-порта).
 	// Прогрев через HTTP proxy inbound — не зависит от TUN.
 	time.Sleep(2 * time.Second)

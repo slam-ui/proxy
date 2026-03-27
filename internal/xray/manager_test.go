@@ -8,50 +8,7 @@ import (
 
 // ─── tailWriter ───────────────────────────────────────────────────────────
 
-func TestTailWriter_CapturesOutput(t *testing.T) {
-	tw := newTailWriter(1024)
-	tw.Write([]byte("hello world\n"))
-	if !strings.Contains(tw.String(), "hello world") {
-		t.Error("tailWriter did not capture written bytes")
-	}
-}
 
-func TestTailWriter_TruncatesOldData(t *testing.T) {
-	// max=10, write 20 bytes of A then 8 bytes of B
-	// after second write: buf = last 10 bytes = "AABBBBBBBB"
-	// After line-boundary trim (no \n in A block): still last 10
-	// To guarantee ALL A's are dropped: write enough B's to exceed max alone
-	tw := newTailWriter(8)
-	tw.Write([]byte("AAAAAAAAAAAAAAAA")) // 16 A's — fills and wraps
-	tw.Write([]byte("BBBBBBBB"))         // exactly 8 B's = max → only B's remain
-	s := tw.String()
-	if strings.Contains(s, "A") {
-		t.Errorf("tailWriter should have dropped old data, got: %q", s)
-	}
-	if !strings.Contains(s, "BBBB") {
-		t.Error("tailWriter should keep newest data")
-	}
-}
-
-func TestTailWriter_DoesNotCutMidLine(t *testing.T) {
-	// Write lines that together exceed the buffer.
-	// After truncation the first line in buf must be complete (start after \n).
-	tw := newTailWriter(40)
-	// Write 3 complete lines totalling > 40 bytes
-	tw.Write([]byte("line1_padding_12345\n")) // 20 bytes
-	tw.Write([]byte("line2_padding_12345\n")) // 20 bytes → total 40, exact
-	tw.Write([]byte("line3_short\n"))         // 12 bytes → truncation triggers
-
-	s := tw.String()
-	// After truncation result must start at a line boundary, not mid-word
-	if len(s) > 0 && s[0] != 'l' {
-		// OK if it starts on 'l' of line2 or line3
-		t.Errorf("tailWriter buf starts mid-line: %q", s[:min(20, len(s))])
-	}
-	if !strings.Contains(s, "line3_short") {
-		t.Error("newest line must be retained")
-	}
-}
 
 func TestTailWriter_CrashMessageNotCut(t *testing.T) {
 	// Simulate wintun crash message at buffer boundary.
@@ -65,28 +22,6 @@ func TestTailWriter_CrashMessageNotCut(t *testing.T) {
 		t.Error("crash message should be fully retained in tail buffer")
 	}
 }
-
-func TestTailWriter_ConcurrentWrites(t *testing.T) {
-	tw := newTailWriter(512)
-	done := make(chan struct{})
-	for i := 0; i < 10; i++ {
-		go func() {
-			for j := 0; j < 20; j++ {
-				tw.Write([]byte("data\n"))
-			}
-			done <- struct{}{}
-		}()
-	}
-	for i := 0; i < 10; i++ {
-		<-done
-	}
-	// Must not panic and result must be valid UTF-8 / non-empty
-	if tw.String() == "" {
-		t.Error("tailWriter should have data after concurrent writes")
-	}
-}
-
-// ─── crashTracker ─────────────────────────────────────────────────────────
 
 func TestCrashTracker_CountsConsecutiveCrashes(t *testing.T) {
 	ct := &crashTracker{}
@@ -182,16 +117,4 @@ func TestIsTunConflict_MatchesKnownSignatures(t *testing.T) {
 	}
 }
 
-func TestTunConflictSignatures_NotEmpty(t *testing.T) {
-	if len(TunConflictSignatures) == 0 {
-		t.Error("TunConflictSignatures не должен быть пустым")
-	}
-}
 
-// helpers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

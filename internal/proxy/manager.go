@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -14,7 +16,6 @@ type Config struct {
 	Override string
 }
 
-// Manager интерфейс для управления системным прокси
 type Manager interface {
 	Enable(config Config) error
 	Disable() error
@@ -22,7 +23,6 @@ type Manager interface {
 	GetConfig() Config
 }
 
-// manager реализация Manager
 type manager struct {
 	config  Config
 	enabled bool
@@ -30,10 +30,6 @@ type manager struct {
 	mu      sync.RWMutex
 }
 
-// NewManager создаёт новый менеджер прокси.
-// BUG FIX #6: при создании читаем реальное состояние из реестра Windows.
-// Без этого если предыдущий сеанс завершился аварийно (panic, kill),
-// прокси оставался включён в реестре но manager.enabled=false — рассинхрон.
 func NewManager(log logger.Logger) Manager {
 	enabled, addr := getSystemProxyState()
 	m := &manager{
@@ -46,7 +42,6 @@ func NewManager(log logger.Logger) Manager {
 	return m
 }
 
-// Enable включает системный прокси
 func (m *manager) Enable(config Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -55,9 +50,6 @@ func (m *manager) Enable(config Config) error {
 		return fmt.Errorf("невалидная конфигурация прокси: %w", err)
 	}
 
-	// BUG FIX: если прокси уже включён с теми же параметрами — не пишем в реестр повторно.
-	// Без этой проверки параллельные вызовы из трея и API вызывали двойную запись.
-	// (Disable аналогично проверяет m.enabled перед действием.)
 	if m.enabled && m.config == config {
 		m.logger.Debug("Системный прокси уже включён с теми же параметрами")
 		return nil
@@ -74,7 +66,6 @@ func (m *manager) Enable(config Config) error {
 	return nil
 }
 
-// Disable отключает системный прокси
 func (m *manager) Disable() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -94,24 +85,44 @@ func (m *manager) Disable() error {
 	return nil
 }
 
-// IsEnabled проверяет, включен ли прокси
 func (m *manager) IsEnabled() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.enabled
 }
 
-// GetConfig возвращает текущую конфигурацию
 func (m *manager) GetConfig() Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
 }
 
-// validateConfig проверяет конфигурацию
+// validateConfig выполняет строгую проверку адреса прокси.
 func validateConfig(config Config) error {
-	if strings.TrimSpace(config.Address) == "" {
+	addr := strings.TrimSpace(config.Address)
+	if addr == "" {
 		return fmt.Errorf("отсутствует адрес прокси")
 	}
+
+	// ФИКС: Используем net.SplitHostPort для проверки формата host:port
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("некорректный формат (ожидается host:port): %w", err)
+	}
+
+	if host == "" {
+		// net.SplitHostPort пропускает ":8080", но для системного прокси это невалидно
+		return fmt.Errorf("хост не может быть пустым")
+	}
+
+	// Проверяем диапазон порта
+	p, err := strconv.Atoi(portStr)
+	if err != nil {
+		return fmt.Errorf("порт должен быть числом")
+	}
+	if p <= 0 || p > 65535 {
+		return fmt.Errorf("порт вне диапазона 1-65535: %d", p)
+	}
+
 	return nil
 }

@@ -1160,13 +1160,18 @@
         if (!canvas) return;
         const wrap = document.getElementById('chartWrap');
         const resize = () => {
-            canvas.width  = wrap.clientWidth  * devicePixelRatio;
-            canvas.height = wrap.clientHeight * devicePixelRatio;
+            const w = wrap.clientWidth  * devicePixelRatio;
+            const h = wrap.clientHeight * devicePixelRatio;
+            if (w > 0 && h > 0) {
+                canvas.width  = w;
+                canvas.height = h;
+            }
             chartDirty = true;
             drawChart();
         };
         new ResizeObserver(resize).observe(wrap);
-        resize();
+        // Откладываем первый resize до завершения layout
+        requestAnimationFrame(resize);
     }
 
     function drawChart() {

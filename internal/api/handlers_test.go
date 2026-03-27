@@ -1,14 +1,15 @@
 package api
 
 import (
-	"time"
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
@@ -686,4 +687,119 @@ func TestHandleQuit_DoubleCallDoesNotPanic(t *testing.T) {
 	}
 	<-done
 	<-done
+}
+
+// ─── /api/proxy/enable, /api/proxy/disable, /api/proxy/toggle ─────────────
+
+func newProxySrv(t *testing.T) (*Server, func()) {
+	t.Helper()
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{running: true},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	srv.FinalizeRoutes()
+	return srv, func() {}
+}
+
+func TestProxyEnable_WhenDisabled_Returns200(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	w := postJSON(t, srv.router, "/api/proxy/enable", nil)
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/proxy/enable = %d, want 200 (body: %s)", w.Code, w.Body)
+	}
+	if !srv.config.ProxyManager.IsEnabled() {
+		t.Error("прокси должен быть включён после enable")
+	}
+}
+
+func TestProxyEnable_WhenAlreadyEnabled_Returns400(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	postJSON(t, srv.router, "/api/proxy/enable", nil)
+	w := postJSON(t, srv.router, "/api/proxy/enable", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("double enable = %d, want 400", w.Code)
+	}
+}
+
+func TestProxyDisable_WhenEnabled_Returns200(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	postJSON(t, srv.router, "/api/proxy/enable", nil)
+	w := postJSON(t, srv.router, "/api/proxy/disable", nil)
+	if w.Code != http.StatusOK {
+		t.Errorf("POST /api/proxy/disable = %d, want 200 (body: %s)", w.Code, w.Body)
+	}
+	if srv.config.ProxyManager.IsEnabled() {
+		t.Error("прокси должен быть выключён после disable")
+	}
+}
+
+func TestProxyDisable_WhenAlreadyDisabled_Returns400(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	w := postJSON(t, srv.router, "/api/proxy/disable", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("disable when already off = %d, want 400", w.Code)
+	}
+}
+
+func TestProxyToggle_OffThenOn(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	// Start disabled → toggle ON
+	w1 := postJSON(t, srv.router, "/api/proxy/toggle", nil)
+	if w1.Code != http.StatusOK {
+		t.Errorf("toggle ON = %d, want 200", w1.Code)
+	}
+	if !srv.config.ProxyManager.IsEnabled() {
+		t.Error("после toggle ON прокси должен быть включён")
+	}
+
+	// Toggle OFF
+	w2 := postJSON(t, srv.router, "/api/proxy/toggle", nil)
+	if w2.Code != http.StatusOK {
+		t.Errorf("toggle OFF = %d, want 200", w2.Code)
+	}
+	if srv.config.ProxyManager.IsEnabled() {
+		t.Error("после toggle OFF прокси должен быть выключён")
+	}
+}
+
+func TestProxyToggle_Concurrent_NoRace(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			postJSON(t, srv.router, "/api/proxy/toggle", nil)
+		}()
+	}
+	wg.Wait()
+	// Главное: не упал с паникой и IsEnabled возвращает корректное значение
+	_ = srv.config.ProxyManager.IsEnabled()
+}
+
+// ─── switchClashMode: не паникует если sing-box недоступен ─────────────────
+
+func TestSwitchClashMode_SingBoxDown_NoPanic(t *testing.T) {
+	// switchClashMode делает HTTP запрос к Clash API.
+	// Если sing-box не запущен — должен молча проглотить ошибку (не фатально).
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("switchClashMode вызвал panic: %v", r)
+		}
+	}()
+	switchClashMode(&logger.NoOpLogger{}, "direct")
+	switchClashMode(&logger.NoOpLogger{}, "rule")
 }
