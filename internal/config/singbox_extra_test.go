@@ -37,8 +37,11 @@ func TestBuildRoute_DomainSuffix_AddedToDomainSuffix(t *testing.T) {
 	}
 }
 
-// BUG-РИСК: без этого теста домен без точки мог случайно уйти в DomainSuffix.
-func TestBuildRoute_PlainDomain_NotInDomainSuffix(t *testing.T) {
+// BUG FIX: ранее plain-домен (без точки) попадал ТОЛЬКО в Domain["youtube.com"].
+// В sing-box domain матчит ТОЛЬКО точное совпадение — поддомены (gql.twitch.tv,
+// video-edge.twitch.tv) продолжали идти через прокси даже при правиле direct.
+// После фикса plain-домен добавляется И в Domain, И в DomainSuffix.
+func TestBuildRoute_PlainDomain_AlsoInDomainSuffix(t *testing.T) {
 	cfg := &RoutingConfig{
 		DefaultAction: ActionDirect,
 		Rules: []RoutingRule{
@@ -47,14 +50,53 @@ func TestBuildRoute_PlainDomain_NotInDomainSuffix(t *testing.T) {
 	}
 	route := buildRoute(cfg, "1.2.3.4")
 
+	var inDomain, inSuffix bool
 	for _, r := range route.Rules {
 		if r.Outbound == "proxy-out" {
+			for _, d := range r.Domain {
+				if d == "youtube.com" {
+					inDomain = true
+				}
+			}
 			for _, s := range r.DomainSuffix {
 				if s == "youtube.com" {
-					t.Error("youtube.com (без точки) НЕ должен попасть в DomainSuffix")
+					inSuffix = true
 				}
 			}
 		}
+	}
+	if !inDomain {
+		t.Error("youtube.com должен быть в Domain (точное совпадение)")
+	}
+	if !inSuffix {
+		t.Error("youtube.com должен быть в DomainSuffix (для поддоменов типа gql.youtube.com)")
+	}
+}
+
+// TestBuildRoute_TwitchDirect проверяет что twitch.tv→direct покрывает поддомены.
+// Реальный баг: gql.twitch.tv, video-edge-47127a.twitch.tv продолжали идти через
+// прокси потому что domain["twitch.tv"] не матчит поддомены в sing-box.
+func TestBuildRoute_TwitchDirect_CoversSubdomains(t *testing.T) {
+	cfg := &RoutingConfig{
+		DefaultAction: ActionProxy, // всё через прокси по умолчанию
+		Rules: []RoutingRule{
+			{Value: "twitch.tv", Type: RuleTypeDomain, Action: ActionDirect},
+		},
+	}
+	route := buildRoute(cfg, "1.2.3.4")
+
+	var hasSuffix bool
+	for _, r := range route.Rules {
+		if r.Outbound == "direct" {
+			for _, s := range r.DomainSuffix {
+				if s == "twitch.tv" {
+					hasSuffix = true
+				}
+			}
+		}
+	}
+	if !hasSuffix {
+		t.Error("twitch.tv→direct должен попасть в DomainSuffix чтобы gql.twitch.tv тоже шёл напрямую")
 	}
 }
 

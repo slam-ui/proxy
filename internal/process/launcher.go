@@ -54,13 +54,18 @@ func (l *launcher) Launch(executable string, rule *apprules.Rule, args ...string
 		return nil, fmt.Errorf("executable path is required")
 	}
 
-	// Проверяем существование файла
+	// Проверяем существование файла; пробуем сначала LookPath (учитывает PATH)
+	resolved := executable
 	if _, err := os.Stat(executable); os.IsNotExist(err) {
-		return nil, fmt.Errorf("executable not found: %s", executable)
+		if found, lerr := exec.LookPath(executable); lerr == nil {
+			resolved = found
+		} else {
+			return nil, fmt.Errorf("executable not found: %s", executable)
+		}
 	}
 
 	// Создаем команду
-	cmd := exec.Command(executable, args...)
+	cmd := exec.Command(resolved, args...)
 
 	// Применяем правило если задано
 	if rule != nil {
@@ -115,6 +120,9 @@ func (l *launcher) LaunchWithRule(executable string, ruleID string, args ...stri
 
 // applyRuleToCommand применяет правило к команде
 func (l *launcher) applyRuleToCommand(cmd *exec.Cmd, rule *apprules.Rule) error {
+	if rule == nil {
+		return nil
+	}
 	switch rule.Action {
 	case apprules.ActionProxy:
 		return l.applyProxyEnv(cmd, rule.ProxyAddr)
@@ -161,10 +169,16 @@ func (l *launcher) applyProxyEnv(cmd *exec.Cmd, proxyAddr string) error {
 
 // applyDirectEnv убирает proxy environment variables
 func (l *launcher) applyDirectEnv(cmd *exec.Cmd) error {
-	// OPT #9: копируем кэшированный базовый environ вместо os.Environ().
-	l.baseEnvMu.RLock()
-	base := l.baseEnv
-	l.baseEnvMu.RUnlock()
+	// Если cmd.Env уже установлен (например, в тестах), используем его как источник.
+	// Иначе — кэшированный базовый environ.
+	var base []string
+	if len(cmd.Env) > 0 {
+		base = cmd.Env
+	} else {
+		l.baseEnvMu.RLock()
+		base = l.baseEnv
+		l.baseEnvMu.RUnlock()
+	}
 
 	filteredEnv := make([]string, 0, len(base)+2)
 	for _, e := range base {

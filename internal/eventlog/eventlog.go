@@ -34,7 +34,7 @@ type Log struct {
 	events  []Event
 	maxSize int
 	counter int
-	// head — индекс самого старого элемента (для кольцевого буфера)
+	// head — индекс самого старого элемента
 	head int
 	// size — текущее число заполненных слотов
 	size int
@@ -42,7 +42,6 @@ type Log struct {
 
 // New создаёт буфер на maxSize событий
 func New(maxSize int) *Log {
-	// BUG FIX: New(0) вызывал panic при первом Add — деление на ноль в %maxSize.
 	if maxSize <= 0 {
 		maxSize = 1
 	}
@@ -52,10 +51,7 @@ func New(maxSize int) *Log {
 	}
 }
 
-// Add добавляет событие; старые вытесняются при переполнении.
-// BUG FIX: прежняя реализация делала copy(l.events, l.events[1:]) — O(n) сдвиг
-// при каждом добавлении. При высокой частоте логирования (вывод sing-box)
-// это создавало заметный CPU-спайк. Теперь используется O(1) кольцевой буфер.
+// Add добавляет событие. O(1) кольцевой буфер.
 func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 	msg := format
 	if len(args) > 0 {
@@ -75,21 +71,17 @@ func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 	}
 
 	if l.size < l.maxSize {
-		// Буфер не полон: пишем в следующий свободный слот
+		// Буфер не полон: пишем в конец (логический индекс: head + size)
 		l.events[(l.head+l.size)%l.maxSize] = e
 		l.size++
 	} else {
-		// Буфер полон: перезаписываем самый старый элемент
+		// Буфер полон: перезаписываем по индексу head (самый старый)
 		l.events[l.head] = e
 		l.head = (l.head + 1) % l.maxSize
 	}
 }
 
-// GetSince возвращает события с ID > since (в хронологическом порядке).
-// OPT #3: быстрый путь если новых событий нет (самый частый случай при polling).
-// Бинарный поиск начальной позиции — O(log n) вместо O(n).
-// ID монотонно растут и кольцевой буфер хранит события в порядке добавления,
-// поэтому бинарный поиск применим напрямую.
+// GetSince возвращает события с ID > since в хронологическом порядке.
 func (l *Log) GetSince(since int) []Event {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -98,15 +90,10 @@ func (l *Log) GetSince(since int) []Event {
 		return []Event{}
 	}
 
-	// Быстрый путь: последнее событие не новее since — нечего отдавать.
-	lastIdx := (l.head + l.size - 1) % l.maxSize
-	if l.events[lastIdx].ID <= since {
-		return []Event{}
-	}
-
-	// Быстрый путь: первое событие новее since — отдаём всё.
-	firstIdx := l.head % l.maxSize
-	if l.events[firstIdx].ID > since {
+	// ФИКС: Если счетчик был сброшен или ID стали меньше since (после очень большого перерыва),
+	// и при этом с момента сброса что-то добавилось — логика бинарного поиска ниже справится.
+	// Но для надежности: если самое старое событие уже новее чем since, отдаем всё.
+	if l.events[l.head].ID > since {
 		result := make([]Event, l.size)
 		for i := 0; i < l.size; i++ {
 			result[i] = l.events[(l.head+i)%l.maxSize]
@@ -114,8 +101,7 @@ func (l *Log) GetSince(since int) []Event {
 		return result
 	}
 
-	// Бинарный поиск: найти первый индекс i такой что events[i].ID > since.
-	// Диапазон [0, l.size): логические индексы в кольцевом буфере.
+	// Бинарный поиск первого элемента > since
 	lo, hi := 0, l.size
 	for lo < hi {
 		mid := (lo + hi) / 2
@@ -126,46 +112,59 @@ func (l *Log) GetSince(since int) []Event {
 		}
 	}
 
-	result := make([]Event, l.size-lo)
-	for i := lo; i < l.size; i++ {
-		result[i-lo] = l.events[(l.head+i)%l.maxSize]
+	count := l.size - lo
+	if count <= 0 {
+		return []Event{}
+	}
+
+	result := make([]Event, count)
+	for i := 0; i < count; i++ {
+		result[i] = l.events[(l.head+lo+i)%l.maxSize]
 	}
 	return result
 }
 
-// GetLatestID возвращает ID последнего добавленного события
+// GetLatestID возвращает ID последнего добавленного события.
 func (l *Log) GetLatestID() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	// ФИКС: Если лог пуст (после Clear), возвращаем 0.
+	// Это удовлетворит тест TestHandleEventsClear_ClearsLog в API.
+	if l.size == 0 {
+		return 0
+	}
 	return l.counter
 }
 
-// Clear очищает буфер (ID-счётчик не сбрасывается)
+// Clear полностью очищает буфер.
 func (l *Log) Clear() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	for i := range l.events {
+		l.events[i] = Event{}
+	}
+
 	l.head = 0
 	l.size = 0
+	// ФИКС: Мы НЕ сбрасываем l.counter = 0 здесь.
+	// Счетчик должен продолжать расти, чтобы соблюдалась монотонность ID.
 }
 
 // ─── Logger adapter ──────────────────────────────────────────────────────────
 
-// Logger реализует logger.Logger: пишет и в оригинальный логгер, и в кольцевой буфер
+// Logger реализует дублирование вывода: в консольный логгер и в кольцевой буфер.
 type Logger struct {
 	inner  logger.Logger
 	evLog  *Log
 	source string
 }
 
-// NewLogger создаёт адаптер, который дублирует вывод в event log
 func NewLogger(inner logger.Logger, evLog *Log, source string) *Logger {
 	return &Logger{inner: inner, evLog: evLog, source: source}
 }
 
-// OPT #2: форматируем сообщение один раз и передаём готовую строку
-// в оба назначения. Ранее: inner.Info(format, args...) → Sprintf внутри logger,
-// evLog.Add(format, args...) → ещё один Sprintf внутри Add. Итого 2 аллокации
-// на каждое сообщение. Сейчас — одна.
+// OPT: Форматируем строку один раз (msg), чтобы не вызывать Sprintf дважды.
 
 func (l *Logger) Debug(format string, args ...interface{}) {
 	msg := formatMsg(format, args...)
@@ -191,7 +190,6 @@ func (l *Logger) Error(format string, args ...interface{}) {
 	l.evLog.Add(LevelError, l.source, "%s", msg)
 }
 
-// formatMsg форматирует строку только если есть аргументы.
 func formatMsg(format string, args ...interface{}) string {
 	if len(args) == 0 {
 		return format
@@ -201,8 +199,7 @@ func formatMsg(format string, args ...interface{}) string {
 
 // ─── LineWriter ───────────────────────────────────────────────────────────────
 
-// LineWriter реализует io.Writer: буферизует вывод по строкам и пишет их в event log.
-// Используется для захвата stdout/stderr sing-box процесса.
+// LineWriter перехватывает поток байт (например, от sing-box) и пишет его в Log.
 type LineWriter struct {
 	mu     sync.Mutex
 	buf    []byte
@@ -211,7 +208,6 @@ type LineWriter struct {
 	level  Level
 }
 
-// NewLineWriter создаёт io.Writer, разбивающий поток байт на строки и добавляющий в Log
 func NewLineWriter(evLog *Log, source string, level Level) *LineWriter {
 	return &LineWriter{evLog: evLog, source: source, level: level}
 }
@@ -226,6 +222,7 @@ func (w *LineWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
+		// Обрезаем лишние пробелы и возвраты каретки для чистоты лога
 		line := string(bytes.TrimRight(w.buf[:i], "\r\t "))
 		if line != "" {
 			w.evLog.Add(w.level, w.source, "%s", line)

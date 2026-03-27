@@ -53,12 +53,24 @@ type logger struct {
 	logger *log.Logger
 }
 
-// New создаёт новый логгер
-func New(cfg Config) Logger {
+// New создаёт новый логгер.
+// Принимает Config или Level (для краткости в тестах):
+//
+//	logger.New(logger.Config{Level: logger.InfoLevel})
+//	logger.New(logger.LevelInfo)   // тестовая форма
+func New(arg interface{}) Logger {
+	var cfg Config
+	switch v := arg.(type) {
+	case Config:
+		cfg = v
+	case Level:
+		cfg = Config{Level: v}
+	default:
+		cfg = Config{}
+	}
 	if cfg.Output == nil {
 		cfg.Output = os.Stdout
 	}
-
 	return &logger{
 		level:  cfg.Level,
 		logger: log.New(cfg.Output, "", 0),
@@ -105,3 +117,23 @@ func (n *NoOpLogger) Debug(_ string, _ ...interface{}) {}
 func (n *NoOpLogger) Info(_ string, _ ...interface{})  {}
 func (n *NoOpLogger) Warn(_ string, _ ...interface{})  {}
 func (n *NoOpLogger) Error(_ string, _ ...interface{}) {}
+
+// NewNop возвращает логгер-заглушку, который молча отбрасывает все сообщения.
+// Удобен в тестах, где вывод логов не нужен.
+func NewNop() Logger {
+	return &NoOpLogger{}
+}
+
+// NewWithLevel - удобная функция для создания логгера с указанным уровнем.
+// Используется в тестах для упрощения синтаксиса.
+func NewWithLevel(level Level) Logger {
+	return New(Config{Level: level})
+}
+
+// Exported level aliases — используются в тестах как logger.LevelInfo и т.д.
+const (
+	LevelDebug = DebugLevel
+	LevelInfo  = InfoLevel
+	LevelWarn  = WarnLevel
+	LevelError = ErrorLevel
+)

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -21,62 +22,78 @@ var (
 const moveFileReplaceExisting = 0x1
 
 // WriteAtomic атомарно записывает data в dst.
-//
-// OPT #4: заменили rand.Int63() на os.CreateTemp():
-//   - os.CreateTemp использует криптографически стойкий источник имён — нет коллизий
-//     при высокой частоте записи из нескольких горутин.
-//   - Возвращает уже открытый *os.File — один syscall open вместо двух
-//     (os.WriteFile открывал бы файл заново).
-//   - Убрали import "math/rand".
-//
-// MoveFileExW с MOVEFILE_REPLACE_EXISTING атомарна на NTFS —
-// меняет directory entry одной транзакцией без промежуточного удаления.
 func WriteAtomic(dst string, data []byte, perm fs.FileMode) error {
 	dir := filepath.Dir(dst)
 	base := filepath.Base(dst)
 
-	// CreateTemp создаёт файл вида "<base>.*.tmp" с уникальным суффиксом.
+	// CreateTemp создаёт файл с уникальным именем, что исключает коллизии.
 	f, err := os.CreateTemp(dir, base+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("fileutil.WriteAtomic: create tmp: %w", err)
 	}
 	tmp := f.Name()
 
+	// Гарантируем очистку временного файла в случае паники или раннего выхода.
+	// Если всё пройдет успешно, мы вызовем Remove после MoveFileExW (хотя Move его и так поглотит).
+	defer func() {
+		if _, err := os.Stat(tmp); err == nil {
+			_ = os.Remove(tmp)
+		}
+	}()
+
 	_, writeErr := f.Write(data)
 	closeErr := f.Close()
 	if writeErr != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: write tmp: %w", writeErr)
 	}
 	if closeErr != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: close tmp: %w", closeErr)
 	}
 
-	// Применяем запрошенные права доступа к временному файлу.
+	// Применяем права доступа.
 	if err := os.Chmod(tmp, perm); err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: chmod: %w", err)
 	}
 
 	dstPtr, err := windows.UTF16PtrFromString(dst)
 	if err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: encode dst: %w", err)
 	}
 	tmpPtr, err := windows.UTF16PtrFromString(tmp)
 	if err != nil {
-		_ = os.Remove(tmp)
 		return fmt.Errorf("fileutil.WriteAtomic: encode tmp: %w", err)
 	}
-	r, _, lastErr := moveFileExW.Call(
-		uintptr(unsafe.Pointer(tmpPtr)),
-		uintptr(unsafe.Pointer(dstPtr)),
-		moveFileReplaceExisting,
-	)
-	if r == 0 {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("fileutil.WriteAtomic: MoveFileExW: %w", lastErr)
+
+	// ФИКС: Добавляем цикл повторных попыток для MoveFileExW.
+	// На Windows файлы часто блокируются антивирусами или другими потоками на доли секунды.
+	const maxRetries = 10
+	var lastMoveErr error
+
+	for i := 0; i < maxRetries; i++ {
+		r, _, lastErr := moveFileExW.Call(
+			uintptr(unsafe.Pointer(tmpPtr)),
+			uintptr(unsafe.Pointer(dstPtr)),
+			moveFileReplaceExisting,
+		)
+
+		if r != 0 {
+			// Успешно перемещено!
+			return nil
+		}
+
+		lastMoveErr = lastErr
+
+		// Проверяем, является ли ошибка временной блокировкой доступа.
+		// ERROR_ACCESS_DENIED (5) или ERROR_SHARING_VIOLATION (32).
+		if lastErr == windows.ERROR_ACCESS_DENIED || lastErr == windows.ERROR_SHARING_VIOLATION {
+			// Пауза перед следующей попыткой (10ms, 20ms, 30ms...)
+			time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+			continue
+		}
+
+		// Если ошибка критическая (например, неверный путь), выходим сразу.
+		break
 	}
-	return nil
+
+	return fmt.Errorf("fileutil.WriteAtomic: MoveFileExW: %w", lastMoveErr)
 }
