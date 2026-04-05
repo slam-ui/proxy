@@ -18,8 +18,8 @@ import (
 // kernel32 для CTRL_BREAK graceful shutdown.
 // Используем LazyDLL — загрузка при первом вызове, не при старте приложения.
 var (
-	kernel32        = syscall.NewLazyDLL("kernel32.dll")
-	procGenCtrlEvt  = kernel32.NewProc("GenerateConsoleCtrlEvent")
+	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	procGenCtrlEvt    = kernel32.NewProc("GenerateConsoleCtrlEvent")
 	procAttachConsole = kernel32.NewProc("AttachConsole")
 	procFreeConsole   = kernel32.NewProc("FreeConsole")
 )
@@ -41,6 +41,33 @@ func sendCtrlBreak(pid int) error {
 	return nil
 }
 
+// ValidateSingBoxConfig валидирует конфиг sing-box используя команду check.
+// Запускает sing-box check -c конфигPath с таймаутом 10s.
+// Возвращает nil если конфиг валиден, иначе ошибку с output.
+// B-1: Используется перед остановкой текущего процесса чтобы не потерять
+// рабочую конфигурацию в случае невалидного нового конфига.
+func ValidateSingBoxConfig(ctx context.Context, execPath, configPath string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// Проверяем что исполняемый файл существует
+	if _, err := os.Stat(execPath); err != nil {
+		return fmt.Errorf("sing-box не найден: %w", err)
+	}
+
+	// Проверяем что конфиг существует
+	if _, err := os.Stat(configPath); err != nil {
+		return fmt.Errorf("конфиг не найден: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, execPath, "check", "-c", configPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("конфиг невалиден: %w\nВывод: %s", err, string(output))
+	}
+	return nil
+}
+
 // Config конфигурация менеджера процесса
 type Config struct {
 	ExecutablePath string
@@ -54,12 +81,16 @@ type Config struct {
 	FileWriter io.Writer
 	// OnCrash вызывается если sing-box завершился сам (не через Stop()).
 	// Вызывается из отдельной горутины — не блокирует monitor().
-	OnCrash func(err error)
+	// Передаёт crashedManager чтобы handleCrash мог проверить актуальность.
+	OnCrash func(err error, crashedManager Manager)
 	// OnGracefulStop вызывается после успешного graceful shutdown (CTRL_BREAK → Wait).
 	// Используется для записи маркера CleanShutdownFile — гарантирует что следующий
 	// старт не будет ждать gap/settle (wintun корректно освобождён через WintunCloseAdapter).
 	// nil = ничего не делать.
 	OnGracefulStop func()
+	// OnSlowTun вызывается при обнаружении предупреждения "open interface take too much time to finish!"
+	// в stderr sing-box. Позволяет превентивно увеличить adaptive gap до краша.
+	OnSlowTun func()
 	// BeforeRestart вызывается перед каждым запуском sing-box (Start/doStart).
 	// Используется для wintun cleanup без импорта wintun в api пакет.
 	// ctx позволяет прервать ожидание при выходе из приложения.
@@ -82,6 +113,9 @@ type Manager interface {
 	LastOutput() string
 	// Uptime возвращает время работы процесса. Ноль если не запущен.
 	Uptime() time.Duration
+	// GetHealthStatus возвращает текущее состояние здоровья сервиса VLESS.
+	// БАГ #3: детектирует долгие периоды недоступности.
+	GetHealthStatus() (errorCount int, errorRatePct float64, wouldAlert bool)
 }
 
 // ── tailWriter ────────────────────────────────────────────────────────────────
@@ -96,7 +130,18 @@ type tailWriter struct {
 	max int
 }
 
-func newTailWriter(max int) *tailWriter { return &tailWriter{max: max, buf: make([]byte, 0, max)} }
+func newTailWriter(max int) *tailWriter {
+	// BUG FIX (фаззер): make([]byte, 0, max) выделяет max байт при СОЗДАНИИ объекта.
+	// При max=1MB и миллионах вызовов фаззера GC не успевает → OOM → exit status 2.
+	// Используем ленивое выделение: стартовая ёмкость ограничена 4KB,
+	// реальный рост происходит только при записи через Write.
+	const initCap = 4 * 1024
+	cap := initCap
+	if max > 0 && max < cap {
+		cap = max
+	}
+	return &tailWriter{max: max, buf: make([]byte, 0, cap)}
+}
 
 // Reset очищает буфер без освобождения памяти — переиспользуется при рестарте.
 // OPT #8: ранее при каждом doStart() создавался новый tailWriter(32KB),
@@ -156,7 +201,7 @@ const (
 	// maxCrashCount увеличен: wintun-цикл занимает 1-5 мин, при 3 крашах за 2 мин
 	// авторестарт отключался после первого же wintun-конфликта.
 	// Теперь даём 10 попыток за 10 минут — этого хватает на несколько wintun-циклов.
-	maxCrashCount   = 10              // максимум крашей за окно до остановки авторестарта
+	maxCrashCount = 10 // максимум крашей за окно до остановки авторестарта
 )
 
 // Record регистрирует краш. Возвращает текущий счётчик крашей в окне.
@@ -182,19 +227,22 @@ func (ct *crashTracker) Reset() {
 // ── manager ───────────────────────────────────────────────────────────────────
 
 type manager struct {
-	cmd          *exec.Cmd
-	config       Config
-	logger       logger.Logger
-	mu           sync.RWMutex
-	done         chan struct{}
-	stopped      bool
+	cmd     *exec.Cmd
+	config  Config
+	logger  logger.Logger
+	mu      sync.RWMutex
+	done    chan struct{}
+	stopped bool
 	// OPT #8: tail создаётся один раз и сбрасывается через Reset() при каждом рестарте.
 	// Ранее newTailWriter(32KB) вызывался при каждом doStart() — 32KB аллокация + GC.
 	tail         *tailWriter
 	crashes      crashTracker
 	firstStart   bool
 	lifecycleCtx context.Context
-	startedAt     time.Time
+	startedAt    time.Time
+	// БАГ #3: healthChecker отслеживает ошибки соединений и детектирует
+	// долгие периоды недоступности VLESS-сервера (>9 минут).
+	healthChecker *HealthChecker
 }
 
 func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
@@ -206,12 +254,13 @@ func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
 	}
 
 	m := &manager{
-		config:       cfg,
-		logger:       cfg.Logger,
-		done:         make(chan struct{}),
-		firstStart:   true,
-		lifecycleCtx: lifecycleCtx,
-		tail:         newTailWriter(32 * 1024), // создаём один раз, сбрасываем при рестарте
+		config:        cfg,
+		logger:        cfg.Logger,
+		done:          make(chan struct{}),
+		firstStart:    true,
+		lifecycleCtx:  lifecycleCtx,
+		tail:          newTailWriter(32 * 1024), // создаём один раз, сбрасываем при рестарте
+		healthChecker: NewHealthChecker(),       // БАГ #3: инициализируем здоровье-чекер
 	}
 
 	if err := m.doStart(); err != nil {
@@ -318,10 +367,28 @@ func (m *manager) doStart() error {
 	// OPT #8: сбрасываем существующий tailWriter вместо создания нового.
 	// Reset() очищает срез без освобождения памяти — 0 аллокаций.
 	m.tail.Reset()
-	if stderrBase == io.Discard {
+
+	// БАГ #3: оборачиваем stderr с health tracking для детектирования недоступности VLESS
+	stderrWithHealth := io.Writer(nil)
+	if m.healthChecker != nil {
+		stderrWithHealth = NewHealthTrackingWriter(stderrBase, m.healthChecker)
+	} else {
+		stderrWithHealth = stderrBase
+	}
+
+	if stderrWithHealth == io.Discard {
 		cmd.Stderr = m.tail
 	} else {
-		cmd.Stderr = io.MultiWriter(stderrBase, m.tail)
+		cmd.Stderr = io.MultiWriter(stderrWithHealth, m.tail)
+	}
+
+	// БАГ-1: перехватываем "open interface take too much time" до FATAL.
+	// Это предупреждение появляется за ~5с до краша — даёт время увеличить adaptive gap.
+	if m.config.OnSlowTun != nil {
+		cmd.Stderr = &slowTunDetector{
+			dst:       cmd.Stderr,
+			onSlowTun: m.config.OnSlowTun,
+		}
 	}
 
 	// BeforeRestart пропускается при первом старте (NewManager):
@@ -348,6 +415,25 @@ func (m *manager) doStart() error {
 	//   new monitor(): process exits → close(NEW m.done) → PANIC: close of closed channel
 	localDone := m.done
 	go m.monitor(cmd, localDone)
+
+	// ВЫС-2: stability timer — после 3 минут без крашей считаем core "стабильным"
+	// и сбрасываем счётчик крашей. Источник: singbox-launcher v0.8+, nekoray.
+	const stabilityWindow = 3 * time.Minute
+	go func() {
+		t := time.NewTimer(stabilityWindow)
+		defer t.Stop()
+		select {
+		case <-localDone:
+			// процесс упал до истечения таймера — не сбрасываем счётчик
+			return
+		case <-t.C:
+			m.crashes.Reset()
+			m.logger.Info("sing-box стабилен %v — счётчик крашей сброшен", stabilityWindow)
+		case <-m.lifecycleCtx.Done():
+			return
+		}
+	}()
+
 	return nil
 }
 
@@ -381,7 +467,7 @@ func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
 		m.logger.Error(
 			"[Error] Core exits too frequently (%d раз за %v) — авторестарт отключён",
 			count, crashRateWindow)
-		go onCrash(&tooManyRestartsError{count: count, base: err})
+		go onCrash(&tooManyRestartsError{count: count, base: err}, m)
 		return
 	}
 
@@ -402,7 +488,7 @@ func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
 			// Приложение завершается — не запускаем OnCrash после Shutdown.
 			return
 		}
-		onCrash(err)
+		onCrash(err, m)
 	}()
 }
 
@@ -532,6 +618,16 @@ func (m *manager) Wait() error {
 	return nil
 }
 
+// GetHealthStatus возвращает текущее состояние здоровья сервиса VLESS.
+// Вызывается из Web API для уведомления пользователя о проблемах.
+// БАГ #3: детектирует долгие периоды недоступности (>X% вошибок за N сек).
+func (m *manager) GetHealthStatus() (errorCount int, errorRatePct float64, wouldAlert bool) {
+	if m.healthChecker == nil {
+		return 0, 0, false
+	}
+	return m.healthChecker.GetStatus()
+}
+
 // isStdoutValid reports whether os.Stdout is a usable file handle.
 // In windowsgui builds (-H windowsgui) Windows does not attach a console.
 func isStdoutValid() bool {
@@ -540,6 +636,21 @@ func isStdoutValid() bool {
 	}
 	_, err := os.Stdout.Stat()
 	return err == nil
+}
+
+// slowTunDetector — io.Writer обёртка которая вызывает onSlowTun при обнаружении
+// предупреждения "open interface take too much time to finish!" в stderr sing-box.
+type slowTunDetector struct {
+	dst       io.Writer
+	onSlowTun func()
+	once      sync.Once
+}
+
+func (s *slowTunDetector) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), "open interface take too much time") {
+		s.once.Do(func() { go s.onSlowTun() })
+	}
+	return s.dst.Write(p)
 }
 
 // TunConflictSignatures — набор строк в выводе sing-box, указывающих на конфликт

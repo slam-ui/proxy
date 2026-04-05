@@ -1,0 +1,81 @@
+package xray
+
+import (
+	"bytes"
+	"io"
+	"regexp"
+	"sync"
+	"time"
+)
+
+// healthTrackingWriter wraps an io.Writer and tracks connection errors for the HealthChecker.
+// БАГ #3: парсит ERROR логи из sing-box и записывает их в HealthChecker.
+type healthTrackingWriter struct {
+	mu         sync.Mutex
+	dst        io.Writer
+	checker    *HealthChecker
+	buf        []byte
+	errorRe    *regexp.Regexp
+	outboundRe *regexp.Regexp
+}
+
+// NewHealthTrackingWriter creates a writer that tracks connection errors.
+func NewHealthTrackingWriter(dst io.Writer, checker *HealthChecker) *healthTrackingWriter {
+	return &healthTrackingWriter{
+		dst:        dst,
+		checker:    checker,
+		buf:        make([]byte, 0, 4096),
+		errorRe:    regexp.MustCompile(`ERROR.*connection.*(?:wsarecv|i/o timeout|dial tcp|bind:|timeout)`),
+		outboundRe: regexp.MustCompile(`using outbound/([^ \[\]]+)`),
+	}
+}
+
+// Write parses sing-box output for connection errors and updates HealthChecker.
+func (h *healthTrackingWriter) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.buf = append(h.buf, p...)
+
+	// Process each complete line
+	for {
+		idx := bytes.IndexByte(h.buf, '\n')
+		if idx < 0 {
+			break
+		}
+
+		line := h.buf[:idx]
+		h.buf = h.buf[idx+1:]
+
+		// Parse error lines
+		if h.errorRe.Match(line) {
+			lineStr := string(line)
+
+			// Extract outbound name
+			outbound := "unknown"
+			matches := h.outboundRe.FindStringSubmatch(lineStr)
+			if len(matches) > 1 {
+				outbound = matches[1]
+			}
+
+			// Determine error type
+			errorType := "connection_error"
+			if bytes.Contains(line, []byte("wsarecv")) {
+				errorType = "wsarecv"
+			} else if bytes.Contains(line, []byte("i/o timeout")) || bytes.Contains(line, []byte("dial tcp")) {
+				errorType = "timeout"
+			} else if bytes.Contains(line, []byte("bind:")) {
+				errorType = "bind_error"
+			}
+
+			// Record in health checker
+			h.checker.RecordError(time.Now(), errorType, outbound, lineStr)
+		}
+	}
+
+	// Write to destination
+	if h.dst != nil {
+		return h.dst.Write(p)
+	}
+	return len(p), nil
+}

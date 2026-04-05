@@ -80,10 +80,12 @@ func FuzzStopFileContent(f *testing.F) {
 		_ = eta
 
 		// Инвариант 3: PollUntilFree завершается при отмене ctx (не зависает)
-		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		// BUG FIX (фаззер): 300ms слишком мало — netsh вызывается 3 раза по 300ms = 900ms.
+		// Увеличиваем до 1500ms чтобы ctx гарантированно истёк ДО 2500ms time.After.
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
-		// Если зависнет дольше 300мс — ctx timeout поймает
+		// Если зависнет дольше 1500мс — ctx timeout поймает
 	})
 }
 
@@ -128,9 +130,9 @@ func FuzzGapFileContent(f *testing.F) {
 
 		gap := wintun.ReadAdaptiveGap()
 
-		// Инвариант: gap всегда в [60s, 3m]
-		if gap < 60*time.Second {
-			t.Errorf("gap=%v < minGapBase=60s при файле=%q", gap, content)
+		// Инвариант: gap всегда в [minGapBase, 3m]
+		if gap < wintun.MinGapBase {
+			t.Errorf("gap=%v < minGapBase=%v при файле=%q", gap, wintun.MinGapBase, content)
 		}
 		if gap > 3*time.Minute {
 			t.Errorf("gap=%v > minGapMax=3m при файле=%q", gap, content)
@@ -208,8 +210,8 @@ func FuzzMarkerSequence(f *testing.F) {
 
 		// Инвариант 2: ReadAdaptiveGap в допустимых границах
 		gap := wintun.ReadAdaptiveGap()
-		if gap < 60*time.Second || gap > 3*time.Minute {
-			t.Errorf("gap=%v вне границ [60s, 3m] после ops=0b%08b", gap, ops)
+		if gap < wintun.MinGapBase || gap > wintun.MaxGap {
+			t.Errorf("gap=%v вне границ [%v, %v] после ops=0b%08b", gap, wintun.MinGapBase, wintun.MaxGap, ops)
 		}
 
 		// Инвариант 3: если RecordStop вызван → CleanShutdownFile отсутствует
@@ -264,7 +266,11 @@ func FuzzPollUntilFreeFiles(f *testing.F) {
 		}
 
 		// ГЛАВНЫЙ ИНВАРИАНТ: ctx отмена всегда прерывает функцию
-		ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+		// BUG FIX (фаззер): 400ms ctx + 600ms time.After слишком мало.
+		// fast=true: пропускаем ETA, но netsh вызывается 3 раза (confirmRequired=3).
+		// 3 × 300ms (InterfaceExists timeout) + overhead = ~1s.
+		// ctx 1500ms гарантирует выход; time.After 2500ms — "зависание".
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 
 		done := make(chan struct{}, 1)
@@ -276,7 +282,7 @@ func FuzzPollUntilFreeFiles(f *testing.F) {
 		select {
 		case <-done:
 			// OK — завершилась (либо быстрый путь, либо отмена ctx)
-		case <-time.After(600 * time.Millisecond):
+		case <-time.After(2500 * time.Millisecond):
 			t.Errorf("PollUntilFree зависла: stop=%q gap=%q clean=%v fast=%v",
 				stopContent, gapContent, hasCleanShutdown, hasFastDelete)
 		}

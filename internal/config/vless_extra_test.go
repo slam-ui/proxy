@@ -292,3 +292,91 @@ func TestValidateVLESSParams_PortBoundary(t *testing.T) {
 		}
 	}
 }
+
+// ─── Plain TLS (без Reality) ───────────────────────────────────────────────
+//
+// BUG FIX: validateVLESSParams и buildVLESSOutbound теперь поддерживают
+// серверы без Reality. До фикса — конфигурация не генерировалась при
+// отсутствии SNI/PublicKey/ShortID, приложение падало на старый стейл-конфиг
+// и sing-box крашился с FATAL "configure tun interface: file not found".
+
+func TestValidateVLESSParams_PlainTLS_NoPublicKey_OK(t *testing.T) {
+	// Новый сервер без Reality — только Address, Port, UUID.
+	p := &VLESSParams{Address: "srv.example.com", Port: 443, UUID: "some-uuid"}
+	if err := validateVLESSParams(p); err != nil {
+		t.Errorf("plain TLS без PublicKey должен проходить валидацию, получили: %v", err)
+	}
+}
+
+func TestValidateVLESSParams_PlainTLS_WithSNI_OK(t *testing.T) {
+	// Plain TLS с SNI но без PublicKey — тоже валидно.
+	p := &VLESSParams{Address: "srv.example.com", Port: 443, UUID: "uuid", SNI: "sni.example.com"}
+	if err := validateVLESSParams(p); err != nil {
+		t.Errorf("plain TLS с SNI без PublicKey должен проходить валидацию, получили: %v", err)
+	}
+}
+
+func TestValidateVLESSParams_Reality_MissingSNI_Error(t *testing.T) {
+	// Reality-режим (PublicKey задан) — SNI обязателен.
+	p := &VLESSParams{Address: "h.com", Port: 443, UUID: "u", PublicKey: "k", ShortID: "s"}
+	if err := validateVLESSParams(p); err == nil {
+		t.Error("Reality без SNI должен давать ошибку")
+	}
+}
+
+func TestValidateVLESSParams_Reality_MissingShortID_Error(t *testing.T) {
+	// Reality-режим (PublicKey задан) — ShortID обязателен.
+	p := &VLESSParams{Address: "h.com", Port: 443, UUID: "u", PublicKey: "k", SNI: "s"}
+	if err := validateVLESSParams(p); err == nil {
+		t.Error("Reality без ShortID должен давать ошибку")
+	}
+}
+
+func TestBuildVLESSOutbound_PlainTLS_NoReality(t *testing.T) {
+	// Plain TLS сервер — Reality должен быть nil, TLS включён.
+	params := &VLESSParams{
+		Address: "plain-srv.example.com",
+		Port:    443,
+		UUID:    "test-uuid",
+		SNI:     "plain-srv.example.com",
+		// PublicKey намеренно пуст — plain TLS
+	}
+	out := buildVLESSOutbound(params)
+	if out.TLS == nil {
+		t.Fatal("TLS должен быть задан для plain TLS сервера")
+	}
+	if !out.TLS.Enabled {
+		t.Error("TLS.Enabled должен быть true")
+	}
+	if out.TLS.Reality != nil {
+		t.Error("TLS.Reality должен быть nil для plain TLS сервера (нет PublicKey)")
+	}
+	if out.TLS.ServerName != "plain-srv.example.com" {
+		t.Errorf("TLS.ServerName = %q, want plain-srv.example.com", out.TLS.ServerName)
+	}
+	if out.TLS.UTLS == nil || !out.TLS.UTLS.Enabled {
+		t.Error("TLS.UTLS должен быть включён")
+	}
+}
+
+func TestBuildVLESSOutbound_Reality_StillWorks(t *testing.T) {
+	// Reality-сервер — поведение не должно измениться.
+	params := &VLESSParams{
+		Address:   "reality-srv.example.com",
+		Port:      443,
+		UUID:      "uuid",
+		SNI:       "cdn.example.com",
+		PublicKey: "realitypubkey",
+		ShortID:   "0xabcd",
+	}
+	out := buildVLESSOutbound(params)
+	if out.TLS == nil || out.TLS.Reality == nil {
+		t.Fatal("Reality должен быть включён при наличии PublicKey")
+	}
+	if !out.TLS.Reality.Enabled {
+		t.Error("Reality.Enabled должен быть true")
+	}
+	if out.TLS.Reality.PublicKey != "realitypubkey" {
+		t.Errorf("Reality.PublicKey = %q, want realitypubkey", out.TLS.Reality.PublicKey)
+	}
+}

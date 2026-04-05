@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"proxyclient/internal/config"
+	"proxyclient/internal/fileutil"
 
 	"github.com/gorilla/mux"
 )
@@ -175,8 +176,10 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusInternalServerError, "marshal error")
 		return
 	}
+	// BUG FIX: os.WriteFile не атомарен — при крэше профиль будет повреждён.
+	// fileutil.WriteAtomic пишет во временный файл, затем атомарно переименовывает.
 	path := filepath.Join(profilesDir, filename)
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := fileutil.WriteAtomic(path, data, 0644); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "write error: "+err.Error())
 		return
 	}

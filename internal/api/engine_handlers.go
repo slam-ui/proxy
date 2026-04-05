@@ -8,6 +8,34 @@ import (
 	"proxyclient/internal/engine"
 )
 
+// handleEngineVersion GET /api/engine/version — возвращает установленную и последнюю версии sing-box.
+func (s *Server) handleEngineVersion(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ExecPath string `json:"exec_path"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.ExecPath == "" {
+		req.ExecPath = "./sing-box.exe"
+	}
+
+	installed := engine.InstalledVersion(req.ExecPath)
+
+	// Получаем последнюю версию из GitHub (с таймаутом из контекста запроса)
+	latest, err := engine.LatestVersion(r.Context())
+	latestStr := latest
+	errStr := ""
+	if err != nil {
+		errStr = err.Error()
+	}
+
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"installed":        installed,
+		"latest":           latestStr,
+		"update_available": installed != "" && latestStr != "" && installed != latestStr,
+		"error":            errStr,
+	})
+}
+
 // engineState хранит состояние загрузки движка
 type engineState struct {
 	mu       sync.RWMutex
@@ -22,6 +50,7 @@ func SetupEngineRoutes(s *Server) {
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/engine/status", s.handleEngineStatus).Methods("GET", "OPTIONS")
 	api.HandleFunc("/engine/download", s.handleEngineDownload).Methods("POST", "OPTIONS")
+	api.HandleFunc("/engine/version", s.handleEngineVersion).Methods("GET", "OPTIONS")
 }
 
 // handleEngineStatus GET /api/engine/status

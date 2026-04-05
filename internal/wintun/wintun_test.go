@@ -85,8 +85,8 @@ func TestRecordStop_OverwritesPrevious(t *testing.T) {
 func TestReadAdaptiveGap_DefaultWhenNoFile(t *testing.T) {
 	inTempDir(t, func() {
 		gap := wintun.ReadAdaptiveGap()
-		if gap != 60*time.Second {
-			t.Errorf("got %v, want 60s (minGapBase)", gap)
+		if gap != wintun.MinGapBase {
+			t.Errorf("got %v, want %v (minGapBase)", gap, wintun.MinGapBase)
 		}
 	})
 }
@@ -95,8 +95,8 @@ func TestReadAdaptiveGap_DefaultWhenCorruptFile(t *testing.T) {
 	inTempDir(t, func() {
 		_ = os.WriteFile("wintun_gap_ns", []byte("not-a-number"), 0644)
 		gap := wintun.ReadAdaptiveGap()
-		if gap != 60*time.Second {
-			t.Errorf("got %v, want 60s for corrupt file", gap)
+		if gap != wintun.MinGapBase {
+			t.Errorf("got %v, want %v for corrupt file", gap, wintun.MinGapBase)
 		}
 	})
 }
@@ -115,8 +115,8 @@ func TestReadAdaptiveGap_FloorsAtMinGapBase(t *testing.T) {
 	inTempDir(t, func() {
 		writeGapFile(t, 1*time.Second)
 		gap := wintun.ReadAdaptiveGap()
-		if gap != 60*time.Second {
-			t.Errorf("got %v, want 60s (minGapBase floor)", gap)
+		if gap != wintun.MinGapBase {
+			t.Errorf("got %v, want %v (minGapBase floor)", gap, wintun.MinGapBase)
 		}
 	})
 }
@@ -173,12 +173,14 @@ func TestIncreaseAdaptiveGap_DoublesFromBase(t *testing.T) {
 
 func TestIncreaseAdaptiveGap_DoublesRepeatedly(t *testing.T) {
 	inTempDir(t, func() {
-		// 60s → 120s → 3m (cap)
+		// MinGapBase(15s) → 30s → 60s → 120s → 3m (cap)
+		wintun.IncreaseAdaptiveGap(&nullLogger{})
+		wintun.IncreaseAdaptiveGap(&nullLogger{})
 		wintun.IncreaseAdaptiveGap(&nullLogger{})
 		wintun.IncreaseAdaptiveGap(&nullLogger{})
 		gap := wintun.ReadAdaptiveGap()
 		if gap != 3*time.Minute {
-			t.Errorf("got %v, want 3m after two increases from 60s base", gap)
+			t.Errorf("got %v, want 3m after four increases from %v base", gap, wintun.MinGapBase)
 		}
 	})
 }
@@ -204,8 +206,8 @@ func TestResetAdaptiveGap_RemovesFile(t *testing.T) {
 		if _, err := os.Stat("wintun_gap_ns"); !os.IsNotExist(err) {
 			t.Error("gap файл должен быть удалён после Reset")
 		}
-		if gap := wintun.ReadAdaptiveGap(); gap != 60*time.Second {
-			t.Errorf("после reset: got %v, want 60s", gap)
+		if gap := wintun.ReadAdaptiveGap(); gap != wintun.MinGapBase {
+			t.Errorf("после reset: got %v, want %v", gap, wintun.MinGapBase)
 		}
 	})
 }
@@ -259,6 +261,20 @@ func TestEstimateReadyAt_AlreadyPassed_ReturnsNow(t *testing.T) {
 	})
 }
 
+func TestEstimateReadyAt_UpdatesAfterAdaptiveGapChange(t *testing.T) {
+	inTempDir(t, func() {
+		writeStopFile(t, time.Now())
+		eta1 := wintun.EstimateReadyAt()
+		// Убедиться, что mtime gapFile изменился для кеша.
+		time.Sleep(1100 * time.Millisecond)
+		wintun.IncreaseAdaptiveGap()
+		eta2 := wintun.EstimateReadyAt()
+		if !eta2.After(eta1) {
+			t.Errorf("EstimateReadyAt не обновился после изменения adaptive gap: eta1=%v eta2=%v", eta1, eta2)
+		}
+	})
+}
+
 // ── misc ──────────────────────────────────────────────────────────────────────
 
 func TestStopFile_IsRelativePath(t *testing.T) {
@@ -281,20 +297,46 @@ func TestFastDeleteFile_IsRelativePath(t *testing.T) {
 
 // ── PollUntilFree: fast-delete path ──────────────────────────────────────────
 
-// TestPollUntilFree_NoStopFile проверяет что без StopFile функция возвращается
-// немедленно (первый запуск ever).
+// TestPollUntilFree_NoStopFile проверяет что без StopFile и без живого kernel-объекта
+// (kernelObjectFree=true на non-Windows — fail-open) функция возвращается немедленно.
+// На реальном Windows: если объект занят после аварийного завершения — входит в polling.
+//
+// Используем "tun-test-nonexistent" вместо "tun0" чтобы изолировать тест от реального
+// wintun-адаптера на машине разработчика: если "tun0" жив (прокси запущен),
+// kernelObjectFree("tun0")=false → тест уходит в 60с confirm-loop → ложное падение.
+// Несуществующее имя гарантирует kernelObjectFree=true и InterfaceExists=false.
 func TestPollUntilFree_NoStopFile(t *testing.T) {
 	inTempDir(t, func() {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			wintun.PollUntilFree(t.Context(), &nullLogger{}, "tun0")
+			wintun.PollUntilFree(t.Context(), &nullLogger{}, "tun-test-nonexistent")
 		}()
 		select {
 		case <-done:
 			// OK — вернулась без ожидания
 		case <-time.After(2 * time.Second):
 			t.Error("PollUntilFree без StopFile должна вернуться немедленно")
+		}
+	})
+}
+
+// TestPollUntilFree_NoStopFile_KernelFree_LogsNothing проверяет что при отсутствии
+// StopFile и свободном kernel-объекте (fail-open на non-Windows) функция завершается
+// без входа в polling — как при штатном первом запуске.
+// Регрессия для бага: предыдущая сессия завершилась аварийно без записи стоп-файла.
+//
+// Используем "tun-test-nonexistent" — см. комментарий TestPollUntilFree_NoStopFile.
+func TestPollUntilFree_NoStopFile_KernelFree_LogsNothing(t *testing.T) {
+	inTempDir(t, func() {
+		// Нет ни StopFile, ни CleanShutdownFile, ни FastDeleteFile.
+		// kernelObjectFree = true (заглушка non-Windows / несуществующий адаптер).
+		// → должны вернуться немедленно.
+		start := time.Now()
+		wintun.PollUntilFree(t.Context(), &nullLogger{}, "tun-test-nonexistent")
+		elapsed := time.Since(start)
+		if elapsed > time.Second {
+			t.Errorf("PollUntilFree должна вернуться < 1s при свободном объекте, elapsed=%v", elapsed)
 		}
 	})
 }

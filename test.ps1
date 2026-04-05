@@ -1,194 +1,207 @@
-﻿# test.ps1 - proxy-client test runner
-#
-# Usage:
-#   .\test.ps1              # Unit tests + race detector
-#   .\test.ps1 race         # Same
-#   .\test.ps1 fuzz         # All 22 fuzz tests, 30s each (parallel)
-#   .\test.ps1 fuzz 60      # Fuzz tests, 60s each
-#   .\test.ps1 coverage     # Tests + HTML coverage report
-#   .\test.ps1 bench        # Benchmarks
+<#
+.SYNOPSIS
+    Тестовый раннер proxy-client.
 
+.EXAMPLE
+    .\test.ps1                        # unit tests + race detector
+    .\test.ps1 -Type coverage
+    .\test.ps1 -Type fuzz -FuzzTime 60
+    .\test.ps1 -Type all              # race -> coverage -> fuzz за один прогон
+    .\test.ps1 -Type all -FuzzTime 60
+#>
 param(
-    [string]$Type = "race",
-    [int]$FuzzTime = 30
+    [string]$Type      = "race",
+    [int]   $FuzzTime  = 30,
+    [int]   $BatchSize = 6          # fuzz-задачи запускаются батчами (защита от resource exhaustion)
 )
 
 $ErrorActionPreference = "Continue"
-$failed = $false
+$script:failed = $false
 
-function Write-Header([string]$title) {
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host "  $title" -ForegroundColor Cyan
-    Write-Host "========================================" -ForegroundColor Cyan
-    Write-Host ""
+# ── Лог-файл ──────────────────────────────────────────────────────────────────
+$LogDir = Join-Path $PSScriptRoot "test-output"
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
+$stamp   = Get-Date -Format "yyyyMMdd_HHmmss"
+$LogFile = Join-Path $LogDir "${Type}_${stamp}.txt"
+
+function Write-Log([string]$msg) {
+    $msg | Out-File -FilePath $LogFile -Append -Encoding UTF8
 }
 
-function Write-Footer {
-    Write-Host ""
-    if (-not $script:failed) {
-        Write-Host "========================================" -ForegroundColor Cyan
-        Write-Host "  All tests passed!" -ForegroundColor Green
-        Write-Host "========================================" -ForegroundColor Cyan
-    } else {
-        Write-Host "========================================" -ForegroundColor Cyan
-        Write-Host "  Some tests FAILED!" -ForegroundColor Red
-        Write-Host "========================================" -ForegroundColor Cyan
-    }
-    Write-Host ""
+function Write-Both([string]$msg, [string]$color = "White") {
+    Write-Host $msg -ForegroundColor $color
+    Write-Log $msg
 }
 
+# В консоль — только строки с FAIL (красным). Всё остальное только в лог.
 function Run-Go([string]$desc, [string[]]$goArgs) {
-    Write-Host ">> $desc" -ForegroundColor Yellow
-    & go $goArgs
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[FAIL] $desc" -ForegroundColor Red
-        $script:failed = $true
-    } else {
-        Write-Host "[OK]   $desc" -ForegroundColor Green
+    Write-Both ">> $desc" Yellow
+    $output   = & go $goArgs 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in $output) {
+        Write-Log "$line"
+        if ("$line" -match "FAIL") {
+            Write-Host "  $line" -ForegroundColor Red
+        }
     }
-    Write-Host ""
+    if ($exitCode -ne 0) { $script:failed = $true }
 }
 
-# ---- race -------------------------------------------------------------------
-if ($Type -eq "race" -or $Type -eq "all") {
-    Write-Header "Unit tests + race detector"
-    Run-Go "go test -race -timeout=120s ./..." @("test", "-race", "-timeout=120s", "./...")
-    Write-Footer
-    if ($failed) { exit 1 } else { exit 0 }
+# ── Блоки ─────────────────────────────────────────────────────────────────────
+function Run-Race {
+    Write-Both "=== Unit tests + race detector ===" Cyan
+    $script:failed = $false
+    Run-Go "Tests" @("test", "-race", "-timeout=120s", "./cmd/...", "./internal/...")
+    if ($script:failed) {
+        Write-Both "FAILED  (подробности: $LogFile)" Red
+        return $false
+    }
+    Write-Both "PASSED" Green
+    return $true
 }
 
-# ---- fuzz -------------------------------------------------------------------
-if ($Type -eq "fuzz") {
-    Write-Header "Fuzz tests ($FuzzTime s each)"
+function Run-Coverage {
+    Write-Both "=== Coverage ===" Cyan
+    $script:failed = $false
+    Run-Go "Coverage" @("test", "-coverprofile=coverage.out", "./cmd/...", "./internal/...")
+    if (-not $script:failed) {
+        & go tool cover -html=coverage.out -o coverage.html
+        Write-Both "Отчёт: coverage.html" DarkGray
+    }
+    return (-not $script:failed)
+}
 
-    Write-Host "Step 1: unit tests..." -ForegroundColor Yellow
-    Run-Go "go test -race -timeout=120s ./..." @("test", "-race", "-timeout=120s", "./...")
-    if ($failed) {
-        Write-Host "Unit tests failed - skipping fuzz." -ForegroundColor Red
+function Run-Fuzz([int]$fuzzSec, [int]$batchSz) {
+    Write-Both "=== Fuzz tests ($fuzzSec s, batch=$batchSz) ===" Cyan
+
+    $script:failed = $false
+    Run-Go "Pre-check" @("test", "-race", "-timeout=120s", "./cmd/...", "./internal/...")
+    if ($script:failed) {
+        Write-Both "Unit tests failed, skipping fuzz." Red
+        return $false
+    }
+
+    # Каждая строка: "пакет|ИмяФазз"
+    # ВАЖНО: имена должны быть точными — в go test передаётся как regexp ^Name$,
+    # иначе FuzzMatcher матчит FuzzMatcherSafety и весь пакет падает с ошибкой
+    # "will not fuzz, -fuzz matches more than one fuzz test".
+    $rawTargets = @(
+        "./internal/config/|FuzzNormalizeRuleValue",
+        "./internal/config/|FuzzDetectRuleType",
+        "./internal/config/|FuzzParseVLESSURL",
+        "./internal/config/|FuzzRoutingRoundTrip",
+        "./internal/config/|FuzzSanitizeRoutingConfig",
+        "./internal/apprules/|FuzzNormalizePattern",
+        "./internal/apprules/|FuzzMatcher",
+        "./internal/apprules/|FuzzMatcherSafety",
+        "./internal/apprules/|FuzzMatchAny",
+        "./internal/xray/|FuzzIsTunConflict",
+        "./internal/xray/|FuzzTailWriter",
+        "./internal/xray/|FuzzCrashDetection",
+        "./internal/wintun/|FuzzStopFileContent",
+        "./internal/wintun/|FuzzGapFileContent",
+        "./internal/wintun/|FuzzMarkerSequence",
+        "./internal/wintun/|FuzzPollUntilFreeFiles",
+        "./internal/api/|FuzzHandleAddRule",
+        "./internal/api/|FuzzHandleBulkReplace",
+        "./internal/api/|FuzzHandleImport",
+        "./internal/api/|FuzzDeleteRuleValue",
+        "./internal/api/|FuzzCORSOrigin",
+        "./internal/api/|FuzzSetDefault"
+    )
+
+    $root        = $PWD.Path
+    $fuzzFailed  = $false
+    # Таймаут на один job: fuzzSec + 3 минуты на overhead (baseline coverage, минимизация)
+    $jobTimeout  = $fuzzSec + 180
+
+    # Разбиваем на батчи, чтобы не запускать 22 процесса одновременно —
+    # при параллельном запуске wintun/api тесты вызывают netsh/exec и исчерпывают ресурсы.
+    $batches = @()
+    $batch   = @()
+    foreach ($line in $rawTargets) {
+        $batch += $line
+        if ($batch.Count -ge $batchSz) {
+            $batches += ,@($batch)
+            $batch = @()
+        }
+    }
+    if ($batch.Count -gt 0) { $batches += ,@($batch) }
+
+    $batchNum = 0
+    foreach ($batchItems in $batches) {
+        $batchNum++
+        Write-Both "  Batch $batchNum/$($batches.Count) [$($batchItems.Count) targets]..." DarkGray
+
+        $jobs = @()
+        foreach ($line in $batchItems) {
+            $parts = $line.Split("|")
+            $p = $parts[0]
+            $n = $parts[1]
+            Write-Host "    Starting $n..." -ForegroundColor DarkGray
+
+            $jobs += Start-Job -ScriptBlock {
+                param($r, $pkg, $name, $fuzzSec, $jobTimeout)
+                Set-Location $r
+                # Точный regexp: ^FuzzMatcher$ не матчит FuzzMatcherSafety
+                $pattern = "^" + $name + '$'
+                $o = & go test -run=NONE "-fuzz=$pattern" "-fuzztime=${fuzzSec}s" "-timeout=${jobTimeout}s" $pkg 2>&1
+                return [PSCustomObject]@{ Name = $name; Out = ($o -join "`n"); Code = $LASTEXITCODE }
+            } -ArgumentList $root, $p, $n, $fuzzSec, $jobTimeout
+        }
+
+        $results = $jobs | Wait-Job | Receive-Job
+        $jobs | Remove-Job -Force
+
+        foreach ($r in $results) {
+            Write-Log "--- $($r.Name) ---"
+            Write-Log $r.Out
+            if ($r.Code -ne 0) {
+                Write-Host "  [FAIL] $($r.Name)" -ForegroundColor Red
+                $fuzzFailed = $true
+            }
+        }
+    }
+
+    if ($fuzzFailed) {
+        Write-Both "Fuzzing found issues!  (подробности: $LogFile)" Red
+        return $false
+    }
+    Write-Both "Fuzzing passed." Green
+    return $true
+}
+
+# ── Точка входа ───────────────────────────────────────────────────────────────
+switch ($Type) {
+    "race" {
+        $ok = Run-Race
+        exit ([int](-not $ok))
+    }
+    "coverage" {
+        $ok = Run-Coverage
+        exit ([int](-not $ok))
+    }
+    "fuzz" {
+        $ok = Run-Fuzz $FuzzTime $BatchSize
+        exit ([int](-not $ok))
+    }
+    "all" {
+        Write-Both "=== ALL: race -> coverage -> fuzz ($FuzzTime s, batch=$BatchSize) ===" Magenta
+
+        $ok = Run-Race
+        if (-not $ok) { Write-Both "ALL: остановлено на race." Red; exit 1 }
+
+        $ok = Run-Coverage
+        if (-not $ok) { Write-Both "ALL: остановлено на coverage." Red; exit 1 }
+
+        $ok = Run-Fuzz $FuzzTime $BatchSize
+        if (-not $ok) { Write-Both "ALL: fuzz нашёл проблемы." Red; exit 1 }
+
+        Write-Both "ALL: все этапы прошли успешно." Green
+        exit 0
+    }
+    default {
+        Write-Host "Usage: .\test.ps1 [-Type race|coverage|fuzz|all] [-FuzzTime <sec>] [-BatchSize <n>]" -ForegroundColor Yellow
         exit 1
     }
-
-    Write-Host "Step 2: starting 22 fuzz tests in parallel..." -ForegroundColor Yellow
-    Write-Host ""
-
-    $fuzzTargets = @(
-        ,@("./internal/config/",   "FuzzNormalizeRuleValue")
-        ,@("./internal/config/",   "FuzzDetectRuleType")
-        ,@("./internal/config/",   "FuzzParseVLESSURL")
-        ,@("./internal/config/",   "FuzzRoutingRoundTrip")
-        ,@("./internal/config/",   "FuzzSanitizeRoutingConfig")
-        ,@("./internal/apprules/", "FuzzNormalizePattern")
-        ,@("./internal/apprules/", "FuzzMatcher`$")
-        ,@("./internal/apprules/", "FuzzMatcherSafety")
-        ,@("./internal/apprules/", "FuzzMatchAny")
-        ,@("./internal/xray/",     "FuzzIsTunConflict")
-        ,@("./internal/xray/",     "FuzzTailWriter")
-        ,@("./internal/xray/",     "FuzzCrashDetection")
-        ,@("./internal/wintun/",   "FuzzStopFileContent")
-        ,@("./internal/wintun/",   "FuzzGapFileContent")
-        ,@("./internal/wintun/",   "FuzzMarkerSequence")
-        ,@("./internal/wintun/",   "FuzzPollUntilFreeFiles")
-        ,@("./internal/api/",      "FuzzHandleAddRule")
-        ,@("./internal/api/",      "FuzzHandleBulkReplace")
-        ,@("./internal/api/",      "FuzzHandleImport")
-        ,@("./internal/api/",      "FuzzDeleteRuleValue")
-        ,@("./internal/api/",      "FuzzCORSOrigin")
-        ,@("./internal/api/",      "FuzzSetDefault")
-    )
-
-    $rootDir = $PWD.Path
-    $timeoutSec = $FuzzTime + 60
-    $jobs = @()
-    foreach ($t in $fuzzTargets) {
-        $pkg  = $t[0]
-        $name = $t[1]
-        Write-Host "  Start: $name  ($pkg)" -ForegroundColor Gray
-        $jobs += Start-Job -ScriptBlock {
-            param($root, $p, $n, $ft)
-            Set-Location $root
-            $out = & go test "-run=^$" "-fuzz=$n" "-fuzztime=${ft}s" $p 2>&1
-            [PSCustomObject]@{
-                Package  = $p
-                Name     = $n
-                Output   = ($out -join "`n")
-                ExitCode = $LASTEXITCODE
-            }
-        } -ArgumentList $rootDir, $pkg, $name, $FuzzTime
-    }
-
-    Write-Host ""
-    Write-Host "Waiting for $($jobs.Count) jobs (timeout: $timeoutSec s)..." -ForegroundColor Yellow
-    $null = $jobs | Wait-Job -Timeout $timeoutSec
-    $results = $jobs | Receive-Job
-    $jobs | Remove-Job -Force
-
-    Write-Host ""
-    Write-Host "--- Fuzz results ---" -ForegroundColor Cyan
-    $anyFail = $false
-    foreach ($r in $results) {
-        if ($r.ExitCode -eq 0) {
-            Write-Host "  [OK]   $($r.Name)  ($($r.Package))" -ForegroundColor Green
-        } else {
-            Write-Host "  [FAIL] $($r.Name)  ($($r.Package))" -ForegroundColor Red
-            Write-Host $r.Output -ForegroundColor DarkRed
-            $anyFail = $true
-            $failed = $true
-        }
-    }
-    Write-Host ""
-    if ($anyFail) {
-        Write-Host "Fuzzer found bugs! Corpus in testdata/fuzz/<name>/" -ForegroundColor Red
-    } else {
-        Write-Host "All fuzz tests passed with no new crash cases." -ForegroundColor Green
-    }
-
-    Write-Footer
-    if ($failed) { exit 1 } else { exit 0 }
 }
-
-# ---- coverage ---------------------------------------------------------------
-if ($Type -eq "coverage") {
-    Write-Header "Tests + Coverage"
-    Run-Go "go test -race -coverprofile=coverage.out ./..." @(
-        "test", "-race", "-timeout=120s",
-        "-coverprofile=coverage.out", "-covermode=atomic", "./..."
-    )
-    if (-not $failed) {
-        $coverOut  = Join-Path $PWD "coverage.out"
-        $coverHtml = Join-Path $PWD "coverage.html"
-        & go tool cover -html $coverOut -o $coverHtml
-        Write-Host "Coverage summary:" -ForegroundColor Cyan
-        & go tool cover -func $coverOut | Select-String "total"
-        Write-Host ""
-        if (Test-Path $coverHtml) {
-            Write-Host "[OK] Report: coverage.html" -ForegroundColor Green
-            $open = Read-Host "Open in browser? (y/N)"
-            if ($open -eq "y" -or $open -eq "Y") { Invoke-Item $coverHtml }
-        } else {
-            Write-Host "[WARN] coverage.html was not created" -ForegroundColor Yellow
-        }
-    }
-    Write-Footer
-    if ($failed) { exit 1 } else { exit 0 }
-}
-
-# ---- bench ------------------------------------------------------------------
-if ($Type -eq "bench") {
-    Write-Header "Benchmarks"
-    Run-Go "go test -bench=. -benchmem ./..." @("test", "-bench=.", "-benchmem", "./...")
-    Write-Footer
-    if ($failed) { exit 1 } else { exit 0 }
-}
-
-# ---- unknown ----------------------------------------------------------------
-Write-Host "Unknown mode: $Type" -ForegroundColor Red
-Write-Host ""
-Write-Host "Usage:" -ForegroundColor Yellow
-Write-Host "  .\test.ps1              # Unit tests + race"
-Write-Host "  .\test.ps1 race         # Same"
-Write-Host "  .\test.ps1 fuzz         # All fuzz tests, 30s each"
-Write-Host "  .\test.ps1 fuzz 60      # Fuzz tests, 60s each"
-Write-Host "  .\test.ps1 coverage     # Tests + HTML coverage"
-Write-Host "  .\test.ps1 bench        # Benchmarks"
-exit 1

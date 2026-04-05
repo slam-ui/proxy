@@ -1,25 +1,56 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Сборка и упаковка proxy-client в папку dist/
+
+.DESCRIPTION
+    Структура проекта:
+      geosite/              исходные .bin файлы категорий сайтов
+      templates/            шаблоны для новых пользователей
+        routing.json        чистые правила роутинга (без личных доменов)
+        secret.key          заготовка для VLESS-ключа
+      dist/                 результат сборки (не коммитить личные файлы!)
+        proxy-client.exe
+        sing-box.exe
+        secret.key          <- НЕ перезаписывается если уже содержит vless://
+        README.txt
+        data/
+          routing.json      <- НЕ перезаписывается если уже существует
+          geosite-*.bin
+
+    Логика сохранения пользовательских данных:
+      - secret.key и data/routing.json НЕ перезаписываются при обычной сборке.
+      - Чтобы сбросить к шаблонам -- используйте -Clean или -ResetData.
+      - geosite-*.bin копируются из geosite/ всегда (они не редактируются вручную).
+
 .PARAMETER Release
-    Компилировать без отладочной информации и без консольного окна
+    Компилировать без отладочной информации и без консольного окна.
+
 .PARAMETER Clean
-    Полностью удалить dist/ перед сборкой
+    Полностью удалить dist/ перед сборкой (сбрасывает ВСЁ включая secret.key).
+
+.PARAMETER ResetData
+    Сбросить только data/routing.json и secret.key к шаблонам из templates/.
+
 .PARAMETER NoGui
-    Оставить консольное окно (удобно для отладки)
+    Оставить консольное окно (удобно для отладки).
+
 .PARAMETER SkipTests
-    Пропустить тесты
+    Пропустить тесты.
+
 .PARAMETER GoExePath
-    Явный путь к go.exe
+    Явный путь к go.exe (определяется автоматически если не указан).
+
 .EXAMPLE
-    .\build.ps1                  # Debug
-    .\build.ps1 -Release         # Release для раздачи
-    .\build.ps1 -Release -Clean  # Чистая Release-сборка
+    .\build.ps1                          # Debug-сборка, данные сохраняются
+    .\build.ps1 -Release                 # Release для раздачи
+    .\build.ps1 -Release -Clean          # Чистая Release-сборка с нуля
+    .\build.ps1 -ResetData               # Сбросить routing.json и secret.key к умолчаниям
 #>
 param(
     [switch]$Release,
     [switch]$Clean,
+    [switch]$ResetData,
     [switch]$NoGui,
     [switch]$SkipTests,
     [string]$GoExePath = ""
@@ -28,42 +59,44 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
-$DIST_DIR  = "dist"
-$BINARY    = "proxy-client.exe"
-$MAIN_PATH = ".\cmd\proxy-client"
-$DATA_DIR  = "$DIST_DIR\data"
+# Paths
+$DIST_DIR      = "dist"
+$DATA_DIR      = "$DIST_DIR\data"
+$GEOSITE_DIR   = "geosite"
+$TEMPLATES_DIR = "templates"
+$BINARY        = "proxy-client.exe"
+$MAIN_PATH     = ".\cmd\proxy-client"
 
 function Write-Banner([string]$text) {
-    $line = "-" * ($text.Length + 4)
-    Write-Host ""; Write-Host "  +$line+" -ForegroundColor Cyan
+    $w = $text.Length + 4
+    $line = "-" * $w
+    Write-Host ""
+    Write-Host "  +$line+" -ForegroundColor Cyan
     Write-Host "  |  $text  |" -ForegroundColor Cyan
-    Write-Host "  +$line+" -ForegroundColor Cyan; Write-Host ""
+    Write-Host "  +$line+" -ForegroundColor Cyan
+    Write-Host ""
 }
-function Write-Step([string]$text) { Write-Host ">> $text" -ForegroundColor Yellow }
-function Write-OK([string]$text)   { Write-Host "  OK  $text" -ForegroundColor Green }
-function Write-Skip([string]$text) { Write-Host "  ..  $text" -ForegroundColor DarkGray }
-function Write-Warn([string]$text) { Write-Host "  !!  $text" -ForegroundColor DarkYellow }
-function Write-Fail([string]$text) { Write-Host ""; Write-Host "  XX  $text" -ForegroundColor Red; Write-Host "" }
+function Write-Step([string]$text)  { Write-Host "  >> $text" -ForegroundColor Yellow }
+function Write-OK([string]$text)    { Write-Host "  OK $text" -ForegroundColor Green }
+function Write-Skip([string]$text)  { Write-Host "     $text" -ForegroundColor DarkGray }
+function Write-Warn([string]$text)  { Write-Host "  !! $text" -ForegroundColor DarkYellow }
+function Write-Fail([string]$text)  { Write-Host ""; Write-Host "  XX $text" -ForegroundColor Red; Write-Host "" }
 
 Write-Banner "proxy-client build"
 
 # Admin check
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
-        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
 
 if (-not $isAdmin) {
     Write-Step "Requesting Administrator rights..."
-
-    # Используем $PSCommandPath (более надежно) и фильтруем пустые значения
     $argList = @("-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$PSCommandPath`"")
-
-    # Добавляем параметры только если они переданы
     if ($GoExePath) { $argList += @("-GoExePath", "`"$GoExePath`"") }
     if ($Release)   { $argList += "-Release"   }
     if ($Clean)     { $argList += "-Clean"     }
+    if ($ResetData) { $argList += "-ResetData" }
     if ($NoGui)     { $argList += "-NoGui"     }
     if ($SkipTests) { $argList += "-SkipTests" }
-
     Start-Process powershell -Verb RunAs -ArgumentList $argList
     exit 0
 }
@@ -73,13 +106,23 @@ Write-Step "Locating Go toolchain..."
 if ($GoExePath -eq "") {
     try { $GoExePath = (Get-Command go -ErrorAction Stop).Source } catch {}
     if (-not $GoExePath) {
-        foreach ($c in @("C:\Program Files\Go\bin\go.exe","C:\Go\bin\go.exe","$env:LOCALAPPDATA\Programs\Go\bin\go.exe")) {
-            if (Test-Path $c) { $GoExePath = $c; break }
+        $candidates = @(
+            "C:\Program Files\Go\bin\go.exe",
+            "C:\Go\bin\go.exe",
+            "$env:LOCALAPPDATA\Programs\Go\bin\go.exe"
+        )
+        $sdkBase = Join-Path $env:USERPROFILE "sdk"
+        if (Test-Path $sdkBase) {
+            Get-ChildItem -Path $sdkBase -Directory -Filter "go*" |
+                Sort-Object Name -Descending |
+                ForEach-Object { $candidates += (Join-Path $_.FullName "bin\go.exe") }
         }
+        foreach ($c in $candidates) { if (Test-Path $c) { $GoExePath = $c; break } }
     }
 }
 if (-not $GoExePath -or -not (Test-Path $GoExePath)) {
-    Write-Fail "go.exe not found. Install from https://go.dev/dl/"; Read-Host "Press Enter"; exit 1
+    Write-Fail "go.exe not found. Install from https://go.dev/dl/"
+    Read-Host "Press Enter"; exit 1
 }
 Write-OK "$(& $GoExePath version)"
 
@@ -98,7 +141,8 @@ if ($running) {
         Start-Sleep -Milliseconds 800
     }
     if (Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue) {
-        Write-Fail "Could not stop proxy-client.exe -- close it manually and retry"; Read-Host "Press Enter"; exit 1
+        Write-Fail "Could not stop proxy-client.exe -- close it manually and retry"
+        Read-Host "Press Enter"; exit 1
     }
     Write-OK "Process stopped"
 }
@@ -107,10 +151,10 @@ if ($running) {
 if ($Clean -and (Test-Path $DIST_DIR)) {
     Write-Step "Cleaning dist/..."
     Remove-Item -Recurse -Force $DIST_DIR
-    Write-OK "Cleaned"
+    Write-OK "dist/ removed"
 }
 
-# Create directories
+# Create dirs
 foreach ($dir in @($DIST_DIR, $DATA_DIR)) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 }
@@ -127,10 +171,11 @@ if ($SkipTests) {
         Add-MpPreference -ExclusionPath $goTempDir   -ErrorAction SilentlyContinue
         Add-MpPreference -ExclusionPath $PSScriptRoot -ErrorAction SilentlyContinue
     } catch {}
-    $testOut = & $GoExePath test ./... -timeout 90s 2>&1
-    $testOut | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    $testOut = & $GoExePath test -race ./cmd/... ./internal/... -timeout 120s 2>&1
+    $testOut | ForEach-Object { Write-Host "     $_" -ForegroundColor DarkGray }
     if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Tests failed -- fix before building"; Read-Host "Press Enter"; exit 1
+        Write-Fail "Tests failed -- fix before building"
+        Read-Host "Press Enter"; exit 1
     }
     Write-OK "All tests passed"
 }
@@ -139,192 +184,225 @@ if ($SkipTests) {
 Write-Step "Compiling $BINARY..."
 $ldflags = ""
 if ($Release) {
-    $ldflags = "-s -w"; if (-not $NoGui) { $ldflags += " -H windowsgui" }
-    Write-Skip "Mode: Release (stripped$(if (-not $NoGui){', no console'}))"
+    $ldflags = "-s -w"
+    if (-not $NoGui) { $ldflags += " -H windowsgui" }
+    Write-Skip "Mode: Release (stripped$(if (-not $NoGui){', no console window'}))"
 } else {
     if (-not $NoGui) { $ldflags = "-H windowsgui" }
     Write-Skip "Mode: Debug"
 }
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
-$buildArgs = @("build","-o","$DIST_DIR\$BINARY")
-if ($ldflags -ne "") { $buildArgs += @("-ldflags",$ldflags) }
+$buildArgs = @("build", "-o", "$DIST_DIR\$BINARY")
+if ($ldflags -ne "") { $buildArgs += @("-ldflags", $ldflags) }
 $buildArgs += $MAIN_PATH
 & $GoExePath @buildArgs
 if ($LASTEXITCODE -ne 0) { Write-Fail "Compilation failed"; Read-Host "Press Enter"; exit 1 }
-Write-OK "$BINARY compiled ($([math]::Round((Get-Item "$DIST_DIR\$BINARY").Length/1MB,2)) MB)"
+$sizeMB = [math]::Round((Get-Item "$DIST_DIR\$BINARY").Length / 1MB, 2)
+Write-OK "$BINARY  ($sizeMB MB)"
 
-# Copy runtime files
-Write-Step "Copying runtime files to data/..."
-foreach ($f in (Get-ChildItem -Path "." -Filter "geosite-*.bin")) {
-    Copy-Item $f.FullName "$DATA_DIR\$($f.Name)" -Force
-    Write-Skip "data\$($f.Name)"
-}
-Copy-Item "routing.json" "$DATA_DIR\routing.json" -Force
-Write-OK "data\ ready ($(((Get-ChildItem $DATA_DIR).Count)) files)"
-
-# Placeholders
-Write-Step "Checking required files..."
-
-$singBoxDest = "$DIST_DIR\sing-box.exe"
-if (-not (Test-Path $singBoxDest)) {
-    New-Item -ItemType File -Path $singBoxDest | Out-Null
-    Write-Warn "sing-box.exe  placeholder created"
-    Write-Skip "  Download: https://github.com/SagerNet/sing-box/releases"
-    Write-Skip "  Extract sing-box.exe into dist\"
-} elseif ((Get-Item $singBoxDest).Length -eq 0) {
-    Write-Warn "sing-box.exe  still a placeholder (0 bytes)"
+# Geosite: always refresh from geosite/
+Write-Step "Copying geosite databases..."
+if (-not (Test-Path $GEOSITE_DIR)) {
+    Write-Warn "geosite/ folder not found -- skipping"
 } else {
-    Write-OK "sing-box.exe  present ($([math]::Round((Get-Item $singBoxDest).Length/1MB,1)) MB)"
-}
-
-$secretDest = "$DIST_DIR\secret.key"
-if (-not (Test-Path $secretDest)) {
-    @(
-        "# ----------------------------------------------------------------------",
-        "# proxy-client -- VLESS connection key",
-        "# ----------------------------------------------------------------------",
-        "#",
-        "# Paste your VLESS link below. Lines starting with # are ignored.",
-        "# Example:",
-        "#   vless://UUID@HOST:PORT?encryption=none&security=reality&sni=SNI&pbk=KEY&sid=ID&fp=chrome&flow=xtls-rprx-vision",
-        "#",
-        "# Get your link from your VPN provider or self-hosted server.",
-        "# ----------------------------------------------------------------------"
-    ) | Set-Content -Path $secretDest -Encoding UTF8
-    Write-Warn "secret.key    placeholder created -- open and paste your VLESS link"
-} else {
-    if ((Get-Content $secretDest -Raw) -match "vless://") {
-        Write-OK "secret.key    VLESS link present"
+    $bins = Get-ChildItem -Path $GEOSITE_DIR -Filter "geosite-*.bin"
+    if ($bins.Count -eq 0) {
+        Write-Warn "No geosite-*.bin files found in geosite/"
     } else {
-        Write-Warn "secret.key    exists but no vless:// found -- check the file"
+        foreach ($f in $bins) {
+            Copy-Item $f.FullName "$DATA_DIR\$($f.Name)" -Force
+            Write-Skip "data\$($f.Name)  ($([math]::Round($f.Length/1KB,1)) KB)"
+        }
+        Write-OK "$($bins.Count) geosite databases copied"
     }
 }
 
-# README.txt
+# routing.json: preserve user's file, copy template only if missing or -ResetData
+Write-Step "Checking data\routing.json..."
+$routingDest     = "$DATA_DIR\routing.json"
+$routingTemplate = "$TEMPLATES_DIR\routing.json"
+$needRouting     = $ResetData -or -not (Test-Path $routingDest)
+
+if (-not (Test-Path $routingTemplate)) {
+    Write-Warn "templates\routing.json not found -- skipping"
+} elseif ($needRouting) {
+    Copy-Item $routingTemplate $routingDest -Force
+    if ($ResetData) { Write-OK "data\routing.json  reset to defaults (-ResetData)" }
+    else            { Write-OK "data\routing.json  created from template" }
+} else {
+    Write-Skip "data\routing.json  preserved  (use -ResetData to reset to defaults)"
+}
+
+# sing-box.exe placeholder
+Write-Step "Checking sing-box.exe..."
+$singBoxDest = "$DIST_DIR\sing-box.exe"
+if (-not (Test-Path $singBoxDest)) {
+    New-Item -ItemType File -Path $singBoxDest | Out-Null
+    Write-Warn "sing-box.exe  placeholder created  (auto-downloaded on first run)"
+} elseif ((Get-Item $singBoxDest).Length -eq 0) {
+    Write-Skip "sing-box.exe  placeholder  (will be downloaded on first run)"
+} else {
+    $sbMB = [math]::Round((Get-Item $singBoxDest).Length / 1MB, 1)
+    Write-OK "sing-box.exe  present ($sbMB MB)"
+}
+
+# secret.key: preserve user's file, copy template only if missing or -ResetData
+Write-Step "Checking secret.key..."
+$secretDest     = "$DIST_DIR\secret.key"
+$secretTemplate = "$TEMPLATES_DIR\secret.key"
+$needSecret     = $ResetData -or -not (Test-Path $secretDest)
+
+if ($needSecret) {
+    if (Test-Path $secretTemplate) {
+        Copy-Item $secretTemplate $secretDest -Force
+    } else {
+        @(
+            "# ------------------------------------------------------------------",
+            "# proxy-client  --  VLESS connection key",
+            "# ------------------------------------------------------------------",
+            "#",
+            "# Paste your VLESS link below (lines starting with # are ignored).",
+            "# ------------------------------------------------------------------"
+        ) | Set-Content -Path $secretDest -Encoding UTF8
+    }
+    if ($ResetData) { Write-OK "secret.key  reset to template (-ResetData)" }
+    else            { Write-OK "secret.key  created from template" }
+} else {
+    $hasVless = (Get-Content $secretDest -Raw) -match "vless://"
+    if ($hasVless) { Write-OK "secret.key  VLESS link present (preserved)" }
+    else           { Write-Warn "secret.key  exists but no vless:// found -- open and paste your link" }
+}
+
+# README.txt: always regenerate (contains no personal data)
 $readmeDest = "$DIST_DIR\README.txt"
-$readmeContent = @"
-+==================================================================+
-|              proxy-client -- Quick Start Guide                   |
-+==================================================================+
+@"
++------------------------------------------------------------------+
+|              proxy-client  --  Quick Start Guide                 |
++------------------------------------------------------------------+
 
-REQUIREMENTS
-  - Windows 10 / 11 (64-bit)
-  - Administrator rights (required for TUN network interface)
+  Requirements
+  ------------
+  * Windows 10 / 11  (64-bit)
+  * Administrator rights  (needed for TUN network interface)
 
---- FIRST RUN: 3 STEPS -------------------------------------------
 
-  Step 1. Download sing-box.exe
-  --------------------------------
-  Go to: https://github.com/SagerNet/sing-box/releases
-  Download: sing-box-X.X.X-windows-amd64.zip
-  Extract sing-box.exe into this folder (next to proxy-client.exe).
+  First run -- 2 steps
+  --------------------
 
-  Step 2. Add your VLESS link
-  --------------------------------
-  Open secret.key in Notepad.
-  Delete all lines starting with # and paste your VLESS link.
-  Save the file. Example:
+  1. Add your VLESS link
+     Open secret.key in Notepad, delete the comment lines
+     and paste your VLESS link. Save the file.
 
-    vless://uuid@host:443?security=reality&sni=example.com&...
+     Example:
+       vless://UUID@HOST:443?security=reality&sni=www.microsoft.com
+                &pbk=PUBLIC_KEY&sid=SHORT_ID&fp=chrome
+                &flow=xtls-rprx-vision
 
-  Step 3. Run
-  --------------------------------
-  Double-click proxy-client.exe
-  (or right-click -> Run as Administrator)
+     Get your link from your server's control panel (e.g. Remnawave).
 
-  The icon will appear in the system tray (near the clock).
-  Open the control panel at: http://localhost:8080
+  2. Run proxy-client.exe
+     Right-click -> Run as Administrator  (or just double-click --
+     it will request elevation automatically).
 
---- FOLDER STRUCTURE ----------------------------------------------
+     A tray icon will appear near the clock.
+     Open the control panel: http://localhost:8080
 
-  proxy-client.exe   main application
-  sing-box.exe       proxy core (download separately, see Step 1)
-  secret.key         your VLESS connection link (keep it private!)
+
+  Folder layout
+  -------------
+  proxy-client.exe    main application
+  sing-box.exe        proxy core  (auto-downloaded on first run)
+  secret.key          your VLESS link  (keep it private!)
+  README.txt          this file
 
   data\
-    routing.json     routing rules (edit via the UI, not manually)
-    geosite-*.bin    site category databases for routing
+    routing.json      routing rules  (edit in the UI, not manually)
+    geosite-*.bin     site category databases
 
-  README.txt         this file
 
---- USAGE ---------------------------------------------------------
+  Usage
+  -----
+  Tray icon   right-click -> Enable / Disable / Quit
+  Web UI      http://localhost:8080
 
-  Tray icon: right-click -> Enable / Disable / Quit
-  Web UI:    http://localhost:8080
+  In the Rules tab you can add domains, IPs, or .exe processes
+  and assign them:  proxy  /  direct  /  block.
 
-  In the Rules tab you can add a domain, IP, or .exe process
-  and assign it: proxy / direct / block.
 
---- AUTOSTART -----------------------------------------------------
-
+  Autostart
+  ---------
   Web UI -> Settings -> Start with Windows
 
---- TROUBLESHOOTING -----------------------------------------------
 
-  "Cannot create a file when that file already exists"
-    This is a wintun (TUN driver) issue. The client fixes it
-    automatically on the next launch. Wait ~30 seconds.
-
-  Tray icon does not appear
-    Make sure you run as Administrator.
-
-  Proxy does not work
-    - Check that sing-box.exe is not 0 bytes (see Step 1).
-    - Open http://localhost:8080 and check the Log tab.
-    - Verify your VLESS link is correct (see Step 2).
-
-  Log files (created next to proxy-client.exe):
-    proxy-client.log    main log
-    anomaly-*.log       crash diagnostics (created on sing-box errors)
-
---- UPDATING ------------------------------------------------------
-
+  Updating
+  --------
   Replace proxy-client.exe only.
   Do NOT replace data\ or secret.key -- your rules and key are there.
 
-+==================================================================+
-"@
-$readmeContent | Set-Content -Path $readmeDest -Encoding UTF8
-Write-OK "README.txt $(if ((Test-Path $readmeDest)){'updated'}else{'created'})"
+
+  Troubleshooting
+  ---------------
+  Tray icon does not appear
+    -> Make sure you run as Administrator.
+
+  Proxy does not work
+    -> Open http://localhost:8080 and check the Log tab.
+    -> Verify your VLESS link in secret.key.
+    -> If sing-box.exe is 0 bytes -- delete it and restart
+       (it will be re-downloaded automatically).
+
+  "Cannot create a file when that file already exists"
+    -> Wintun driver issue. The client fixes it automatically.
+       Wait ~30 seconds and try again.
+
+  Log files (created next to proxy-client.exe):
+    proxy-client.log      main log
+    anomaly-*.log         crash diagnostics
+
++------------------------------------------------------------------+
+"@ | Set-Content -Path $readmeDest -Encoding UTF8
+Write-OK "README.txt  updated"
 
 # Summary
 Write-Host ""
-Write-Host "  +--------------------------------------------+" -ForegroundColor Cyan
-Write-Host "  |            dist/ contents                  |" -ForegroundColor Cyan
-Write-Host "  +--------------------------------------------+" -ForegroundColor Cyan
+Write-Host "  +-----------------------------------------------------+" -ForegroundColor Cyan
+Write-Host "  |  dist/ contents                                     |" -ForegroundColor Cyan
+Write-Host "  +-----------------------------------------------------+" -ForegroundColor Cyan
 
 Get-ChildItem $DIST_DIR -Recurse | Sort-Object FullName | ForEach-Object {
     $rel = $_.FullName.Substring((Resolve-Path $DIST_DIR).Path.Length + 1)
     if ($_.PSIsContainer) {
-        Write-Host ("  [{0}/]" -f $rel) -ForegroundColor DarkGray
+        Write-Host ("  [{0}\]" -f $rel) -ForegroundColor DarkGray
     } else {
-        $size = if ($_.Length -ge 1MB)     { "{0:N1} MB" -f ($_.Length/1MB)   }
-                elseif ($_.Length -ge 1KB) { "{0:N1} KB" -f ($_.Length/1KB)   }
+        $size = if ($_.Length -ge 1MB)     { "{0:N1} MB" -f ($_.Length / 1MB) }
+                elseif ($_.Length -ge 1KB) { "{0:N1} KB" -f ($_.Length / 1KB) }
                 else                       { "{0} B"     -f $_.Length          }
         $col = if ($_.Length -eq 0) { "DarkYellow" } else { "White" }
-        Write-Host ("  {0,-44} {1,8}" -f $rel, $size) -ForegroundColor $col
+        Write-Host ("  {0,-48} {1,8}" -f $rel, $size) -ForegroundColor $col
     }
 }
 
 Write-Host ""
-Write-Host "  Status:" -ForegroundColor Cyan
+Write-Host "  +-----------------------------------------------------+" -ForegroundColor Cyan
+Write-Host "  |  Status                                             |" -ForegroundColor Cyan
+Write-Host "  +-----------------------------------------------------+" -ForegroundColor Cyan
 
 $sbOK = (Test-Path "$DIST_DIR\sing-box.exe") -and ((Get-Item "$DIST_DIR\sing-box.exe").Length -gt 0)
 $skOK = (Test-Path "$DIST_DIR\secret.key")   -and ((Get-Content "$DIST_DIR\secret.key" -Raw) -match "vless://")
 
-if ($sbOK) { Write-Host "    [OK] sing-box.exe  ready" -ForegroundColor Green
-} else      { Write-Host "    [!!] sing-box.exe  download needed -> https://github.com/SagerNet/sing-box/releases" -ForegroundColor Yellow }
+if ($sbOK) { Write-Host "  [OK] sing-box.exe  ready" -ForegroundColor Green }
+else        { Write-Host "  [..] sing-box.exe  will be downloaded automatically on first run" -ForegroundColor DarkGray }
 
-if ($skOK) { Write-Host "    [OK] secret.key   VLESS link present" -ForegroundColor Green
-} else      { Write-Host "    [!!] secret.key   paste your VLESS link into dist\secret.key" -ForegroundColor Yellow }
+if ($skOK) { Write-Host "  [OK] secret.key    VLESS link present" -ForegroundColor Green }
+else        { Write-Host "  [!!] secret.key    open and paste your VLESS link" -ForegroundColor Yellow }
 
 Write-Host ""
-if ($sbOK -and $skOK) {
+if ($skOK) {
     Write-Host "  Ready!  Run:  .\dist\proxy-client.exe" -ForegroundColor Green
 } else {
-    Write-Host "  Complete the steps above, then run:" -ForegroundColor Yellow
-    Write-Host "    .\dist\proxy-client.exe" -ForegroundColor Cyan
-    Write-Host "  See dist\README.txt for full instructions." -ForegroundColor DarkGray
+    Write-Host "  Next: open dist\secret.key and paste your VLESS link." -ForegroundColor Yellow
+    Write-Host "  Then: .\dist\proxy-client.exe" -ForegroundColor Cyan
+    Write-Host "  Docs: dist\README.txt" -ForegroundColor DarkGray
 }
 Write-Host ""
-Read-Host "Press Enter to close"
+Read-Host "  Press Enter to close"

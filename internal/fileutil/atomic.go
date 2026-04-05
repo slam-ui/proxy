@@ -42,9 +42,16 @@ func WriteAtomic(dst string, data []byte, perm fs.FileMode) error {
 	}()
 
 	_, writeErr := f.Write(data)
+	// BUG FIX: fsync перед закрытием — гарантирует физическую запись на диск.
+	// Без Sync() при BSOD/power loss файл может оказаться пустым или содержать мусор
+	// после атомарного rename. Источник: Tailscale atomicfile, etcd fileutil.
+	syncErr := f.Sync()
 	closeErr := f.Close()
 	if writeErr != nil {
 		return fmt.Errorf("fileutil.WriteAtomic: write tmp: %w", writeErr)
+	}
+	if syncErr != nil {
+		return fmt.Errorf("fileutil.WriteAtomic: sync tmp: %w", syncErr)
 	}
 	if closeErr != nil {
 		return fmt.Errorf("fileutil.WriteAtomic: close tmp: %w", closeErr)

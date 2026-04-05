@@ -272,7 +272,10 @@ func TestValidateVLESSParams(t *testing.T) {
 		{"missing address", func(p *VLESSParams) { p.Address = "" }, true},
 		{"missing UUID", func(p *VLESSParams) { p.UUID = "" }, true},
 		{"missing SNI", func(p *VLESSParams) { p.SNI = "" }, true},
-		{"missing PublicKey", func(p *VLESSParams) { p.PublicKey = "" }, true},
+		// missing PublicKey → plain TLS режим (нет Reality) → ошибки нет.
+		// BUG FIX: раньше PublicKey был обязателен безусловно, что ломало
+		// подключение к серверам без Reality. Теперь пустой PublicKey = plain TLS.
+		{"missing PublicKey", func(p *VLESSParams) { p.PublicKey = "" }, false},
 		{"missing ShortID", func(p *VLESSParams) { p.ShortID = "" }, true},
 		{"port 0", func(p *VLESSParams) { p.Port = 0 }, true},
 		{"port 70000", func(p *VLESSParams) { p.Port = 70000 }, true},

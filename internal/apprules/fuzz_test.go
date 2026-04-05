@@ -10,6 +10,7 @@ package apprules
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +94,7 @@ func FuzzMatcher(f *testing.F) {
 		{"a", strings.Repeat("a", 10000)},
 		// Инъекции в wildcard
 		{"[abc]", "a"},
-		{"[", "a"},   // невалидный glob — не должен паниковать
+		{"[", "a"}, // невалидный glob — не должен паниковать
 		{"]", "a"},
 		{"[!abc]", "d"},
 		// NUL байты
@@ -183,8 +184,16 @@ func FuzzMatcherSafety(f *testing.F) {
 			done <- result
 		}()
 
-		// S1000: простой receive вместо select с одним case
-		<-done
+		// BUG FIX (фаззер): wildcardMatch мог зависать на патологических входах.
+		// После добавления защиты от больших входов (n*m > 50M → false),
+		// этот таймаут редко срабатывает, но оставляем 10s на случай.
+		// Добавляем явный таймаут, чтобы фаззер получил внятный FAIL вместо
+		// "fuzzing process hung or terminated unexpectedly: exit status 2".
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Match зависла более 10 секунд — возможный бесконечный цикл")
+		}
 	})
 }
 

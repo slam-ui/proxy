@@ -356,7 +356,7 @@ func TestPreWarmProxyConnection_InvalidAddr_NoPanic(t *testing.T) {
 		}
 	}()
 	log := logger.NewNop()
-	preWarmProxyConnection("invalid-addr", log)
+	preWarmProxyConnection(context.Background(), "invalid-addr", nil, log)
 }
 
 func TestPreWarmProxyConnection_EmptyAddr_NoPanic(t *testing.T) {
@@ -366,7 +366,7 @@ func TestPreWarmProxyConnection_EmptyAddr_NoPanic(t *testing.T) {
 		}
 	}()
 	log := logger.NewNop()
-	preWarmProxyConnection("", log)
+	preWarmProxyConnection(context.Background(), "", nil, log)
 }
 
 func TestPreWarmProxyConnection_NilLogger_NoPanic(t *testing.T) {
@@ -375,13 +375,13 @@ func TestPreWarmProxyConnection_NilLogger_NoPanic(t *testing.T) {
 			t.Errorf("preWarmProxyConnection with nil logger panicked: %v", r)
 		}
 	}()
-	preWarmProxyConnection("127.0.0.1:9999", nil)
+	preWarmProxyConnection(context.Background(), "127.0.0.1:9999", nil, nil)
 }
 
 func TestPreWarmProxyConnection_ClosedPort_ReturnsQuickly(t *testing.T) {
 	log := logger.NewNop()
 	start := time.Now()
-	preWarmProxyConnection("127.0.0.1:19999", log)
+	preWarmProxyConnection(context.Background(), "127.0.0.1:19999", nil, log)
 	elapsed := time.Since(start)
 	if elapsed > 15*time.Second {
 		t.Errorf("preWarmProxyConnection took too long: %v", elapsed)
@@ -397,6 +397,27 @@ func TestHandleConfigError_NilError_ReturnsFalse(t *testing.T) {
 	result := app.handleConfigError(nil)
 	if result {
 		t.Error("handleConfigError(nil) should return false")
+	}
+}
+func TestWaitForSecretKey_WaitsUntilVLESSKeyAppears(t *testing.T) {
+	dir := t.TempDir()
+	secretPath := filepath.Join(dir, "secret.key")
+	cfg := DefaultAppConfig()
+	cfg.SecretFile = secretPath
+	app := NewApp(cfg, &bytes.Buffer{})
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if err := os.WriteFile(secretPath, []byte("vless://00000000-0000-0000-0000-000000000000@example.com:443"), 0644); err != nil {
+			t.Fatalf("failed to write secret.key: %v", err)
+		}
+	}()
+
+	start := time.Now()
+	app.waitForSecretKey()
+	elapsed := time.Since(start)
+	if elapsed > 1*time.Second {
+		t.Errorf("waitForSecretKey took too long: %v", elapsed)
 	}
 }
 

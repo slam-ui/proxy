@@ -1,17 +1,20 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"proxyclient/internal/config"
-	"proxyclient/internal/netutil"
+	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
@@ -20,6 +23,61 @@ import (
 )
 
 var routingConfigPath = config.DataDir + "/routing.json"
+
+// tryHotReload перезагружает конфиг sing-box через Clash API без остановки процесса.
+// Возвращает nil при успехе, ошибку если API недоступен → вызывающий делает полный перезапуск.
+func tryHotReload(configPath string) error {
+	absPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"path": absPath, "force": true})
+	req, err := http.NewRequest(http.MethodPut,
+		"http://"+config.ClashAPIAddr+"/configs", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("clash api reload status %d: %s", resp.StatusCode, b)
+	}
+	return nil
+}
+
+// waitForSingBoxReady опрашивает Clash API каждые 200ms пока sing-box не ответит.
+// Намного быстрее фиксированного estimatedDone + 35с: sing-box обычно готов за 2–5с.
+func waitForSingBoxReady(ctx context.Context, log logger.Logger) error {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(60 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("sing-box не ответил за 60 секунд")
+		case <-ticker.C:
+			resp, err := client.Get("http://" + config.ClashAPIAddr + "/")
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode < 500 {
+					log.Info("Sing-box готов (Clash API отвечает)")
+					return nil
+				}
+			}
+		}
+	}
+}
 
 // isValidAction возвращает true если action — одно из допустимых значений.
 // BUG FIX #18: валидация action дублировалась в 4 местах (handleAddRule,
@@ -30,12 +88,86 @@ func isValidAction(a config.RuleAction) bool {
 
 // applyState хранит состояние последнего применения правил
 type applyState struct {
-	mu            sync.Mutex
-	running       bool
-	lastErr       string
-	lastPID       int
-	startedAt     time.Time // когда начался apply
-	estimatedDone time.Time // оценочное время завершения
+	mu              sync.Mutex
+	running         bool
+	lastErr         string
+	validationError string // B-1: ошибка при валидации конфига через sing-box check
+	lastPID         int
+	startedAt       time.Time // когда начался apply
+	estimatedDone   time.Time // оценочное время завершения
+	reloadMode      string    // B-11: "hotreload" | "restart" | ""
+}
+
+// routingDiff содержит сводку изменений между двумя состояниями routing конфига.
+// B-11: вычисляется при каждом handleApply для логирования и ответа клиенту.
+type routingDiff struct {
+	RulesAdded           int  `json:"rules_added"`
+	RulesRemoved         int  `json:"rules_removed"`
+	RulesTotal           int  `json:"rules_total"`
+	DefaultActionChanged bool `json:"default_action_changed"`
+	ProcessRulesChanged  bool `json:"process_rules_changed"` // BUG FIX: при изменении process-правил нужен полный перезапуск
+}
+
+// hasProcessRules проверяет есть ли в конфиге process-правила
+func hasProcessRules(cfg *config.RoutingConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, rule := range cfg.Rules {
+		if rule.Type == config.RuleTypeProcess {
+			return true
+		}
+	}
+	return false
+}
+
+// computeRoutingDiff вычисляет разницу между двумя конфигурациями.
+// Если old == nil — все правила в new считаются добавленными.
+func computeRoutingDiff(old, newCfg *config.RoutingConfig) routingDiff {
+	if old == nil {
+		return routingDiff{
+			RulesAdded:          len(newCfg.Rules),
+			RulesTotal:          len(newCfg.Rules),
+			ProcessRulesChanged: hasProcessRules(newCfg),
+		}
+	}
+
+	oldSet := make(map[string]struct{}, len(old.Rules))
+	for _, r := range old.Rules {
+		oldSet[r.Value] = struct{}{}
+	}
+	newSet := make(map[string]struct{}, len(newCfg.Rules))
+	for _, r := range newCfg.Rules {
+		newSet[r.Value] = struct{}{}
+	}
+
+	added := 0
+	for v := range newSet {
+		if _, ok := oldSet[v]; !ok {
+			added++
+		}
+	}
+	removed := 0
+	for v := range oldSet {
+		if _, ok := newSet[v]; !ok {
+			removed++
+		}
+	}
+
+	// BUG FIX: обнаруживаем изменение в process-правилах.
+	// Hot-reload через Clash API не может активировать find_process флаг —
+	// нужен полный перезапуск при добавлении/удалении любого process-правила.
+	oldHasProcess := hasProcessRules(old)
+	newHasProcess := hasProcessRules(newCfg)
+	processRulesChanged := oldHasProcess != newHasProcess
+
+	return routingDiff{
+		RulesAdded:           added,
+		RulesRemoved:         removed,
+		RulesTotal:           len(newCfg.Rules),
+		DefaultActionChanged: old.DefaultAction != newCfg.DefaultAction,
+		ProcessRulesChanged:  processRulesChanged,
+	}
 }
 
 // TunHandlers обработчики маршрутизации
@@ -45,6 +177,7 @@ type TunHandlers struct {
 	proxyManager proxy.Manager
 	mu           sync.RWMutex
 	routing      *config.RoutingConfig
+	lastApplied  *config.RoutingConfig // B-11: состояние при последнем apply для diff
 	apply        applyState
 }
 
@@ -78,6 +211,7 @@ func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
 	s.router.HandleFunc("/api/tun/apply/status", h.handleApplyStatus).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/tun/export", h.handleExport).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/tun/import", h.handleImport).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/tun/turn", h.handleManualTURN).Methods("POST", "OPTIONS")
 
 	// Сохраняем ссылку чтобы handleConnect мог вызвать TriggerApply при смене сервера.
 	s.tunHandlers = h
@@ -85,10 +219,48 @@ func (s *Server) SetupTunRoutes(xrayCfg xray.Config) *TunHandlers {
 	return h
 }
 
+// handleManualTURN POST /api/tun/turn — ручное включение/выключение TURN туннеля.
+// Body: {"enabled": true} или {"enabled": false}
+// Когда enabled=true, retryLoop не будет автоматически возвращать на direct-соединение.
+func (h *TunHandlers) handleManualTURN(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+		return
+	}
+
+	h.server.configMu.RLock()
+	fn := h.server.config.ManualTURNFn
+	h.server.configMu.RUnlock()
+
+	if fn == nil {
+		h.server.respondError(w, http.StatusServiceUnavailable,
+			"мониторинг соединения ещё не запущен — подождите несколько секунд после старта")
+		return
+	}
+
+	if err := fn(req.Enabled); err != nil {
+		h.server.logger.Error("handleManualTURN: ошибка переключения TURN: %v", err)
+		h.server.respondError(w, http.StatusInternalServerError, "ошибка переключения: "+err.Error())
+		return
+	}
+
+	msg := "TURN туннель выключен"
+	if req.Enabled {
+		msg = "TURN туннель включён вручную"
+	}
+	h.server.respondJSON(w, http.StatusOK, MessageResponse{Message: msg, Success: true})
+}
+
 // TriggerApply запускает перегенерацию конфига и перезапуск sing-box без HTTP-контекста.
 // Вызывается из handleConnect после обновления secret.key.
-// Возвращает ошибку если применение уже запущено (не блокирует).
+// Возвращает ошибку если применение уже запущено или идёт crash-recovery (не блокирует).
 func (h *TunHandlers) TriggerApply() error {
+	if h.server.IsRestarting() {
+		return fmt.Errorf("sing-box восстанавливается после сбоя TUN — повторите позже")
+	}
 	h.apply.mu.Lock()
 	if h.apply.running {
 		h.apply.mu.Unlock()
@@ -97,7 +269,7 @@ func (h *TunHandlers) TriggerApply() error {
 	h.apply.running = true
 	h.apply.lastErr = ""
 	h.apply.startedAt = time.Now()
-	h.apply.estimatedDone = time.Now().Add(35 * time.Second)
+	h.apply.estimatedDone = time.Now().Add(5 * time.Second)
 	h.apply.mu.Unlock()
 
 	h.mu.RLock()
@@ -110,21 +282,45 @@ func (h *TunHandlers) TriggerApply() error {
 
 	tmpConfigPath := h.xrayConfig.ConfigPath + ".pending"
 	if err := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, tmpConfigPath, snapshot); err != nil {
-		if _, statErr := os.Stat(h.xrayConfig.ConfigPath); statErr != nil {
-			// Старого конфига нет и новый сгенерировать не удалось — критично.
-			h.apply.mu.Lock()
-			h.apply.running = false
-			h.apply.lastErr = err.Error()
-			h.apply.mu.Unlock()
-			return fmt.Errorf("GenerateSingBoxConfig: %w", err)
-		}
-		// Новый конфиг не сгенерировался, но старый есть — применяем с ним.
-		h.server.logger.Warn("TriggerApply: pre-validate не прошла (%v) — применим с существующим конфигом", err)
 		_ = os.Remove(tmpConfigPath)
-		tmpConfigPath = ""
+		h.apply.mu.Lock()
+		h.apply.running = false
+		h.apply.lastErr = err.Error()
+		h.apply.mu.Unlock()
+		return fmt.Errorf("GenerateSingBoxConfig: %w", err)
 	}
 
 	go h.doApply(snapshot, tmpConfigPath)
+	return nil
+}
+
+// TriggerApplyWithConfig запускает перезапуск sing-box с уже готовым конфигом на диске.
+// В отличие от TriggerApply, НЕ перегенерирует конфиг — использует тот что уже лежит
+// по configPath. Предназначен для applyTURNMode: конфиг уже записан с TURN override,
+// перегенерация через GenerateSingBoxConfig уничтожила бы его (bug: TURN не работал).
+func (h *TunHandlers) TriggerApplyWithConfig() error {
+	h.apply.mu.Lock()
+	if h.apply.running {
+		h.apply.mu.Unlock()
+		return fmt.Errorf("применение уже выполняется")
+	}
+	h.apply.running = true
+	h.apply.lastErr = ""
+	h.apply.startedAt = time.Now()
+	h.apply.estimatedDone = time.Now().Add(5 * time.Second)
+	h.apply.mu.Unlock()
+
+	h.mu.RLock()
+	snapshot := &config.RoutingConfig{
+		DefaultAction: h.routing.DefaultAction,
+		Rules:         make([]config.RoutingRule, len(h.routing.Rules)),
+	}
+	copy(snapshot.Rules, h.routing.Rules)
+	h.mu.RUnlock()
+
+	// Используем существующий конфиг (уже записан вызывающей стороной с TURN override).
+	// tmpConfigPath="" означает для doApply: не переименовывать, применять текущий config.
+	go h.doApply(snapshot, "")
 	return nil
 }
 
@@ -369,6 +565,15 @@ func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
 
 // handleApply POST /api/tun/apply — запускает перезапуск асинхронно и сразу возвращает ответ
 func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
+	// Блокируем apply пока handleCrash выполняет TUN recovery:
+	// оба пути вызывают wintun.RemoveStaleTunAdapter + PollUntilFree + запуск sing-box,
+	// параллельный запуск даёт двойной sing-box → повторный TUN conflict.
+	if h.server.IsRestarting() {
+		h.server.respondError(w, http.StatusConflict,
+			"sing-box восстанавливается после сбоя TUN — дождитесь завершения и повторите")
+		return
+	}
+
 	h.apply.mu.Lock()
 	if h.apply.running {
 		h.apply.mu.Unlock()
@@ -378,7 +583,7 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 	h.apply.running = true
 	h.apply.lastErr = ""
 	h.apply.startedAt = time.Now()
-	h.apply.estimatedDone = time.Now().Add(35 * time.Second) // BeforeRestart=30s + startup ~5s
+	h.apply.estimatedDone = time.Now().Add(5 * time.Second) // минимальный буфер; готовность через Clash API probe
 	h.apply.mu.Unlock()
 
 	h.mu.RLock()
@@ -391,28 +596,47 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 
 	// FIX: pre-validate конфиг до запуска горутины.
 	// Аналог nekoray BuildConfig — строит конфиг в памяти и возвращает ошибку
-	// ДО любых деструктивных действий. Sing-box продолжает работать если конфиг плохой.
+	// ДО любых деструктивных действий. Если новый конфиг не генерируется,
+	// apply должен завершиться с ошибкой, а не молча оставить старый конфиг.
 	tmpConfigPath := h.xrayConfig.ConfigPath + ".pending"
 	if err := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, tmpConfigPath, snapshot); err != nil {
-		// Проверяем: если geosite файла нет — предупреждаем но продолжаем со старым конфигом
-		if _, statErr := os.Stat(h.xrayConfig.ConfigPath); statErr != nil {
-			// Старого конфига нет — критично, отменяем
-			h.apply.mu.Lock()
-			h.apply.running = false
-			h.apply.lastErr = err.Error()
-			h.apply.mu.Unlock()
-			h.server.respondError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		// Geosite не найден, но старый конфиг есть — логируем и используем его
-		h.server.logger.Warn("pre-validate конфига не прошла (%v) — применим с существующим конфигом", err)
-		_ = os.Remove(tmpConfigPath) // убираем неполный tmp
-		tmpConfigPath = ""           // сигнал doApply: использовать существующий конфиг
+		_ = os.Remove(tmpConfigPath)
+		h.apply.mu.Lock()
+		h.apply.running = false
+		h.apply.lastErr = err.Error()
+		h.apply.validationError = err.Error()
+		h.apply.mu.Unlock()
+		h.server.logger.Error("Не удалось сгенерировать конфиг sing-box: %v", err)
+		h.server.respondError(w, http.StatusBadRequest, "не удалось сгенерировать конфиг: "+err.Error())
+		return
 	}
 
+	// B-11: вычисляем diff синхронно до запуска горутины
+	h.mu.RLock()
+	diff := computeRoutingDiff(h.lastApplied, snapshot)
+	h.mu.RUnlock()
+
+	// B-11: логируем diff при каждом apply
+	defaultChange := ""
+	if diff.DefaultActionChanged && h.lastApplied != nil {
+		defaultChange = fmt.Sprintf(", default_action %s→%s", h.lastApplied.DefaultAction, snapshot.DefaultAction)
+	}
+	processChange := ""
+	if diff.ProcessRulesChanged {
+		oldHas := hasProcessRules(h.lastApplied)
+		newHas := hasProcessRules(snapshot)
+		processChange = fmt.Sprintf(", process-правила: %v→%v ⚠️ ТРЕБУЕТСЯ ПОЛНЫЙ ПЕРЕЗАПУСК", oldHas, newHas)
+	}
+	h.server.logger.Info("B-11: apply запущен: +%d правила, -%d, итого %d%s%s",
+		diff.RulesAdded, diff.RulesRemoved, diff.RulesTotal, defaultChange, processChange)
+
 	h.server.respondJSON(w, http.StatusAccepted, map[string]interface{}{
-		"message": "применение запущено",
-		"rules":   len(snapshot.Rules),
+		"message":                "применение запущено",
+		"rules":                  len(snapshot.Rules),
+		"rules_added":            diff.RulesAdded,           // B-11
+		"rules_removed":          diff.RulesRemoved,         // B-11
+		"rules_total":            diff.RulesTotal,           // B-11
+		"default_action_changed": diff.DefaultActionChanged, // B-11
 	})
 
 	go h.doApply(snapshot, tmpConfigPath)
@@ -426,12 +650,73 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 		h.apply.lastErr = err
 		h.apply.mu.Unlock()
 	}
+	setValidationErr := func(err string) {
+		h.apply.mu.Lock()
+		h.apply.validationError = err
+		h.apply.mu.Unlock()
+	}
 
 	defer func() {
 		h.apply.mu.Lock()
 		h.apply.running = false
 		h.apply.mu.Unlock()
 	}()
+
+	// Hot reload: если sing-box уже запущен, пробуем перезагрузить конфиг без перезапуска.
+	// Это позволяет избежать PollUntilFree (60–180с) при изменении routing rules.
+	// BUG FIX: НО если процесс-правила изменились (добавились/удалились),
+	// hot-reload через Clash API не может активировать find_process флаг.
+	// В этом случае нужен ПОЛНЫЙ ПЕРЕЗАПУСК sing-box!
+	{
+		h.server.configMu.RLock()
+		hotMgr := h.server.config.XRayManager
+		h.server.configMu.RUnlock()
+
+		diff := computeRoutingDiff(h.lastApplied, snapshot)
+		skipHotReload := diff.ProcessRulesChanged
+		if skipHotReload {
+			h.server.logger.Info("Process-правила изменились (старые: %v, новые: %v) — пропускаем hot-reload",
+				hasProcessRules(h.lastApplied), hasProcessRules(snapshot))
+		}
+
+		if tmpConfigPath != "" && hotMgr != nil && hotMgr.IsRunning() && !skipHotReload {
+			if err := tryHotReload(tmpConfigPath); err == nil {
+				h.server.logger.Info("Hot reload конфига успешен, перезапуск не нужен")
+				finalPath := h.xrayConfig.ConfigPath
+				if renameErr := os.Rename(tmpConfigPath, finalPath); renameErr != nil {
+					h.server.logger.Warn("Hot reload: не удалось переименовать конфиг: %v", renameErr)
+				}
+				h.mu.Lock()
+				// B-11: вычисляем и логируем diff, обновляем lastApplied
+				diff := computeRoutingDiff(h.lastApplied, snapshot)
+				h.server.logger.Info("B-11: apply завершён: +%d, -%d, итого %d, reload_mode=hotreload",
+					diff.RulesAdded, diff.RulesRemoved, diff.RulesTotal)
+				h.lastApplied = snapshot
+				h.routing = snapshot
+				h.mu.Unlock()
+				h.apply.mu.Lock()
+				h.apply.reloadMode = "hotreload" // B-11
+				h.apply.mu.Unlock()
+				h.server.ClearRestarting()
+				return
+			} else {
+				h.server.logger.Info("Hot reload недоступен (%v), выполняем полный перезапуск", err)
+			}
+		}
+	}
+
+	// B-1: Валидируем новый конфиг ДО остановки текущего процесса.
+	// Если валидация провалена — не трогаем работающий sing-box, удаляем .pending.
+	if tmpConfigPath != "" && h.xrayConfig.ExecutablePath != "" {
+		if err := xray.ValidateSingBoxConfig(h.server.lifecycleCtx, h.xrayConfig.ExecutablePath, tmpConfigPath); err != nil {
+			h.server.logger.Error("Валидация конфига провалена: %v", err)
+			setValidationErr(err.Error())
+			setErr("конфиг невалиден, текущий процесс остался без изменений")
+			_ = os.Remove(tmpConfigPath)
+			return
+		}
+		setValidationErr("") // очищаем старую ошибку валидации
+	}
 
 	// Запоминаем состояние прокси и отключаем его на время рестарта,
 	// чтобы трафик не уходил в недоступный sing-box.
@@ -501,12 +786,12 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	// из h.server.config.XRayManager который всегда актуален.
 	patchedCfg := h.xrayConfig
 	srv := h.server
-	patchedCfg.OnCrash = func(crashErr error) {
+	patchedCfg.OnCrash = func(crashErr error, crashedManager xray.Manager) {
 		srv.configMu.RLock()
 		cur := srv.config.XRayManager
 		srv.configMu.RUnlock()
 		if cur != nil && h.xrayConfig.OnCrash != nil {
-			h.xrayConfig.OnCrash(crashErr)
+			h.xrayConfig.OnCrash(crashErr, crashedManager)
 		}
 	}
 	newManager, err := xray.NewManager(patchedCfg, h.server.lifecycleCtx)
@@ -528,12 +813,25 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	h.apply.lastPID = newManager.GetPID()
 	h.apply.mu.Unlock()
 
-	// Ждём готовности sing-box (порт поднялся).
-	if err := netutil.WaitForPort(h.server.lifecycleCtx, DefaultProxyAddress, 15*time.Second); err != nil {
-		h.server.logger.Warn("sing-box не ответил за 15с после перезапуска: %v", err)
+	// Вместо фиксированного ожидания — опрашиваем Clash API каждые 200ms.
+	// Экономит ~30 секунд на каждом перезапуске: sing-box обычно готов за 2–5с.
+	if err := waitForSingBoxReady(h.server.lifecycleCtx, h.server.logger); err != nil {
+		h.server.logger.Warn("Ожидание готовности sing-box: %v", err)
 	}
 
 	h.server.logger.Info("Sing-box перезапущен (PID: %d), правил: %d", newManager.GetPID(), len(snapshot.Rules))
+
+	// B-11: логируем diff и обновляем lastApplied после успешного перезапуска
+	h.mu.Lock()
+	diff := computeRoutingDiff(h.lastApplied, snapshot)
+	h.server.logger.Info("B-11: apply завершён: +%d, -%d, итого %d, reload_mode=restart",
+		diff.RulesAdded, diff.RulesRemoved, diff.RulesTotal)
+	h.lastApplied = snapshot
+	h.routing = snapshot // App БАГ-7: синхронизируем h.routing с применённым конфигом
+	h.mu.Unlock()
+	h.apply.mu.Lock()
+	h.apply.reloadMode = "restart" // B-11
+	h.apply.mu.Unlock()
 
 	// Всё прошло успешно — восстанавливаем прокси.
 	restoreProxy = true
@@ -546,9 +844,11 @@ func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) 
 	h.apply.mu.Lock()
 	running := h.apply.running
 	lastErr := h.apply.lastErr
+	validationError := h.apply.validationError
 	lastPID := h.apply.lastPID
 	startedAt := h.apply.startedAt
 	estimatedDone := h.apply.estimatedDone
+	reloadMode := h.apply.reloadMode // B-11
 	h.apply.mu.Unlock()
 
 	elapsedMs := int64(0)
@@ -566,10 +866,12 @@ func (h *TunHandlers) handleApplyStatus(w http.ResponseWriter, r *http.Request) 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"running":             running,
 		"last_err":            lastErr,
+		"validation_error":    validationError,
 		"last_pid":            lastPID,
 		"elapsed_ms":          elapsedMs,
 		"estimated_remain_ms": estimatedRemainMs,
-		"estimated_total_ms":  35000,
+		"estimated_total_ms":  5000,
+		"reload_mode":         reloadMode, // B-11: "hotreload" | "restart" | ""
 	})
 }
 
@@ -662,6 +964,21 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 		incoming.Rules[i].Value = val
 		incoming.Rules[i].Type = ruleType
+	}
+
+	// ВЫС-5: валидируем что импортированный конфиг генерирует корректный sing-box конфиг.
+	// Проверяем ДО сохранения — не хотим затирать рабочий routing.json невалидным файлом.
+	if h.xrayConfig.ExecutablePath != "" {
+		tmpValidatePath := routingConfigPath + ".import_tmp"
+		if genErr := config.GenerateSingBoxConfig(h.xrayConfig.SecretKeyPath, tmpValidatePath, &incoming); genErr == nil {
+			if valErr := xray.ValidateSingBoxConfig(r.Context(), h.xrayConfig.ExecutablePath, tmpValidatePath); valErr != nil {
+				_ = os.Remove(tmpValidatePath)
+				h.server.respondError(w, http.StatusBadRequest, "импортированный конфиг невалиден: "+valErr.Error())
+				return
+			}
+			_ = os.Remove(tmpValidatePath)
+		}
+		// Если GenerateSingBoxConfig вернула ошибку (нет secret.key и т.п.) — пропускаем валидацию
 	}
 
 	h.mu.Lock()

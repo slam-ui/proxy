@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -362,8 +363,7 @@ func TestCopyFile_OverwritesDestination(t *testing.T) {
 // ── fetchLatestAsset Tests ──────────────────────────────────────────────────────
 
 func TestFetchLatestAsset_ReturnsError_OnHTTPError(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
@@ -380,8 +380,7 @@ func TestFetchLatestAsset_ReturnsError_OnHTTPError(t *testing.T) {
 }
 
 func TestFetchLatestAsset_ReturnsError_OnInvalidJSON(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("invalid json"))
 	}))
 	defer ts.Close()
@@ -397,8 +396,7 @@ func TestFetchLatestAsset_ReturnsError_OnInvalidJSON(t *testing.T) {
 }
 
 func TestFetchLatestAsset_ReturnsError_OnNoWindowsAsset(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		release := githubRelease{
 			TagName: "v1.0.0",
 			Assets: []githubAsset{
@@ -420,8 +418,7 @@ func TestFetchLatestAsset_ReturnsError_OnNoWindowsAsset(t *testing.T) {
 }
 
 func TestFetchLatestAsset_ReturnsAsset_OnSuccess(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		release := githubRelease{
 			TagName: "v1.2.3",
 			Assets: []githubAsset{
@@ -488,8 +485,7 @@ func TestFetchLatestAsset_FetchesChecksum(t *testing.T) {
 // ── downloadWithProgress Tests ──────────────────────────────────────────────────
 
 func TestDownloadWithProgress_ReturnsError_OnHTTPError(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer ts.Close()
@@ -502,8 +498,7 @@ func TestDownloadWithProgress_ReturnsError_OnHTTPError(t *testing.T) {
 
 func TestDownloadWithProgress_ReturnsData_OnSuccess(t *testing.T) {
 	content := []byte("downloaded content")
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(content)
 	}))
 	defer ts.Close()
@@ -524,8 +519,7 @@ func TestDownloadWithProgress_ReportsProgress(t *testing.T) {
 		content[i] = byte(i % 256)
 	}
 
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 		w.Write(content)
 	}))
@@ -554,8 +548,7 @@ func TestDownloadWithProgress_ReportsProgress(t *testing.T) {
 }
 
 func TestDownloadWithProgress_ContextCancellation(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second) // Slow response
 		w.Write([]byte("data"))
 	}))
@@ -588,6 +581,10 @@ func TestEnsureEngine_ReturnsNil_WhenFileExists(t *testing.T) {
 }
 
 func TestEnsureEngine_SendsProgress(t *testing.T) {
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error { return nil }
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sing-box.exe")
 
@@ -686,13 +683,12 @@ func TestProgressReader_HandlesNilCallback(t *testing.T) {
 
 func TestFetchChecksumFile_ReturnsChecksum(t *testing.T) {
 	expectedSum := strings.Repeat("a", 64)
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(expectedSum + "  filename.zip"))
 	}))
 	defer ts.Close()
 
-	sum, err := fetchChecksumFile(context.Background(), ts.URL, http.DefaultClient)
+	sum, err := fetchChecksumFile(context.Background(), ts.URL, &http.Client{Transport: noProxyTransport})
 	if err != nil {
 		t.Fatalf("fetchChecksumFile failed: %v", err)
 	}
@@ -703,26 +699,24 @@ func TestFetchChecksumFile_ReturnsChecksum(t *testing.T) {
 }
 
 func TestFetchChecksumFile_ReturnsError_OnHTTPError(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer ts.Close()
 
-	_, err := fetchChecksumFile(context.Background(), ts.URL, http.DefaultClient)
+	_, err := fetchChecksumFile(context.Background(), ts.URL, &http.Client{Transport: noProxyTransport})
 	if err == nil {
 		t.Error("Expected error on HTTP 500")
 	}
 }
 
 func TestFetchChecksumFile_ReturnsError_OnInvalidFormat(t *testing.T) {
-	var ts *httptest.Server
-	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("too short"))
 	}))
 	defer ts.Close()
 
-	_, err := fetchChecksumFile(context.Background(), ts.URL, http.DefaultClient)
+	_, err := fetchChecksumFile(context.Background(), ts.URL, &http.Client{Transport: noProxyTransport})
 	if err == nil {
 		t.Error("Expected error on invalid format")
 	}
@@ -731,6 +725,10 @@ func TestFetchChecksumFile_ReturnsError_OnInvalidFormat(t *testing.T) {
 // ── Edge Cases ──────────────────────────────────────────────────────────────────
 
 func TestEnsureEngine_CreatesDirectory(t *testing.T) {
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error { return nil }
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subdir", "another", "sing-box.exe")
 
@@ -774,6 +772,303 @@ func TestEnsureEngine_CreatesDirectory(t *testing.T) {
 	// Verify directory was created
 	if _, err := os.Stat(filepath.Dir(path)); os.IsNotExist(err) {
 		t.Error("Expected parent directory to be created")
+	}
+}
+
+// ── A-2: withRetry Tests ────────────────────────────────────────────────────────
+
+func TestWithRetry_SuccessOnFirstAttempt(t *testing.T) {
+	calls := 0
+	err := withRetry(context.Background(), 3, func() error {
+		calls++
+		return nil
+	})
+	if err != nil {
+		t.Errorf("withRetry unexpected error: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1", calls)
+	}
+}
+
+func TestWithRetry_SuccessOnThirdAttempt(t *testing.T) {
+	old := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	defer func() { retryBaseDelay = old }()
+
+	calls := 0
+	err := withRetry(context.Background(), 3, func() error {
+		calls++
+		if calls < 3 {
+			return fmt.Errorf("временная ошибка попытки %d", calls)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("withRetry должен успешно завершиться на 3-й попытке, got: %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3", calls)
+	}
+}
+
+func TestWithRetry_AllAttemptsFail(t *testing.T) {
+	old := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	defer func() { retryBaseDelay = old }()
+
+	calls := 0
+	err := withRetry(context.Background(), 3, func() error {
+		calls++
+		return fmt.Errorf("постоянная ошибка")
+	})
+	if err == nil {
+		t.Error("withRetry должен вернуть ошибку когда все попытки провалились")
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3", calls)
+	}
+}
+
+func TestWithRetry_CanceledContextStopsRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // отменяем сразу
+
+	calls := 0
+	err := withRetry(ctx, 3, func() error {
+		calls++
+		return fmt.Errorf("ошибка")
+	})
+	if err == nil {
+		t.Error("withRetry должен вернуть ошибку контекста")
+	}
+	// Первая попытка может выполниться до проверки ctx.Err()
+	if calls > 1 {
+		t.Errorf("при отменённом контексте должна быть ≤1 попытки, got %d", calls)
+	}
+}
+
+func TestWithRetry_ContextCanceledDuringBackoff(t *testing.T) {
+	old := retryBaseDelay
+	retryBaseDelay = 500 * time.Millisecond
+	defer func() { retryBaseDelay = old }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	calls := 0
+	err := withRetry(ctx, 5, func() error {
+		calls++
+		return fmt.Errorf("ошибка")
+	})
+	if err == nil {
+		t.Error("withRetry должен завершиться с ошибкой при таймауте")
+	}
+	// Должна быть только 1 попытка — backoff 500ms прерывается таймаутом 100ms
+	if calls > 2 {
+		t.Errorf("calls = %d, want ≤2 (backoff должен прерваться)", calls)
+	}
+}
+
+// A-2: EnsureEngine с retry — первые 2 запроса 503, третий 200 → успех
+func TestEnsureEngine_Retries_OnServerErrors(t *testing.T) {
+	old := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	defer func() { retryBaseDelay = old }()
+
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error { return nil }
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box.exe")
+
+	var callCount int
+	var mu sync.Mutex
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		callCount++
+		n := callCount
+		mu.Unlock()
+
+		// Первые два запроса к metadata → 503
+		if strings.Contains(r.URL.Path, "releases") || r.URL.Path == "/" {
+			if n <= 2 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			// Третий → успех
+			release := githubRelease{
+				TagName: "v1.5.0",
+				Assets: []githubAsset{
+					{Name: "sing-box-1.5.0-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
+				},
+			}
+			json.NewEncoder(w).Encode(release)
+			return
+		}
+		// Download endpoint
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		fw, _ := zw.Create("sing-box.exe")
+		fw.Write([]byte("fake exe v1.5.0"))
+		zw.Close()
+		w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	oldAPI := githubAPI
+	githubAPI = ts.URL
+	defer func() { githubAPI = oldAPI }()
+
+	if err := EnsureEngine(context.Background(), path, nil); err != nil {
+		t.Fatalf("EnsureEngine должен успешно завершиться на 3-й попытке, got: %v", err)
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("sing-box.exe должен быть создан")
+	}
+}
+
+// ── A-3: InstalledVersion / version file Tests ──────────────────────────────────
+
+func TestInstalledVersion_ReturnsEmpty_WhenNoFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box.exe")
+	if v := InstalledVersion(path); v != "" {
+		t.Errorf("InstalledVersion = %q, want empty (файл версии не существует)", v)
+	}
+}
+
+func TestInstalledVersion_ReturnsVersion_WhenFileExists(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box.exe")
+	versionFile := path + ".version"
+
+	if err := os.WriteFile(versionFile, []byte("v1.9.0\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if v := InstalledVersion(path); v != "v1.9.0" {
+		t.Errorf("InstalledVersion = %q, want v1.9.0", v)
+	}
+}
+
+func TestEnsureEngine_WritesVersionFile(t *testing.T) {
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error { return nil }
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box.exe")
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "releases") || r.URL.Path == "/" {
+			release := githubRelease{
+				TagName: "v2.0.0",
+				Assets: []githubAsset{
+					{Name: "sing-box-2.0.0-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
+				},
+			}
+			json.NewEncoder(w).Encode(release)
+			return
+		}
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		fw, _ := zw.Create("sing-box.exe")
+		fw.Write([]byte("fake exe"))
+		zw.Close()
+		w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	oldAPI := githubAPI
+	githubAPI = ts.URL
+	defer func() { githubAPI = oldAPI }()
+
+	if err := EnsureEngine(context.Background(), path, nil); err != nil {
+		t.Fatalf("EnsureEngine failed: %v", err)
+	}
+
+	if v := InstalledVersion(path); v != "v2.0.0" {
+		t.Errorf("InstalledVersion после EnsureEngine = %q, want v2.0.0", v)
+	}
+}
+
+// TestEnsureEngine_BinaryVerificationFails проверяет что при провале верификации бинарника
+// EnsureEngine возвращает ошибку и удаляет повреждённый файл (чтобы следующий запуск
+// перескачал бинарник заново через NeedsDownload).
+func TestEnsureEngine_BinaryVerificationFails(t *testing.T) {
+	old := retryBaseDelay
+	retryBaseDelay = time.Millisecond
+	defer func() { retryBaseDelay = old }()
+
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error {
+		return fmt.Errorf("exit status 0xc0000005")
+	}
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sing-box.exe")
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "releases") || r.URL.Path == "/" {
+			release := githubRelease{
+				TagName: "v1.13.5",
+				Assets: []githubAsset{
+					{Name: "sing-box-1.13.5-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
+				},
+			}
+			json.NewEncoder(w).Encode(release)
+			return
+		}
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		fw, _ := zw.Create("sing-box.exe")
+		fw.Write([]byte("fake exe"))
+		zw.Close()
+		w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	oldAPI := githubAPI
+	githubAPI = ts.URL
+	defer func() { githubAPI = oldAPI }()
+
+	var lastProgress Progress
+	progress := make(chan Progress, 50)
+
+	// Дрейним прогресс в отдельной горутине — sync.WaitGroup гарантирует
+	// что чтение lastProgress произойдёт только после завершения горутины.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for p := range progress {
+			lastProgress = p
+		}
+	}()
+
+	err := EnsureEngine(context.Background(), path, progress)
+	close(progress)
+	wg.Wait()
+
+	if err == nil {
+		t.Fatal("EnsureEngine должен вернуть ошибку при провале верификации бинарника")
+	}
+
+	// Файл должен быть удалён чтобы следующий запуск перескачал его
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Error("EnsureEngine должен удалить повреждённый файл, но он всё ещё существует")
+	}
+
+	// Последний прогресс должен быть стадии "error"
+	if lastProgress.Stage != "error" {
+		t.Errorf("последний stage = %q, want error", lastProgress.Stage)
 	}
 }
 

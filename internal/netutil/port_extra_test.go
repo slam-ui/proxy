@@ -101,7 +101,7 @@ func TestWaitForPort_PortClosedAfterConnect_AlreadyReturned(t *testing.T) {
 
 // ── Несколько одновременных листенеров ────────────────────────────────────
 
-// BUG-РИСК: WaitForPort не должен иметь глобального состояния — 
+// BUG-РИСК: WaitForPort не должен иметь глобального состояния —
 // несколько горутин на разных портах работают независимо.
 func TestWaitForPort_MultiplePortsConcurrent(t *testing.T) {
 	ln1, addr1 := startTCPListener(t)

@@ -20,6 +20,16 @@ var (
 
 // setSystemProxy включает системный прокси
 func setSystemProxy(proxyServer string, proxyOverride string) error {
+	// BUG FIX: idempotency check — не пишем в реестр и не вызываем notifyWindows()
+	// если прокси уже установлен с теми же параметрами.
+	// Каждый notifyWindows() → WM_SETTINGCHANGE broadcast → Chrome/Firefox сбрасывает
+	// HTTP-соединения. При частых перезапусках TUN это создаёт заметные сбои загрузки.
+	// Источник: Clash Verge Rev system-proxy модуль.
+	if currentEnabled, currentAddr, currentOverride := getSystemProxyState(); currentEnabled &&
+		currentAddr == proxyServer && currentOverride == proxyOverride {
+		return nil
+	}
+
 	key, err := registry.OpenKey(registry.CURRENT_USER, registryPath, registry.WRITE)
 	if err != nil {
 		return fmt.Errorf("не удалось открыть ключ реестра: %w", err)
@@ -69,23 +79,27 @@ func disableSystemProxy() error {
 // in-memory состояние с реальным состоянием реестра Windows.
 // Защита от ситуации когда приложение упало с включённым прокси — при следующем
 // запуске manager.enabled=false хотя реестр говорит ProxyEnable=1.
-func getSystemProxyState() (enabled bool, address string) {
+func getSystemProxyState() (enabled bool, address string, override string) {
 	key, err := registry.OpenKey(registry.CURRENT_USER, registryPath, registry.READ)
 	if err != nil {
-		return false, ""
+		return false, "", ""
 	}
 	defer key.Close()
 
 	val, _, err := key.GetIntegerValue("ProxyEnable")
 	if err != nil || val == 0 {
-		return false, ""
+		return false, "", ""
 	}
 
 	addr, _, err := key.GetStringValue("ProxyServer")
 	if err != nil {
-		return true, ""
+		return true, "", ""
 	}
-	return true, addr
+	override, _, err = key.GetStringValue("ProxyOverride")
+	if err != nil {
+		override = ""
+	}
+	return true, addr, override
 }
 
 // notifyWindows уведомляет Windows об изменении настроек прокси
@@ -114,5 +128,3 @@ func notifyWindows() error {
 
 	return nil
 }
-
-

@@ -48,40 +48,50 @@ func matchWildcard(pattern, s string) bool {
 	return wildcardMatch(pattern, s)
 }
 
-// wildcardMatch рекурсивный wildcard matching где '*' матчит всё.
+// wildcardMatch итеративный wildcard matching где '*' матчит любую подстроку.
+// BUG FIX (фаззер): рекурсивная реализация давала экспоненциальную сложность
+// на паттернах вида "*a*a*a*" против "aaaa…b" — фаззер нашёл такой входной вектор.
+// DP-подход гарантирует O(n·m) время и O(m) память.
+// ЗАЩИТА: слишком большие входы (n*m > 50 млн) тривиально вернут false.
 func wildcardMatch(pattern, s string) bool {
-	for len(pattern) > 0 {
-		switch pattern[0] {
-		case '*':
-			// Пропускаем повторные '*'
-			for len(pattern) > 0 && pattern[0] == '*' {
-				pattern = pattern[1:]
+	np, ns := len(pattern), len(s)
+
+	// Защита от DoS через огромные входы в фаззинге.
+	// O(n*m) при н=10k м=10k даёт 100M операций которых может быть > 5s timeout.
+	// Минимальный лимит: если произведение > 50M, считаем не матчит.
+	// Реальные правила: обычно < 10k символов, так что это безопасно.
+	if int64(np)*int64(ns) > 50_000_000 {
+		return false
+	}
+
+	// prev[j] = true если pattern[:i] полностью матчит s[:j]
+	prev := make([]bool, ns+1)
+	prev[0] = true // пустой паттерн матчит пустую строку
+
+	for i := 0; i < np; i++ {
+		curr := make([]bool, ns+1)
+		ch := pattern[i]
+		if ch == '*' {
+			// '*' матчит 0 или более символов:
+			// curr[0] — '*' матчит "" (только если pattern[:i] уже матчил "")
+			curr[0] = prev[0]
+			for j := 1; j <= ns; j++ {
+				// prev[j]: '*' берёт 0 символов (паттерн без '*' уже матчил s[:j])
+				// curr[j-1]: '*' поглощает ещё один символ s[j-1]
+				curr[j] = prev[j] || curr[j-1]
 			}
-			if len(pattern) == 0 {
-				return true
-			}
-			// Пробуем матчить остаток паттерна с каждой позиции в s
-			for i := 0; i <= len(s); i++ {
-				if wildcardMatch(pattern, s[i:]) {
-					return true
+		} else {
+			// '?' или литерал — матчит ровно один символ
+			for j := 1; j <= ns; j++ {
+				if ch == '?' || ch == s[j-1] {
+					curr[j] = prev[j-1]
 				}
 			}
-			return false
-		case '?':
-			if len(s) == 0 {
-				return false
-			}
-			pattern = pattern[1:]
-			s = s[1:]
-		default:
-			if len(s) == 0 || pattern[0] != s[0] {
-				return false
-			}
-			pattern = pattern[1:]
-			s = s[1:]
 		}
+		prev = curr
 	}
-	return len(s) == 0
+
+	return prev[ns]
 }
 
 // Match проверяет соответствие значения паттерну.

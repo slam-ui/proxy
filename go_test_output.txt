@@ -1,0 +1,206 @@
+ok  	proxyclient/cmd/proxy-client	27.708s
+?   	proxyclient/cmd/vk-turn-relay	[no test files]
+ok  	proxyclient/internal/anomalylog	(cached)
+ok  	proxyclient/internal/api	52.625s
+ok  	proxyclient/internal/apprules	22.835s
+ok  	proxyclient/internal/autorun	10.666s
+ok  	proxyclient/internal/config	22.508s
+ok  	proxyclient/internal/engine	19.564s
+ok  	proxyclient/internal/eventlog	(cached)
+ok  	proxyclient/internal/fileutil	22.556s
+[23:12:07.910] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:15.693] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:17.965] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:21.965] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:24.014] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:25.313] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:27.328] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:28.450] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:30.914] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:32.495] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:34.540] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:35.952] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:38.906] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:39.815] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:41.782] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:42.527] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:44.469] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:45.256] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:47.380] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1,192.168.1.1)
+[23:12:48.103] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:51.283] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1,10.0.0.1)
+[23:12:52.674] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:58.165] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:12:58.905] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:12:59.870] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1)
+[23:13:00.284] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:13:01.050] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1,192.168.1.100)
+[23:13:01.460] INFO  Kill Switch ╤Б╨╜╤П╤В тАФ ╤В╤А╨░╤Д╨╕╨║ ╤А╨░╨╖╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜
+[23:13:02.376] WARN  Kill Switch ╨Р╨Ъ╨в╨Ш╨Т╨Х╨Э тАФ ╤В╤А╨░╤Д╨╕╨║ ╨╖╨░╨▒╨╗╨╛╨║╨╕╤А╨╛╨▓╨░╨╜ ╨┤╨╛ ╨▓╨╛╤Б╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╤П ╤В╤Г╨╜╨╜╨╡╨╗╤П (╤А╨░╨╖╤А╨╡╤И╤С╨╜: 127.0.0.1,10.0.0.1)
+panic: test timed out after 1m0s
+	running tests:
+		TestEnable_ServerIPVariations (7s)
+		TestEnable_ServerIPVariations/IP_10.0.0.1 (1s)
+
+goroutine 363 [running]:
+testing.(*M).startAlarm.func1()
+	C:/Program Files/Go/src/testing/testing.go:2802 +0x34b
+created by time.goFunc
+	C:/Program Files/Go/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x278745f94200, {0x7ff7c14827af?, 0x278746013b38?}, 0x7ff7c148d1c8)
+	C:/Program Files/Go/src/testing/testing.go:2109 +0x4c7
+testing.runTests.func1(0x278745f94200)
+	C:/Program Files/Go/src/testing/testing.go:2585 +0x37
+testing.tRunner(0x278745f94200, 0x278746013c58)
+	C:/Program Files/Go/src/testing/testing.go:2036 +0xc3
+testing.runTests({0x7ff7c147af47, 0xb}, {0x7ff7c1483631, 0x1f}, 0x278745f9c180, {0x7ff7c16345a0, 0x16, 0x16}, {0xc26c7a13aca304cc, 0xdf8723701, ...})
+	C:/Program Files/Go/src/testing/testing.go:2583 +0x4f0
+testing.(*M).Run(0x27874602a280)
+	C:/Program Files/Go/src/testing/testing.go:2443 +0x6ac
+main.main()
+	_testmain.go:94 +0x9b
+
+goroutine 299 [chan receive]:
+testing.(*T).Run(0x27874663d400, {0x278745f9f5c5?, 0x7ff7c1369120?}, 0x2787461f81b0)
+	C:/Program Files/Go/src/testing/testing.go:2109 +0x4c7
+proxyclient/internal/killswitch.TestEnable_ServerIPVariations(0x27874663d400)
+	C:/Users/13372/GolandProjects/proxy/internal/killswitch/killswitch_test.go:336 +0x129
+testing.tRunner(0x27874663d400, 0x7ff7c148d1c8)
+	C:/Program Files/Go/src/testing/testing.go:2036 +0xc3
+created by testing.(*T).Run in goroutine 1
+	C:/Program Files/Go/src/testing/testing.go:2101 +0x4a9
+
+goroutine 357 [syscall]:
+syscall.syscalln(0x0?, 0x0?, {0x278745fc3c68?, 0x6?, 0x0?})
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431 +0x4e
+syscall.SyscallN(0x1000000000000?, {0x278745fc3c68?, 0x3?, 0x3?})
+	C:/Program Files/Go/src/syscall/dll_windows.go:99 +0x1e
+syscall.WaitForSingleObject(0x3f4, 0xffffffff)
+	C:/Program Files/Go/src/syscall/zsyscall_windows.go:1159 +0x6a
+os.(*Process).wait(0x278746025580)
+	C:/Program Files/Go/src/os/exec_windows.go:28 +0x89
+os.(*Process).Wait(...)
+	C:/Program Files/Go/src/os/exec.go:346
+os/exec.(*Cmd).Wait(0x27874651b380)
+	C:/Program Files/Go/src/os/exec/exec.go:930 +0x45
+os/exec.(*Cmd).Run(0x27874651b380)
+	C:/Program Files/Go/src/os/exec/exec.go:632 +0x2d
+os/exec.(*Cmd).CombinedOutput(0x27874651b380)
+	C:/Program Files/Go/src/os/exec/exec.go:1047 +0x85
+proxyclient/internal/killswitch.runNetsh({0x278745fc3e40?, 0xb?, 0x7ff7c1479fd0?})
+	C:/Users/13372/GolandProjects/proxy/internal/killswitch/killswitch_windows.go:155 +0x85
+proxyclient/internal/killswitch.deleteRules()
+	C:/Users/13372/GolandProjects/proxy/internal/killswitch/killswitch_windows.go:144 +0x18b
+proxyclient/internal/killswitch.Disable({0x7ff7c14927b0, 0x278746608370})
+	C:/Users/13372/GolandProjects/proxy/internal/killswitch/killswitch_windows.go:110 +0x93
+proxyclient/internal/killswitch.TestEnable_ServerIPVariations.func1(0x27874663c600)
+	C:/Users/13372/GolandProjects/proxy/internal/killswitch/killswitch_test.go:348 +0x134
+testing.tRunner(0x27874663c600, 0x2787461f81b0)
+	C:/Program Files/Go/src/testing/testing.go:2036 +0xc3
+created by testing.(*T).Run in goroutine 299
+	C:/Program Files/Go/src/testing/testing.go:2101 +0x4a9
+
+goroutine 333 [syscall]:
+syscall.syscalln(0x0?, 0x0?, {0x278746495a70?, 0x0?, 0x0?})
+	C:/Program Files/Go/src/runtime/syscall_windows.go:431 +0x4e
+syscall.SyscallN(0x0?, {0x278746495a70?, 0x0?, 0x0?})
+	C:/Program Files/Go/src/syscall/dll_windows.go:99 +0x1e
+syscall.readFile(0x440, {0x278746181200?, 0x200, 0x7ff7c1313bff?}, 0x7ff7c142e780?, 0x7ff7c1313c77?)
+	C:/Program Files/Go/src/syscall/zsyscall_windows.go:1030 +0xba
+syscall.ReadFile(...)
+	C:/Program Files/Go/src/syscall/syscall_windows.go:510
+internal/poll.(*FD).Read.func1(0x7ff7c162f9e0?)
+	C:/Program Files/Go/src/internal/poll/fd_windows.go:572 +0x4a
+internal/poll.(*FD).execIO(0x2787462ae240, 0x72, 0x278746495c90)
+	C:/Program Files/Go/src/internal/poll/fd_windows.go:290 +0x2c9
+internal/poll.(*FD).Read(0x2787462ae240, {0x278746181200, 0x200, 0x200})
+	C:/Program Files/Go/src/internal/poll/fd_windows.go:571 +0x290
+os.(*File).read(...)
+	C:/Program Files/Go/src/os/file_posix.go:29
+os.(*File).Read(0x278745f98338, {0x278746181200?, 0x7ff7c12d20f4?, 0x0?})
+	C:/Program Files/Go/src/os/file.go:144 +0x4f
+bytes.(*Buffer).ReadFrom(0x2787462bc570, {0x7ff7c1490cf8, 0x278745f98338})
+	C:/Program Files/Go/src/bytes/buffer.go:229 +0x98
+io.copyBuffer({0x7ff7c1491180, 0x2787462bc570}, {0x7ff7c1490cf8, 0x278745f98338}, {0x0, 0x0, 0x0})
+	C:/Program Files/Go/src/io/io.go:415 +0x151
+io.Copy(...)
+	C:/Program Files/Go/src/io/io.go:388
+os.genericWriteTo(0x0?, {0x7ff7c1491180?, 0x2787462bc570?})
+	C:/Program Files/Go/src/os/file.go:295 +0x35
+os.(*File).WriteTo(0x7ff7c162adb0?, {0x7ff7c1491180?, 0x2787462bc570?})
+	C:/Program Files/Go/src/os/file.go:273 +0x49
+io.copyBuffer({0x7ff7c1491180, 0x2787462bc570}, {0x7ff7c1490e00, 0x278745f98338}, {0x0, 0x0, 0x0})
+	C:/Program Files/Go/src/io/io.go:411 +0x9d
+io.Copy(...)
+	C:/Program Files/Go/src/io/io.go:388
+os/exec.(*Cmd).writerDescriptor.func1()
+	C:/Program Files/Go/src/os/exec/exec.go:602 +0x34
+os/exec.(*Cmd).Start.func2(0x278746495fb8?)
+	C:/Program Files/Go/src/os/exec/exec.go:757 +0x2c
+created by os/exec.(*Cmd).Start in goroutine 357
+	C:/Program Files/Go/src/os/exec/exec.go:756 +0x9c5
+FAIL	proxyclient/internal/killswitch	61.183s
+ok  	proxyclient/internal/logger	(cached)
+ok  	proxyclient/internal/netutil	3.133s
+ok  	proxyclient/internal/notification	(cached)
+ok  	proxyclient/internal/process	4.796s
+ok  	proxyclient/internal/proxy	22.318s
+ok  	proxyclient/internal/tray	1.596s
+?   	proxyclient/internal/turnmanager	[no test files]
+ok  	proxyclient/internal/turnproxy	(cached)
+ok  	proxyclient/internal/watchdog	1.811s
+?   	proxyclient/internal/window	[no test files]
+panic: test timed out after 1m0s
+
+goroutine 556 [running]:
+testing.(*M).startAlarm.func1()
+	C:/Program Files/Go/src/testing/testing.go:2802 +0x34b
+created by time.goFunc
+	C:/Program Files/Go/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.runFuzzTests({0x7ff6fa37beb8, 0x7ff6fa574fc0}, {0x7ff6fa527a20, 0x6, 0xb?}, {0x7ff6fa3633f1?, 0x1b?, 0x7ff6fa52dac0?})
+	C:/Program Files/Go/src/testing/fuzz.go:538 +0x8db
+testing.(*M).Run(0xc5036230460)
+	C:/Program Files/Go/src/testing/testing.go:2444 +0x6ec
+main.main()
+	_testmain.go:286 +0x9b
+
+goroutine 485 [chan receive]:
+testing.(*F).Fuzz.func1({0x7ff6fa375aa0, 0xc503633c508}, {{0x0, 0x0}, {0xc50363262a0, 0x32}, {0x0, 0x0, 0x0}, {0xc503630af50, ...}, ...})
+	C:/Program Files/Go/src/testing/fuzz.go:343 +0x66e
+testing.(*F).Fuzz(0xc503633c508, {0x7ff6fa318340, 0x7ff6fa371d30})
+	C:/Program Files/Go/src/testing/fuzz.go:408 +0xaaf
+proxyclient/internal/wintun_test.FuzzStopFileContent(0xc503633c508)
+	C:/Users/13372/GolandProjects/proxy/internal/wintun/fuzz_test.go:55 +0x5c5
+testing.fRunner(0xc503633c508, 0x7ff6fa371a10)
+	C:/Program Files/Go/src/testing/fuzz.go:738 +0x97
+created by testing.runFuzzTests in goroutine 1
+	C:/Program Files/Go/src/testing/fuzz.go:537 +0x8c5
+
+goroutine 555 [select]:
+proxyclient/internal/wintun.SleepCtx({0x7ff6fa377428, 0xc50364dccb0}, 0x7ff6fa35ab68?)
+	C:/Users/13372/GolandProjects/proxy/internal/wintun/wintun.go:420 +0x8a
+proxyclient/internal/wintun.PollUntilFree({0x7ff6fa377428, 0xc50364dccb0}, {0x7ff6fa377310, 0x7ff6fa574fc0}, {0x7ff6fa35ab68, 0x4})
+	C:/Users/13372/GolandProjects/proxy/internal/wintun/wintun.go:368 +0x4be
+proxyclient/internal/wintun_test.FuzzStopFileContent.func1(0xc5036406600, {0xc5036300660, 0x7, 0x8})
+	C:/Users/13372/GolandProjects/proxy/internal/wintun/fuzz_test.go:87 +0x2bd
+reflect.Value.call({0x7ff6fa318340?, 0x7ff6fa371d30?, 0x7ff6fa3599a0?}, {0x7ff6fa35aca0, 0x4}, {0xc5036318d80, 0x2, 0x2?})
+	C:/Program Files/Go/src/reflect/value.go:586 +0xf06
+reflect.Value.Call({0x7ff6fa318340?, 0x7ff6fa371d30?, 0x7ff6fa505420?}, {0xc5036318d80?, 0x7ff6fa3599a0?, 0x7ff6fa49d7c0?})
+	C:/Program Files/Go/src/reflect/value.go:369 +0xb9
+testing.(*F).Fuzz.func1.1(0xc5036406600?)
+	C:/Program Files/Go/src/testing/fuzz.go:341 +0x30a
+testing.tRunner(0xc5036406600, 0xc5036408090)
+	C:/Program Files/Go/src/testing/testing.go:2036 +0xc3
+created by testing.(*F).Fuzz.func1 in goroutine 485
+	C:/Program Files/Go/src/testing/fuzz.go:328 +0x65b
+FAIL	proxyclient/internal/wintun	61.104s
+--- FAIL: TestIsTunConflict_MatchesKnownSignatures (0.00s)
+    --- FAIL: TestIsTunConflict_MatchesKnownSignatures/unrelated_WARN (0.00s)
+        manager_test.go:114: IsTunConflict("WARN[0010] inbound/tun[tun-in]: open interface take too much") = true, want false
+FAIL
+FAIL	proxyclient/internal/xray	12.727s
+FAIL

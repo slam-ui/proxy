@@ -196,6 +196,35 @@ func (pe *PersistentEngine) DisableRule(id string) error {
 	return nil
 }
 
+// AddRuleBatch добавляет несколько правил за одну операцию сохранения.
+// Используется при импорте — вместо N отдельных записей на диск делает одну.
+func (pe *PersistentEngine) AddRuleBatch(rules []Rule) ([]*Rule, error) {
+	pe.opMu.Lock()
+	defer pe.opMu.Unlock()
+
+	var created []*Rule
+	for _, rule := range rules {
+		r, err := pe.engine.AddRule(rule)
+		if err != nil {
+			// Откат всего батча при ошибке валидации
+			for _, c := range created {
+				_ = pe.engine.DeleteRule(c.ID)
+			}
+			return nil, fmt.Errorf("правило %q: %w", rule.Name, err)
+		}
+		created = append(created, r)
+	}
+
+	if err := pe.storage.Save(pe.engine.listRulesUnsorted()); err != nil {
+		for _, c := range created {
+			_ = pe.engine.DeleteRule(c.ID)
+		}
+		return nil, fmt.Errorf("failed to save rules batch: %w", err)
+	}
+
+	return created, nil
+}
+
 // loadRules загружает правила из storage, сохраняя оригинальные ID
 func (pe *PersistentEngine) loadRules() error {
 	rules, err := pe.storage.Load()

@@ -1,37 +1,56 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
-	"encoding/json"
 	"strings"
 
 	"proxyclient/internal/fileutil"
 )
 
+// ptrBool возвращает указатель на bool value
+func ptrBool(b bool) *bool {
+	return &b
+}
+
 // buildVLESSOutbound создаёт VLESS outbound с оптимальными параметрами.
-// Автоматически включает мультиплексирование если:
-//   1. params.Mux=true (URL содержит ?mux=1) — явно запрошено
-//   2. Flow пустой — XTLS Vision несовместим с mux
+// Автоматически определяет режим TLS по наличию PublicKey:
+//   - PublicKey непустой → Reality (XTLS Reality + uTLS fingerprint)
+//   - PublicKey пустой   → Plain TLS (стандартный TLS handshake)
 //
-// Multiplexing устраняет TLS handshake (~50-100мс) для каждого нового соединения,
-// мультиплексируя несколько потоков в одном TLS соединении.
+// Мультиплексирование включается если:
+//  1. params.Mux=true (URL содержит ?mux=1) — явно запрошено
+//  2. Flow пустой — XTLS Vision несовместим с mux
 func buildVLESSOutbound(params *VLESSParams) SBOutbound {
+	tls := &SBTLS{
+		Enabled:    true,
+		ServerName: params.SNI,
+		// random вместо chrome: случайный fingerprint из нескольких браузеров.
+		// Усложняет детектирование трафика DPI системами, не влияет на скорость.
+		UTLS: &SBUTLS{Enabled: true, Fingerprint: "random"},
+	}
+	// Reality включается только при наличии непустого PublicKey (pbk в URL).
+	// Без PublicKey используется plain TLS — стандартный handshake без Reality.
+	// BUG FIX: раньше Reality всегда включался с пустыми PublicKey/ShortID,
+	// что приводило к крашу sing-box на серверах без Reality.
+	if strings.TrimSpace(params.PublicKey) != "" {
+		tls.Reality = &SBReality{
+			Enabled:   true,
+			PublicKey: params.PublicKey,
+			ShortID:   params.ShortID,
+		}
+	}
+
 	out := SBOutbound{
-		Type:       "vless",
-		Tag:        "proxy-out",
-		Server:     params.Address,
-		ServerPort: params.Port,
-		UUID:       params.UUID,
-		Flow:       params.Flow,
-		TLS: &SBTLS{
-			Enabled:    true,
-			ServerName: params.SNI,
-			Reality:    &SBReality{Enabled: true, PublicKey: params.PublicKey, ShortID: params.ShortID},
-			// random вместо chrome: случайный fingerprint из нескольких браузеров.
-			// Усложняет детектирование трафика DPI системами, не влияет на скорость.
-			UTLS: &SBUTLS{Enabled: true, Fingerprint: "random"},
-		},
+		Type:        "vless",
+		Tag:         "proxy-out",
+		Server:      params.Address,
+		ServerPort:  params.Port,
+		UUID:        params.UUID,
+		Flow:        params.Flow,
+		TLS:         tls,
+		TCPFastOpen: ptrBool(true), // ускорение установки соединения (dial-field, valid v1.10+)
 	}
 	// Multiplex (mux): поддерживается с sing-box 1.6+.
 	// Включается только при явном ?mux=1 в VLESS URL — безопасно для любой версии.
@@ -51,6 +70,216 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 	return out
 }
 
+// buildDNSConfig создаёт DNS конфигурацию для sing-box на основе DNSConfig.
+// Если dnsCfg == nil, использует значения по умолчанию.
+func buildDNSConfig(dnsCfg *DNSConfig) SBDNS {
+	if dnsCfg == nil {
+		dnsCfg = DefaultDNSConfig()
+	}
+
+	// Парсим remote DNS URL
+	remoteServer, remoteType := parseDNSURL(dnsCfg.RemoteDNS)
+
+	// Парсим direct DNS URL
+	directServer, directPort, directType := parseDNSURLWithPort(dnsCfg.DirectDNS)
+
+	return SBDNS{
+		Servers: []SBDNSServer{
+			// Remote DNS идёт через прокси-туннель (detour: proxy-out).
+			// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
+			{Tag: "remote", Type: remoteType, Server: remoteServer, Detour: "proxy-out"},
+			// Прямой DNS для локального трафика (http-in inbound) — без прокси.
+			{Tag: "direct-dns", Type: directType, Server: directServer, ServerPort: directPort},
+		},
+		Rules: []SBDNSRule{
+			{Inbound: []string{"http-in"}, Server: "direct-dns"},
+		},
+		Final: "remote",
+	}
+}
+
+// parseDNSURL парсит DNS URL и возвращает (server, type).
+// Поддерживает: https://host/path, tls://host, quic://host
+func parseDNSURL(url string) (server, typ string) {
+	if strings.HasPrefix(url, "https://") {
+		return strings.TrimPrefix(url, "https://"), "https"
+	}
+	if strings.HasPrefix(url, "tls://") {
+		return strings.TrimPrefix(url, "tls://"), "tls"
+	}
+	if strings.HasPrefix(url, "quic://") {
+		return strings.TrimPrefix(url, "quic://"), "quic"
+	}
+	// Fallback: предполагаем https
+	return url, "https"
+}
+
+// parseDNSURLWithPort парсит DNS URL с портом и возвращает (server, port, type).
+// Поддерживает: udp://host:port, tcp://host:port
+func parseDNSURLWithPort(url string) (server string, port int, typ string) {
+	if strings.HasPrefix(url, "udp://") {
+		server = strings.TrimPrefix(url, "udp://")
+		typ = "udp"
+	} else if strings.HasPrefix(url, "tcp://") {
+		server = strings.TrimPrefix(url, "tcp://")
+		typ = "tcp"
+	} else {
+		// Fallback: plain server
+		server = url
+		typ = "udp"
+	}
+
+	// Разбираем host:port
+	if host, portStr, err := splitHostPort(server); err == nil {
+		if p, err := parsePortString(portStr); err == nil {
+			return host, p, typ
+		}
+	}
+
+	// Fallback: default port 53 for UDP
+	return server, 53, typ
+}
+
+// splitHostPort разбивает "host:port" → (host, port).
+// Корректно обрабатывает IPv6 адреса вида [::1]:9000.
+func splitHostPort(addr string) (host, port string, err error) {
+	i := len(addr) - 1
+	for i >= 0 && addr[i] != ':' {
+		i--
+	}
+	if i < 0 {
+		return "", "", fmt.Errorf("отсутствует ':' в адресе %q", addr)
+	}
+	return addr[:i], addr[i+1:], nil
+}
+
+// parsePortString парсит строку в int (порт).
+func parsePortString(s string) (int, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("пустая строка порта")
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("не цифра в порту: %q", c)
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 || n > 65535 {
+		return 0, fmt.Errorf("порт %d вне диапазона 1–65535", n)
+	}
+	return n, nil
+}
+
+// TURNOverride задаёт параметры для переключения outbound на TURN прокси.
+// Когда задан, VLESS outbound направляется на локальный vk-turn-proxy
+// вместо реального сервера. Маскировка: DTLS 1.2 выглядит как звонок VK.
+type TURNOverride struct {
+	// ProxyAddr — адрес локального TURN прокси, например "127.0.0.1:9000".
+	ProxyAddr string
+	// RealServerIP — реальный IP сервера (нужен для RouteExcludeAddress в TUN,
+	// чтобы трафик vk-turn-proxy к серверу не перехватывался TUN → routing loop).
+	RealServerIP string
+}
+
+// GenerateSingBoxConfigWithMode генерирует конфиг с опциональным TURN override.
+// При turn=nil поведение идентично GenerateSingBoxConfig.
+// При turn!=nil VLESS outbound перенаправляется на локальный TURN прокси.
+func GenerateSingBoxConfigWithMode(secretPath, outputPath string, routingCfg *RoutingConfig, turn *TURNOverride) error {
+	params, err := parseVLESSKey(secretPath)
+	if err != nil {
+		return fmt.Errorf("ошибка парсинга VLESS ключа: %w", err)
+	}
+	if err := validateVLESSParams(params); err != nil {
+		return fmt.Errorf("невалидные параметры: %w", err)
+	}
+	if routingCfg == nil {
+		routingCfg = DefaultRoutingConfig()
+	}
+
+	// В TURN режиме outbound идёт на локальный прокси, а не на сервер напрямую.
+	// TUN по-прежнему исключает реальный IP сервера из перехвата — иначе трафик
+	// vk-turn-proxy к серверу попадёт обратно в TUN → routing loop.
+	outbound := buildVLESSOutbound(params)
+	tunExcludeAddr := params.Address
+	if turn != nil {
+		host, portStr, splitErr := splitHostPort(turn.ProxyAddr)
+		if splitErr != nil {
+			return fmt.Errorf("некорректный TURN ProxyAddr %q: %w", turn.ProxyAddr, splitErr)
+		}
+		port, convErr := parsePortString(portStr)
+		if convErr != nil {
+			return fmt.Errorf("некорректный порт в TURN ProxyAddr %q: %w", turn.ProxyAddr, convErr)
+		}
+		// Перенаправляем только адрес/порт; TLS+Reality остаются — сервер их ожидает.
+		// vk-turn-proxy туннелирует через DTLS прозрачно, не трогая пакеты.
+		outbound.Server = host
+		outbound.ServerPort = port
+		if turn.RealServerIP != "" {
+			tunExcludeAddr = turn.RealServerIP
+		}
+	}
+
+	cfg := buildSingBoxConfig(params, outbound, tunExcludeAddr, routingCfg)
+
+	for _, rs := range cfg.Route.RuleSet {
+		if _, statErr := os.Stat(rs.Path); os.IsNotExist(statErr) {
+			return fmt.Errorf("файл geosite не найден: %s — скачайте его в приложении", rs.Path)
+		}
+	}
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации: %w", err)
+	}
+	if err := fileutil.WriteAtomic(outputPath, data, 0644); err != nil {
+		return fmt.Errorf("не удалось применить конфиг sing-box: %w", err)
+	}
+	return nil
+}
+
+// buildSingBoxConfig собирает SingBoxConfig из уже подготовленных компонентов.
+// Вызывается как из GenerateSingBoxConfig, так и из GenerateSingBoxConfigWithMode.
+func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr string, routingCfg *RoutingConfig) *SingBoxConfig {
+	return &SingBoxConfig{
+		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
+		Experimental: SBExperimental{
+			ClashAPI: SBClashAPI{
+				ExternalController: ClashAPIAddr,
+				Secret:             "",
+			},
+			// CacheFile: персистентный DNS кэш между перезапусками.
+			// При рестарте sing-box не делает холодные DNS запросы —
+			// отвечает из кэша пока резолвит в фоне. Ускоряет первые
+			// соединения после перезапуска на 50-200мс.
+			CacheFile: &SBCacheFile{
+				Enabled: true,
+				Path:    DataDir + "/dns_cache.db",
+			},
+		},
+		DNS: buildDNSConfig(routingCfg.DNS),
+		Inbounds: []SBInbound{
+			{
+				Type:       "http",
+				Tag:        "http-in",
+				Listen:     "127.0.0.1",
+				ListenPort: ProxyPort,
+				// sniff_override_destination намеренно не указан: поле удалено в sing-box 1.13.
+				// Action "sniff" в route rules теперь всегда переопределяет destination.
+			},
+			buildTUN(tunExcludeAddr),
+		},
+		Outbounds: []SBOutbound{
+			outbound,
+			{Type: "direct", Tag: "direct"},
+			// "block" outbound нужен для случая DefaultAction == ActionBlock,
+			// а также для блокирующих правил route (action: "reject" — альтернатива,
+			// но явный outbound обязателен когда final = "block").
+			{Type: "block", Tag: "block"},
+		},
+		Route: buildRoute(routingCfg, tunExcludeAddr),
+	}
+}
 
 func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingConfig) error {
 	params, err := parseVLESSKey(secretPath)
@@ -80,33 +309,15 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 				Path:    DataDir + "/dns_cache.db",
 			},
 		},
-		DNS: SBDNS{
-			Servers: []SBDNSServer{
-				// DoH (DNS-over-HTTPS) вместо DoT (DNS-over-TLS):
-				// DoT открывает новое TLS соединение на каждый запрос (+50-150мс).
-				// DoH использует HTTP/2 keep-alive — одно соединение для всех запросов.
-				// Type "https" + Server = адрес DoH резолвера (sing-box формирует URL сам).
-				// remote DNS идёт через прокси-туннель (detour: proxy-out).
-				// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
-				{Tag: "remote", Type: "https", Server: "1.1.1.1", Detour: "proxy-out"},
-				// Прямой UDP для локального трафика (http-in inbound) — без прокси.
-				{Tag: "direct-dns", Type: "udp", Server: "8.8.8.8", ServerPort: 53},
-			},
-			Rules: []SBDNSRule{
-				{Inbound: []string{"http-in"}, Server: "direct-dns"},
-			},
-			Final: "remote",
-		},
+		DNS: buildDNSConfig(routingCfg.DNS),
 		Inbounds: []SBInbound{
 			{
 				Type:       "http",
 				Tag:        "http-in",
 				Listen:     "127.0.0.1",
 				ListenPort: ProxyPort,
-				// Sniff на HTTP inbound нужен для override CONNECT-хостов.
-				// Оставляем только здесь, убираем с TUN (там не нужно).
-				Sniff:                    true,
-				SniffOverrideDestination: true,
+				// sniff_override_destination намеренно не указан: поле удалено в sing-box 1.13.
+				// Action "sniff" в route rules теперь всегда переопределяет destination.
 			},
 			buildTUN(params.Address),
 		},
@@ -153,17 +364,15 @@ func buildTUN(serverAddr string) SBInbound {
 		// Большинство VPS и провайдеров не поддерживают jumbo frames на WAN.
 		// Пакет 9000 байт будет фрагментирован или дропнут → переотправки → выше пинг.
 		// 1500 = стандартный Ethernet MTU, гарантированно проходит везде.
-		MTU:           1500,
-		AutoRoute:     true,
-		StrictRoute:   true, // строгая маршрутизация: утечки трафика мимо TUN невозможны
+		MTU:         1500,
+		AutoRoute:   true,
+		StrictRoute: true, // строгая маршрутизация: утечки трафика мимо TUN невозможны
 		// system stack вместо mixed: system использует нативный Windows TCP/IP стек.
 		// mixed = gVisor для UDP + system для TCP. system быстрее для большинства трафика
 		// так как нет overhead пользовательского TCP стека. Рекомендация sing-box docs.
-		Stack:         "system",
-		// Sniff=true на TUN: обязателен для работы правила protocol: dns → hijack-dns.
-		// Без sniff sing-box не определяет протокол DNS и правило не срабатывает —
-		// DNS-запросы svchost/Windows падают в final: direct и уходят на 172.20.0.2 в никуда.
-		Sniff:         true,
+		Stack: "system",
+		// sniff_override_destination намеренно не указан: поле удалено в sing-box 1.13.
+		// Action "sniff" в route rules теперь всегда переопределяет destination.
 		// RouteExcludeAddress: только IP прокси-сервера.
 		// TUN подсеть (172.20.0.0/30) НЕ исключаем — иначе Windows DNS Client (svchost)
 		// не получает ответы на DNS запросы к TUN-адресу → бесконечные ретраи.
@@ -381,15 +590,21 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 		final = "block"
 	}
 
+	// FindProcess: включаем только если есть process_name правила.
+	// Детектирование процесса добавляет syscall на каждое новое соединение —
+	// включаем только когда реально нужно, чтобы не добавлять накладные расходы зря.
+	hasProcessRules := len(proxyProcs)+len(directProcs)+len(blockProcs) > 0
+
 	return SBRoute{
-		Rules:                 rules,
-		RuleSet:               ruleSets,
-		Final:                 final,
+		Rules:   rules,
+		RuleSet: ruleSets,
+		Final:   final,
 		// AutoDetectInterface: true — обязателен при auto_route=true.
 		// Без этого sing-box не знает какой физический интерфейс использовать для
 		// direct-трафика и отправляет его обратно в TUN → routing loop на 172.20.0.2.
 		// Производительность: syscall при новом соединении незначителен по сравнению с петлёй.
 		AutoDetectInterface:   true,
 		DefaultDomainResolver: "direct-dns",
+		FindProcess:           hasProcessRules,
 	}
 }

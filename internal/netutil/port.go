@@ -31,11 +31,17 @@ func WaitForPort(ctx context.Context, addr string, timeout time.Duration) error 
 	sleep := 10 * time.Millisecond
 	const maxSleep = 100 * time.Millisecond
 
+	// BUG FIX: time.After в select-loop создаёт горутину таймера которая живёт до
+	// срабатывания даже после ctx.Done(). Используем один переиспользуемый Timer —
+	// нулевых аллокаций, нет goroutine leak при отмене ctx.
+	t := time.NewTimer(sleep)
+	defer t.Stop()
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(sleep):
+		case <-t.C:
 		}
 		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
 		if err == nil {
@@ -46,6 +52,7 @@ func WaitForPort(ctx context.Context, addr string, timeout time.Duration) error 
 		if sleep > maxSleep {
 			sleep = maxSleep
 		}
+		t.Reset(sleep)
 	}
 	return fmt.Errorf("порт %s недоступен после %v", addr, timeout)
 }

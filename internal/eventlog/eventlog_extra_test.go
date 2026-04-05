@@ -377,3 +377,131 @@ func (c *captureLogger) Error(f string, a ...interface{}) {
 	}
 	c.count++
 }
+
+// ─── Экстремальные граничные случаи (бывший extra2) ──────────────────────────
+
+// TestLog_ZeroSize_NoPanic — New(0) не должен паниковать.
+func TestLog_ZeroSize_NoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("New(0).Add/GetSince вызвал panic: %v", r)
+		}
+	}()
+	l := New(0)
+	l.Add(LevelInfo, "src", "msg")
+	_ = l.GetSince(0)
+	_ = l.GetLatestID()
+}
+
+// TestLog_GetSince_FutureID_EmptyNotNil — GetSince с очень большим afterID
+// должен вернуть пустой non-nil слайс.
+func TestLog_GetSince_FutureID_EmptyNotNil(t *testing.T) {
+	l := New(10)
+	l.Add(LevelInfo, "src", "msg")
+
+	result := l.GetSince(999999)
+	if result == nil {
+		t.Error("GetSince с будущим ID не должен возвращать nil")
+	}
+	if len(result) != 0 {
+		t.Errorf("GetSince с будущим ID вернул %d событий, want 0", len(result))
+	}
+}
+
+// TestLog_Add_EmptySourceAndMessage — Add с пустым source и пустым форматом
+// не должен паниковать.
+func TestLog_Add_EmptySourceAndMessage(t *testing.T) {
+	l := New(5)
+	l.Add(LevelInfo, "", "")
+	events := l.GetSince(0)
+	if len(events) != 1 {
+		t.Fatalf("Add с пустыми полями должен добавить событие, len=%d", len(events))
+	}
+	if events[0].Message != "" {
+		t.Errorf("Message = %q, want empty", events[0].Message)
+	}
+}
+
+// TestLog_Add_PercentInMessage_NoPanic — Add без args не должен паниковать при %
+// в строке формата.
+func TestLog_Add_PercentInMessage_NoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("Add с %% в сообщении вызвал panic: %v", r)
+		}
+	}()
+	l := New(5)
+	l.Add(LevelInfo, "src", "done 100%%")
+	events := l.GetSince(0)
+	if len(events) != 1 {
+		t.Fatalf("событие не добавлено")
+	}
+	if events[0].Message != "done 100%%" {
+		t.Errorf("Message = %q, want 'done 100%%%%'", events[0].Message)
+	}
+}
+
+// TestLog_GetSince_AfterClear_ChronologicalOrder — после Clear + Add события
+// должны быть в хронологическом порядке.
+func TestLog_GetSince_AfterClear_ChronologicalOrder(t *testing.T) {
+	l := New(10)
+	for i := 0; i < 5; i++ {
+		l.Add(LevelInfo, "src", "old-%d", i)
+	}
+	l.Clear()
+	for i := 0; i < 3; i++ {
+		l.Add(LevelInfo, "src", "new-%d", i)
+	}
+
+	events := l.GetSince(0)
+	for i := 1; i < len(events); i++ {
+		if events[i].ID <= events[i-1].ID {
+			t.Errorf("нарушен порядок ID после Clear: events[%d].ID=%d <= events[%d].ID=%d",
+				i, events[i].ID, i-1, events[i-1].ID)
+		}
+	}
+}
+
+// TestLineWriter_NoDataLost_ManySmallWrites — данные не теряются при побайтовой
+// записи.
+func TestLineWriter_NoDataLost_ManySmallWrites(t *testing.T) {
+	l := New(1000)
+	w := NewLineWriter(l, "proc", LevelInfo)
+
+	data := []byte("hello\nworld\n")
+	for _, b := range data {
+		w.Write([]byte{b})
+	}
+
+	events := l.GetSince(0)
+	if len(events) != 2 {
+		t.Errorf("len = %d, want 2 — данные потеряны при побайтовой записи", len(events))
+	}
+	if len(events) >= 1 && events[0].Message != "hello" {
+		t.Errorf("events[0].Message = %q, want hello", events[0].Message)
+	}
+}
+
+// TestLog_GetSince_AfterOverflow_CorrectSlice — GetSince после многократных
+// overflow буфера возвращает ровно нужные события.
+func TestLog_GetSince_AfterOverflow_CorrectSlice(t *testing.T) {
+	l := New(5)
+	for i := 0; i < 10; i++ {
+		l.Add(LevelInfo, "src", "msg-%d", i)
+	}
+	midID := l.GetLatestID()
+
+	for i := 10; i < 13; i++ {
+		l.Add(LevelInfo, "src", "msg-%d", i)
+	}
+
+	events := l.GetSince(midID)
+	if len(events) != 3 {
+		t.Errorf("GetSince(%d) вернул %d событий, want 3", midID, len(events))
+	}
+	for _, e := range events {
+		if e.ID <= midID {
+			t.Errorf("событие с ID=%d не должно быть в результате (afterID=%d)", e.ID, midID)
+		}
+	}
+}

@@ -11,6 +11,7 @@
 package killswitch
 
 import (
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -22,6 +23,8 @@ import (
 const (
 	ruleNameBlock  = "ProxyClient-KillSwitch-Block"
 	ruleNameAllow  = "ProxyClient-KillSwitch-Allow"
+	ruleNameBlockV6 = "ProxyClient-KillSwitch-Block-IPv6"
+	ksStateFile    = "killswitch_active"
 )
 
 var (
@@ -76,6 +79,21 @@ func Enable(serverIP string, log logger.Logger) {
 		"profile=any",
 	)
 
+	// BUG FIX: отдельное правило для IPv6 — remoteip= охватывает только IPv4.
+	// На Windows с IPv6-enabled сетями трафик утекал через IPv6 stack.
+	// Источник: WireGuard-windows, Tailscale wgengine/filter.
+	runNetsh(
+		"advfirewall", "firewall", "add", "rule",
+		"name="+ruleNameBlockV6,
+		"dir=out",
+		"action=block",
+		"protocol=any",
+		"remoteip=2000::/3",
+		"enable=yes",
+		"profile=any",
+	)
+
+	_ = os.WriteFile(ksStateFile, []byte("1"), 0644)
 	enabled = true
 	if log != nil {
 		log.Warn("Kill Switch АКТИВЕН — трафик заблокирован до восстановления туннеля (разрешён: %s)", allowIPs)
@@ -91,6 +109,7 @@ func Disable(log logger.Logger) {
 	}
 	deleteRules()
 	enabled = false
+	_ = os.Remove(ksStateFile)
 	if log != nil {
 		log.Info("Kill Switch снят — трафик разблокирован")
 	}
@@ -101,6 +120,16 @@ func Disable(log logger.Logger) {
 func CleanupOnStart(log logger.Logger) {
 	mu.Lock()
 	defer mu.Unlock()
+
+	// BUG FIX: запускаем cleanup только если KS был активен в прошлой сессии.
+	// Без проверки — два netsh delete при каждом старте даже без активного KS.
+	// Источник: singbox-launcher state file, Clash Verge Rev.
+	if _, err := os.Stat(ksStateFile); os.IsNotExist(err) {
+		enabled = false
+		return
+	}
+	_ = os.Remove(ksStateFile)
+
 	deleted := deleteRules()
 	if deleted && log != nil {
 		log.Info("Kill Switch: удалены правила от предыдущего сеанса")
@@ -108,11 +137,12 @@ func CleanupOnStart(log logger.Logger) {
 	enabled = false
 }
 
-// deleteRules удаляет оба firewall-правила. Возвращает true если хоть одно было удалено.
+// deleteRules удаляет все firewall-правила. Возвращает true если хоть одно было удалено.
 func deleteRules() bool {
 	r1 := runNetsh("advfirewall", "firewall", "delete", "rule", "name="+ruleNameAllow)
 	r2 := runNetsh("advfirewall", "firewall", "delete", "rule", "name="+ruleNameBlock)
-	return r1 || r2
+	r3 := runNetsh("advfirewall", "firewall", "delete", "rule", "name="+ruleNameBlockV6)
+	return r1 || r2 || r3
 }
 
 // runNetsh запускает netsh скрытно. Возвращает true при успехе.

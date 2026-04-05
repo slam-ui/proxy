@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"proxyclient/internal/config"
+	"proxyclient/internal/netutil"
 )
 
 // DiagHandlers управляет сбором статистики трафика и соединений.
@@ -29,6 +31,7 @@ func newDiagHandlers() *DiagHandlers {
 		conns: &connSpeedTracker{
 			prev:   make(map[string]connSample),
 			speeds: make(map[string]outboundSpeed),
+			client: http.Client{Timeout: 2 * time.Second},
 		},
 	}
 }
@@ -48,6 +51,7 @@ func SetupDiagRoutes(s *Server, ctx context.Context) {
 	s.router.HandleFunc("/api/debug/stats", h.handleDebugStats).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/connections", h.handleConnections).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/test", handleDiagTest).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/diagnostics/ports", handlePortStatus).Methods("GET", "OPTIONS") // БАГ #2B
 }
 
 // ── Total traffic: streaming /traffic ────────────────────────────────────────
@@ -151,14 +155,18 @@ type outboundSpeed struct {
 }
 
 type connSpeedTracker struct {
-	mu       sync.RWMutex
-	prev     map[string]connSample
-	speeds   map[string]outboundSpeed
-	active   atomic.Int64
+	mu     sync.RWMutex
+	prev   map[string]connSample
+	speeds map[string]outboundSpeed
+	active atomic.Int64
 	// BUG FIX #16: apiAvailable отделяет "0 активных соединений" от "API недоступен".
 	// Ранее active=0 при ошибке не отличалось от active=0 при отсутствии соединений.
 	apiAvailable atomic.Bool
-	lastTick time.Time
+	lastTick     time.Time
+	// BUG FIX: переиспользуемый клиент с пулом TCP-соединений.
+	// Ранее fetchConnectionsData создавал новый http.Client каждые 2с — каждый раз
+	// новый TCP handshake к localhost:9090. Теперь один клиент на весь lifecycle.
+	client http.Client
 }
 
 func (ct *connSpeedTracker) run(ctx context.Context) {
@@ -173,7 +181,7 @@ func (ct *connSpeedTracker) run(ctx context.Context) {
 }
 
 func (ct *connSpeedTracker) tick(ctx context.Context) {
-	conns, err := fetchConnectionsData(ctx)
+	conns, err := ct.fetchConnectionsData(ctx)
 	// BUG FIX #16: сначала фиксируем доступность API, затем обновляем счётчик.
 	// Так можно отличить "API недоступен" от "0 активных соединений" на стороне UI.
 	if err != nil {
@@ -273,19 +281,19 @@ func (ct *connSpeedTracker) getSpeeds() (proxyUp, proxyDn, dirUp, dirDn int64) {
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 type StatsResponse struct {
-	Up      int64   `json:"up"`
-	Down    int64   `json:"down"`
-	ProxyUp int64   `json:"proxy_up"`
-	ProxyDn int64   `json:"proxy_dn"`
-	DirUp   int64   `json:"direct_up"`
-	DirDn   int64   `json:"direct_dn"`
-	Active  int     `json:"active_connections"`
-	OK      bool    `json:"ok"`
+	Up      int64 `json:"up"`
+	Down    int64 `json:"down"`
+	ProxyUp int64 `json:"proxy_up"`
+	ProxyDn int64 `json:"proxy_dn"`
+	DirUp   int64 `json:"direct_up"`
+	DirDn   int64 `json:"direct_dn"`
+	Active  int   `json:"active_connections"`
+	OK      bool  `json:"ok"`
 	// BUG FIX #16: APIAvailable отличает "sing-box API недоступен" от "0 соединений".
 	APIAvailable bool    `json:"api_available"`
-	SessUpB int64   `json:"sess_up_bytes"`
-	SessDnB int64   `json:"sess_dn_bytes"`
-	SessSec float64 `json:"sess_duration_sec"`
+	SessUpB      int64   `json:"sess_up_bytes"`
+	SessDnB      int64   `json:"sess_dn_bytes"`
+	SessSec      float64 `json:"sess_duration_sec"`
 }
 
 func (h *DiagHandlers) handleStats(w http.ResponseWriter, _ *http.Request) {
@@ -331,13 +339,12 @@ func (c *clashConn) effectiveOutbound() string {
 	return ""
 }
 
-func fetchConnectionsData(ctx context.Context) ([]clashConn, error) {
+func (ct *connSpeedTracker) fetchConnectionsData(ctx context.Context) ([]clashConn, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.ClashAPIBase+"/connections", nil)
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	r, err := client.Do(req)
+	r, err := ct.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -345,14 +352,15 @@ func fetchConnectionsData(ctx context.Context) ([]clashConn, error) {
 	var cr struct {
 		Connections []clashConn `json:"connections"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&cr); err != nil {
+	// Ограничиваем тело ответа: список соединений не должен превышать 4 МБ.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&cr); err != nil {
 		return nil, err
 	}
 	return cr.Connections, nil
 }
 
 func (h *DiagHandlers) handleDebugStats(w http.ResponseWriter, r *http.Request) {
-	conns, err := fetchConnectionsData(r.Context())
+	conns, err := h.conns.fetchConnectionsData(r.Context())
 	snap, snapOK := h.traffic.get()
 
 	h.conns.mu.RLock()
@@ -399,7 +407,7 @@ func (h *DiagHandlers) handleDebugStats(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *DiagHandlers) handleConnections(w http.ResponseWriter, r *http.Request) {
-	conns, err := fetchConnectionsData(r.Context())
+	conns, err := h.conns.fetchConnectionsData(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -420,23 +428,119 @@ type DiagResult struct {
 }
 
 func handleDiagTest(w http.ResponseWriter, r *http.Request) {
+	// B-9: DNS leak test — сравниваем IP через прокси и напрямую
+
+	// Получаем текущую DNS конфигурацию
+	routingConfigPath := config.DataDir + "/routing.json"
+	routingCfg, err := config.LoadRoutingConfig(routingConfigPath)
+	if err != nil {
+		routingCfg = config.DefaultRoutingConfig()
+	}
+
+	remoteDNS := "1.1.1.1" // default
+	directDNS := "8.8.8.8" // default
+	if routingCfg.DNS != nil {
+		remoteDNS = routingCfg.DNS.RemoteDNS
+		directDNS = routingCfg.DNS.DirectDNS
+	}
+
+	// IP через прокси
 	proxyURL, _ := url.Parse("http://" + config.ProxyAddr)
-	client := &http.Client{
+	proxyClient := &http.Client{
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
 		Timeout:   10 * time.Second,
 	}
 	start := time.Now()
-	resp, err := client.Get("https://api.ipify.org?format=json")
+	resp, err := proxyClient.Get("https://api.ipify.org?format=json")
 	elapsed := time.Since(start).Milliseconds()
+
 	w.Header().Set("Content-Type", "application/json")
+
+	proxyIP := ""
+	if err == nil {
+		defer resp.Body.Close()
+		var ipResp struct {
+			IP string `json:"ip"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&ipResp)
+		proxyIP = ipResp.IP
+	}
+
+	// B-9: IP напрямую (не через прокси) — для проверки DNS утечки
+	directClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	directResp, directErr := directClient.Get("https://api.ipify.org?format=json")
+	directIP := ""
+	if directErr == nil {
+		defer directResp.Body.Close()
+		var ipResp struct {
+			IP string `json:"ip"`
+		}
+		_ = json.NewDecoder(directResp.Body).Decode(&ipResp)
+		directIP = ipResp.IP
+	}
+
+	// B-9: Определяем есть ли утечка DNS
+	dnsLeak := proxyIP != "" && directIP != "" && proxyIP == directIP
+
 	if err != nil {
-		_ = json.NewEncoder(w).Encode(DiagResult{OK: false, LatencyMs: elapsed, Error: err.Error()})
+		_ = json.NewEncoder(w).Encode(DiagResult{
+			OK:        false,
+			LatencyMs: elapsed,
+			Error:     err.Error(),
+		})
 		return
 	}
-	defer resp.Body.Close()
-	var ipResp struct {
-		IP string `json:"ip"`
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"latency_ms":  elapsed,
+		"external_ip": proxyIP,
+		"proxy_ip":    proxyIP,
+		"direct_ip":   directIP,  // B-9
+		"dns_leak":    dnsLeak,   // B-9: true если IP одинаковые
+		"remote_dns":  remoteDNS, // B-9: настроенный remote DNS
+		"direct_dns":  directDNS, // B-9: настроенный direct DNS
+	})
+}
+
+// ── Port Exhaustion Diagnostics ────────────────────────────────────────────────
+// БАГ #2B: мониторить исчерпание ephemeral портов (Windows typically 49152-65535).
+// Если <5% портов свободны → критична, send alert.
+
+func handlePortStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	stats, err := netutil.GetPortStats()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":    false,
+			"error": err.Error(),
+		})
+		return
 	}
-	_ = json.NewDecoder(resp.Body).Decode(&ipResp)
-	_ = json.NewEncoder(w).Encode(DiagResult{OK: true, LatencyMs: elapsed, ExternalIP: ipResp.IP})
+
+	w.WriteHeader(http.StatusOK)
+	warning := ""
+	if stats.AvailablePct < 5 {
+		warning = "CRITICAL: Less than 5% of ephemeral ports available!"
+	} else if stats.AvailablePct < 20 {
+		warning = "WARNING: Less than 20% of ephemeral ports available"
+	} else if stats.AvailablePorts < 2000 {
+		warning = "WARNING: Less than 2000 ephemeral ports available"
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":                true,
+		"total_ports":       stats.TotalPorts,
+		"available_ports":   stats.AvailablePorts,
+		"unavailable_ports": stats.UnavailablePorts,
+		"available_pct":     stats.AvailablePct,
+		"is_critical":       stats.IsCritical,
+		"min_port":          stats.MinPort,
+		"max_port":          stats.MaxPort,
+		"warning":           warning,
+	})
 }

@@ -38,24 +38,24 @@ type SBDNSRule struct {
 	Server  string   `json:"server"`
 }
 
-
 type SBInbound struct {
-	Type                     string   `json:"type"`
-	Tag                      string   `json:"tag"`
-	Listen                   string   `json:"listen,omitempty"`
-	ListenPort               int      `json:"listen_port,omitempty"`
-	Sniff                    bool     `json:"sniff,omitempty"`
-	SniffOverrideDestination bool     `json:"sniff_override_destination,omitempty"`
-	InterfaceName            string   `json:"interface_name,omitempty"`
-	Address                  []string `json:"address,omitempty"`
-	MTU                      int      `json:"mtu,omitempty"`
-	AutoRoute                bool     `json:"auto_route,omitempty"`
-	StrictRoute              bool     `json:"strict_route,omitempty"`
-	Stack                    string   `json:"stack,omitempty"`
+	Type          string   `json:"type"`
+	Tag           string   `json:"tag"`
+	Listen        string   `json:"listen,omitempty"`
+	ListenPort    int      `json:"listen_port,omitempty"`
+	InterfaceName string   `json:"interface_name,omitempty"`
+	Address       []string `json:"address,omitempty"`
+	MTU           int      `json:"mtu,omitempty"`
+	AutoRoute     bool     `json:"auto_route,omitempty"`
+	StrictRoute   bool     `json:"strict_route,omitempty"`
+	Stack         string   `json:"stack,omitempty"`
 	// RouteExcludeAddress — IP-адреса которые TUN-драйвер НЕ перехватывает.
 	// Критично: без этого sing-box перехватывает собственные соединения к прокси-серверу
 	// → routing loop (тысячи соединений по 500-600 байт на один IP).
-	RouteExcludeAddress      []string `json:"route_exclude_address,omitempty"`
+	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
+	// sniff_override_destination намеренно отсутствует: поле было legacy inbound field,
+	// deprecated в 1.11, удалено в 1.13. В 1.13 action "sniff" всегда переопределяет
+	// destination автоматически — отдельное поле не требуется.
 }
 
 // SBMultiplex конфигурация мультиплексирования соединений.
@@ -65,7 +65,7 @@ type SBInbound struct {
 type SBMultiplex struct {
 	Enabled    bool   `json:"enabled"`
 	Protocol   string `json:"protocol,omitempty"` // "smux" | "yamux" | "h2mux"
-	MaxStreams  int    `json:"max_streams,omitempty"`
+	MaxStreams int    `json:"max_streams,omitempty"`
 	Padding    bool   `json:"padding,omitempty"`
 }
 
@@ -78,6 +78,10 @@ type SBOutbound struct {
 	Flow       string       `json:"flow,omitempty"`
 	TLS        *SBTLS       `json:"tls,omitempty"`
 	Multiplex  *SBMultiplex `json:"multiplex,omitempty"`
+	// tcp_fast_open — валидный dial-field в sing-box v1.10+.
+	// tcp_no_delay, tcp_keep_alive, connect_timeout удалены: не существуют в схеме
+	// sing-box v1.13.5 и вызывают FATAL[0000] "json: unknown field" при старте.
+	TCPFastOpen *bool `json:"tcp_fast_open,omitempty"`
 }
 
 type SBTLS struct {
@@ -108,7 +112,7 @@ type SBRuleSet struct {
 // SBExperimental включает Clash-совместимый API для статистики трафика и соединений.
 // Доступен на 127.0.0.1:9090 — используется нашим бэкендом для /api/stats и /api/connections.
 type SBExperimental struct {
-	ClashAPI  SBClashAPI  `json:"clash_api"`
+	ClashAPI SBClashAPI `json:"clash_api"`
 	// CacheFile — персистентный кэш DNS между перезапусками sing-box.
 	// Устраняет cold DNS lookup (~50-200мс) на первых запросах после рестарта.
 	CacheFile *SBCacheFile `json:"cache_file,omitempty"`
@@ -116,10 +120,10 @@ type SBExperimental struct {
 
 // SBCacheFile включает персистентный кэш DNS (sing-box experimental).
 type SBCacheFile struct {
-	Enabled   bool   `json:"enabled"`
-	Path      string `json:"path,omitempty"`
-	CacheID   string `json:"cache_id,omitempty"`
-	StoreFakeIP bool  `json:"store_fakeip,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Path        string `json:"path,omitempty"`
+	CacheID     string `json:"cache_id,omitempty"`
+	StoreFakeIP bool   `json:"store_fakeip,omitempty"`
 }
 
 type SBClashAPI struct {
@@ -133,6 +137,10 @@ type SBRoute struct {
 	Final                 string        `json:"final"`
 	AutoDetectInterface   bool          `json:"auto_detect_interface"`
 	DefaultDomainResolver string        `json:"default_domain_resolver,omitempty"`
+	// FindProcess включает детектирование имени процесса для routing rules.
+	// Обязательно для работы process_name правил — без этого sing-box не определяет
+	// источник соединения и process_name никогда не матчится.
+	FindProcess bool `json:"find_process,omitempty"`
 }
 
 type SBRouteRule struct {

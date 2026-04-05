@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"proxyclient/internal/logger"
 	"regexp"
 	"strconv"
@@ -75,11 +76,15 @@ func RecordCleanShutdown(path ...string) {
 // ── Адаптивный gap ────────────────────────────────────────────────────────────
 
 const (
-	minGapBase         = 60 * time.Second
+	minGapBase         = 15 * time.Second
 	minGapMax          = 3 * time.Minute
 	coldStartThreshold = 2 * time.Minute
-	settleDelayBase    = 5 * time.Second
+	settleDelayBase    = 10 * time.Second
 	settleDelayMax     = 20 * time.Second
+	// fastDeleteSettle — settle delay для пути ForceDeleteAdapter (CM_Request_Device_Eject).
+	// Явное удаление device node через PnP manager чище чем ожидание GC Windows,
+	// поэтому 3с достаточно вместо стандартных 15с.
+	fastDeleteSettle = 3 * time.Second
 )
 
 const (
@@ -153,9 +158,14 @@ func ResetAdaptiveGap(path ...string) {
 // ── Расчет времени готовности (ETA) ───────────────────────────────────────────
 
 var estimateCache struct {
-	mu        sync.Mutex
-	result    time.Time
-	fileMtime time.Time
+	mu            sync.Mutex
+	result        time.Time
+	stopFileMtime time.Time
+	gapFileMtime  time.Time
+	// stopFilePath хранит абсолютный путь — без него тесты в разных temp-директориях
+	// с одинаковым mtime (Windows mtime имеет разрешение 1 сек) дают ложный cache-hit.
+	stopFilePath string
+	gapFilePath  string
 }
 
 func EstimateReadyAt() time.Time {
@@ -175,14 +185,34 @@ func EstimateReadyAt() time.Time {
 		return time.Now()
 	}
 
+	absStopPath, err := filepath.Abs(StopFile)
+	if err != nil {
+		absStopPath = StopFile
+	}
+
+	absGapPath, err := filepath.Abs(gapFile)
+	if err != nil {
+		absGapPath = gapFile
+	}
+
+	gapInfo, err := os.Stat(absGapPath)
+	var gapMtime time.Time
+	if err == nil {
+		gapMtime = gapInfo.ModTime()
+	}
+
 	mtime := fi.ModTime()
-	if mtime.Equal(estimateCache.fileMtime) {
+	if mtime.Equal(estimateCache.stopFileMtime) && absStopPath == estimateCache.stopFilePath &&
+		absGapPath == estimateCache.gapFilePath && gapMtime.Equal(estimateCache.gapFileMtime) {
 		return estimateCache.result
 	}
 
 	result := EstimateReadyAtWithFiles(StopFile, CleanShutdownFile, gapFile)
 	estimateCache.result = result
-	estimateCache.fileMtime = mtime
+	estimateCache.stopFileMtime = mtime
+	estimateCache.stopFilePath = absStopPath
+	estimateCache.gapFileMtime = gapMtime
+	estimateCache.gapFilePath = absGapPath
 	return result
 }
 
@@ -204,7 +234,13 @@ func EstimateReadyAtWithFiles(stopFile, cleanFile, gapFilePath string) time.Time
 	}
 
 	stopTime := time.Unix(0, ns)
-	elapsed := time.Since(stopTime)
+	now := time.Now()
+	if stopTime.After(now.Add(24*time.Hour)) || stopTime.Before(now.Add(-7*24*time.Hour)) {
+		// повреждённый timestamp — вне разумного диапазона
+		_ = os.Remove(stopFile)
+		return now
+	}
+	elapsed := now.Sub(stopTime)
 
 	// Если прошло больше порога "холодного старта" — готов сразу
 	if elapsed > coldStartThreshold {
@@ -215,7 +251,7 @@ func EstimateReadyAtWithFiles(stopFile, cleanFile, gapFilePath string) time.Time
 	readyAt := stopTime.Add(gap)
 
 	// ФИКС: Если расчетное время готовности уже в прошлом — возвращаем "сейчас"
-	if readyAt.Before(time.Now()) {
+	if readyAt.Before(now) {
 		return time.Now()
 	}
 
@@ -225,23 +261,71 @@ func EstimateReadyAtWithFiles(stopFile, cleanFile, gapFilePath string) time.Time
 // ── Polling Логика ────────────────────────────────────────────────────────────
 
 func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
+	// BUG FIX: раньше при отсутствии стоп-файла функция делала немедленный return.
+	// Если предыдущая сессия завершилась аварийно (kill, BSOD, power loss) —
+	// стоп-файл не записывается, но wintun kernel-объект всё ещё удерживается
+	// Windows GC. sing-box падает через 15с с «Cannot create a file when that
+	// file already exists». Теперь: даже без стоп-файла проверяем kernel-объект
+	// напрямую и ждём его освобождения если он занят.
+	noStopFile := false
 	if _, err := os.Stat(StopFile); os.IsNotExist(err) {
-		return
+		// Стоп-файла нет, но kernel-объект может быть жив после аварийного завершения.
+		// Быстрая проверка: если объект уже свободен — стартуем сразу (hot path).
+		//
+		// BUG FIX: используем короткий дочерний контекст (100ms) вместо
+		// InterfaceExists (own 300ms ctx) или InterfaceExistsCtx(ctx) (может быть unbounded).
+		//
+		// Проблема 1 (TestMarkerCombinations/combo_no_stop_ever):
+		//   InterfaceExists создавала независимый ctx с 300ms — оба таймера
+		//   (внешний и внутренний) истекали почти одновременно → false positive.
+		//
+		// Проблема 2 (TestPollUntilFree_NoStopFile*):
+		//   Передача сырого ctx (t.Context(), без дедлайна) в InterfaceExistsCtx
+		//   делала проверку unbounded — медленный netsh блокировал на минуты.
+		//
+		// Решение: дочерний ctx наследует отмену родителя И ограничен 100ms.
+		// При нормальной работе netsh отвечает за <5ms; 100ms — жёсткий потолок.
+		fastCtx, fastCancel := context.WithTimeout(ctx, 100*time.Millisecond)
+		fastFree := kernelObjectFree(ifName) && !InterfaceExistsCtx(fastCtx, ifName)
+		fastCancel()
+		if fastFree {
+			return
+		}
+		// Объект ещё жив — упали без стоп-файла, входим в polling.
+		log.Info("wintun: стоп-файл отсутствует, но kernel-объект занят (аварийное завершение) — ждём освобождения")
+		noStopFile = true
 	}
 
-	if _, err := os.Stat(CleanShutdownFile); err == nil {
-		_ = os.Remove(CleanShutdownFile)
-		log.Info("wintun: чистое завершение — старт без задержек")
-		return
+	if !noStopFile {
+		if _, err := os.Stat(CleanShutdownFile); err == nil {
+			// Удаляем маркер сразу, чтобы EstimateReadyAt не вернул "now" если мы
+			// провалимся в gap-ожидание ниже (в случае неудачи ForceDeleteAdapter).
+			_ = os.Remove(CleanShutdownFile)
+			log.Info("wintun: clean shutdown обнаружен, форсированное удаление адаптера")
+			if ForceDeleteAdapter(ifName) {
+				// PnP-эжекция прошла успешно: device node удалён корректно,
+				// Windows GC не нужен. Используем fastDeleteSettle (3с) вместо gap.
+				log.Info("wintun: адаптер удалён через PnP, ждём settle %v", fastDeleteSettle)
+				SleepCtx(ctx, fastDeleteSettle)
+			} else {
+				// ForceDeleteAdapter вернул false (DLL не найдена или адаптер уже свободен).
+				// CleanShutdown гарантирует что sing-box вызвал WintunCloseAdapter перед выходом
+				// → kernel-объект уже освобождён → можно стартовать немедленно без gap.
+				log.Info("wintun: ForceDeleteAdapter не доступен, но CleanShutdown гарантирует освобождение адаптера")
+			}
+			return
+		}
 	}
 
 	fastDeleted := false
-	if _, err := os.Stat(FastDeleteFile); err == nil {
-		_ = os.Remove(FastDeleteFile)
-		fastDeleted = true
+	if !noStopFile {
+		if _, err := os.Stat(FastDeleteFile); err == nil {
+			_ = os.Remove(FastDeleteFile)
+			fastDeleted = true
+		}
 	}
 
-	if !fastDeleted {
+	if !fastDeleted && !noStopFile {
 		eta := EstimateReadyAt()
 		if remaining := time.Until(eta); remaining > 0 {
 			log.Info("wintun: ожидание GC Windows до %v...", eta.Format("15:04:05"))
@@ -257,10 +341,24 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 	deadline := time.Now().Add(60 * time.Second)
 
 	for time.Now().Before(deadline) {
-		if kernelObjectFree(ifName) && !InterfaceExists(ifName) {
+		// BUG FIX (фаззер): используем InterfaceExistsCtx(ctx) вместо InterfaceExists.
+		// InterfaceExists создавала собственный context.Background() с 300ms таймаутом
+		// независимо от внешнего ctx. При зависании netsh (cmd.Wait блокируется на
+		// WaitForSingleObject(INFINITE) несмотря на WaitDelay) PollUntilFree висела
+		// вечно, игнорируя отмену ctx. FuzzStopFileContent: EOF. FuzzPollUntilFreeFiles: таймаут.
+		if ctx.Err() != nil {
+			return
+		}
+		if kernelObjectFree(ifName) && !NetAdapterExistsCtx(ctx, ifName) {
 			confirmCount++
 			if confirmCount >= confirmRequired {
 				settle := ReadSettleDelay()
+				// ОПТИМИЗАЦИЯ: после явного удаления через CM_Request_Device_Eject
+				// (ForceDeleteAdapter) device node удалён из PnP реестра корректно —
+				// Windows GC не нужно ждать. Используем 3с вместо 15с.
+				if fastDeleted {
+					settle = fastDeleteSettle
+				}
 				SleepCtx(ctx, settle)
 				return
 			}
@@ -329,11 +427,35 @@ func SleepCtx(ctx context.Context, d time.Duration) bool {
 
 // ── Системные функции ────────────────────────────────────────────────────────
 
-func InterfaceExists(ifName string) bool {
-	cmd := exec.Command("netsh", "interface", "show", "interface", ifName)
+// InterfaceExistsCtx проверяет существование сетевого интерфейса используя
+// предоставленный ctx в качестве дедлайна для netsh.
+// Используйте эту версию когда вызов уже находится внутри ограниченного контекста
+// (например, в fast-path PollUntilFree), чтобы избежать конфликта двух 300ms таймеров.
+//
+// WaitDelay=50ms: когда ctx отменяется, Go посылает TerminateProcess(netsh).
+// На Windows TerminateProcess почти мгновенный, но в редких случаях (сетевые блокировки,
+// зависший процесс) cmd.Wait() блокируется на WaitForSingleObject(INFINITE) навсегда.
+// WaitDelay гарантирует что Wait вернётся не позже чем через 50ms после отмены ctx,
+// предотвращая бесконечный hang (воспроизводится в FuzzPollUntilFreeFiles).
+func InterfaceExistsCtx(ctx context.Context, ifName string) bool {
+	cmd := exec.CommandContext(ctx, "netsh", "interface", "show", "interface", ifName)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	cmd.WaitDelay = 50 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.Contains(string(out), ifName)
+}
+
+func InterfaceExists(ifName string) bool {
+	// BUG FIX (фаззер): используем короткий таймаут 300ms вместо 5s.
+	// 3 подтверждения × 300ms = 900ms — укладывается в тестовые окна.
+	// При реальном использовании netsh отвечает за <50ms.
+	//
+	// NOTE: не используйте эту функцию в fast-path PollUntilFree — там
+	// вызывайте InterfaceExistsCtx(ctx, ifName) чтобы избежать коллизии
+	// двух независимых 300ms таймеров (баг: elapsed=320ms в no_stop_ever).
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	return InterfaceExistsCtx(ctx, ifName)
 }
 
 func NetAdapterExists(ifName string) bool {
@@ -344,28 +466,82 @@ func NetAdapterExists(ifName string) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "True"
 }
 
+func NetAdapterExistsCtx(ctx context.Context, ifName string) bool {
+	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		`(Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+ifName+`*' -or $_.FriendlyName -like '*wintun*' } | Measure-Object).Count -gt 0`)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	out, err := cmd.CombinedOutput()
+	return err == nil && strings.TrimSpace(string(out)) == "True"
+}
+
 func RemoveStaleTunAdapter(log logger.Logger) {
-	repairStaleDriver(log)
+	RemoveStaleTunAdapterCtx(context.Background(), log)
+}
+
+func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
+	repairStaleDriver(ctx, log)
 	run := func(n string, a ...string) {
 		c := exec.Command(n, a...)
 		c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 		_ = c.Run()
 	}
 	run("taskkill", "/F", "/IM", "sing-box.exe", "/T")
-	run("sc", "stop", "wintun")
 
+	// BUG FIX: ForceDeleteAdapter вызывается ДО sc stop wintun.
+	//
+	// Проблема: sc stop выгружает wintun драйвер → WintunOpenAdapter возвращает NULL
+	// (невозможно связаться с драйвером, а не "адаптер не существует").
+	// ForceDeleteAdapter трактовал NULL как "адаптер свободен" → создавал FastDeleteFile
+	// без реального удаления device node → при следующем старте sing-box загружал
+	// драйвер, находил stale-регистрацию в реестре → WintunCreateAdapter падал с
+	// "Cannot create a file when that file already exists".
+	//
+	// Исправление: даём Windows 2с освободить хэндлы убитого процесса, затем
+	// вызываем ForceDeleteAdapter пока драйвер ещё работает — WintunDeleteAdapter
+	// корректно удаляет device node через CM_Request_Device_Eject. sc stop — после.
+	time.Sleep(2 * time.Second)
 	if ForceDeleteAdapter(tunInterfaceName) {
 		_ = os.WriteFile(FastDeleteFile, []byte("1"), 0644)
 	}
+	run("sc", "stop", "wintun")
+	// Дать время драйверу выгрузиться и пересканировать hardware
+	time.Sleep(2 * time.Second)
+	run("pnputil", "/scan-for-hardware-changes")
 }
 
-func repairStaleDriver(log logger.Logger) {
-	cmd := exec.Command("sc", "query", "wintun")
+// repairStaleDriver удаляет регистрацию wintun сервиса только если он завис
+// в состоянии STOP_PENDING (SCM не может его остановить корректно).
+//
+// Намеренно НЕ удаляем при состоянии STOPPED — это нормальное состояние между
+// запусками. Удаление при STOPPED вызывало: sc delete → ядро держит driver object
+// → WintunCreateAdapter пытается переустановить → таймаут 10с → FATAL (BUG #TURN-1).
+//
+// При STOPPED достаточно вызвать sc stop (ноп) — wintun.dll при следующем
+// WintunCreateAdapter сама разберётся с регистрацией.
+func repairStaleDriver(ctx context.Context, log logger.Logger) {
+	cmd := exec.CommandContext(ctx, "sc", "query", "wintun")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
-	out, _ := cmd.CombinedOutput()
-	if strings.Contains(string(out), "STATE") && !strings.Contains(string(out), "RUNNING") {
-		_ = exec.Command("sc", "delete", "wintun").Run()
-		log.Info("wintun: stale driver registration removed")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return // сервис не зарегистрирован — ничего делать не нужно
+	}
+	// Только STOP_PENDING — сервис завис и SCM не смог его остановить.
+	// Удаляем регистрацию, чтобы следующий WintunCreateAdapter начал с чистого листа.
+	if !strings.Contains(string(out), "STOP_PENDING") {
+		return
+	}
+	_ = exec.CommandContext(ctx, "sc", "delete", "wintun").Run()
+	log.Info("wintun: stale driver registration removed (was STOP_PENDING)")
+	// Ждём пока SCM подтвердит удаление (обычно < 1с).
+	for i := 0; i < 10; i++ {
+		if !SleepCtx(ctx, 300*time.Millisecond) {
+			return // отменено при shutdown
+		}
+		chk := exec.CommandContext(ctx, "sc", "query", "wintun")
+		chk.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		if _, e := chk.Output(); e != nil {
+			break // сервис исчез из SCM
+		}
 	}
 }
 
