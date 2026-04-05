@@ -71,11 +71,17 @@ func writeGap(t *testing.T, d time.Duration) {
 
 // runWithTimeout запускает PollUntilFree с коротким ctx и возвращает время выполнения.
 // fastReturn = true если функция вернулась быстрее порога.
+//
+// Используем "tun-test-nonexistent" вместо "tun0" чтобы изолировать тесты от
+// реального wintun-адаптера на машине разработчика: kernelObjectFree вызывает
+// WintunOpenAdapter → если адаптер "tun0" ещё жив (GC Windows не завершился),
+// функция уходит в polling и не укладывается в 300мс даже при no_stop_ever.
+// Несуществующее имя гарантирует NULL от WintunOpenAdapter → kernelObjectFree=true.
 func runWithTimeout(deadline time.Duration) (elapsed time.Duration, cancelled bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	start := time.Now()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 	elapsed = time.Since(start)
 	cancelled = ctx.Err() != nil
 	return
@@ -133,7 +139,7 @@ func TestCleanShutdownFile_IsOneShot(t *testing.T) {
 	// Первый вызов — потребляет маркер
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	if _, err := os.Stat(wintun.CleanShutdownFile); !os.IsNotExist(err) {
 		t.Error("БАГ: CleanShutdownFile должен быть удалён после первого PollUntilFree")
@@ -205,7 +211,7 @@ func TestPollUntilFree_Path1_FastDeleteSkipsGap(t *testing.T) {
 	// Канселим через 500мс — проверяем что маркер удалён до входа в gap.
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	if _, err := os.Stat(wintun.FastDeleteFile); !os.IsNotExist(err) {
 		t.Error("БАГ: FastDeleteFile должен быть удалён сразу — до gap/settle")
@@ -223,7 +229,7 @@ func TestPollUntilFree_Path2_ColdStart_NoGapWait(t *testing.T) {
 	// Контекст 1с: хватает на confirm-loop (3×500мс=1.5с) после пропуска gap.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	// Либо вернулась (confirm-loop прошёл), либо отменена — главное не >10с ожидания
 	// что было бы при полном gap
@@ -242,7 +248,7 @@ func TestPollUntilFree_Path3_HotStart_WaitsGap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 	elapsed := time.Since(start)
 
 	if ctx.Err() == nil {
@@ -267,7 +273,7 @@ func TestPollUntilFree_HotStart_PartialGap(t *testing.T) {
 	// Если правильно считает remaining=~30с — тоже отменится, но это ожидаемо
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	if ctx.Err() == nil {
 		// Вернулась без отмены? Значит remaining ≈ 0 что неправильно для 30с elapsed
@@ -293,7 +299,7 @@ func TestPollUntilFree_StopFileInFuture(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	// Должна зависнуть (ждёт gap), но НЕ зависнуть на 70 минут
 	// Проверяем что ctx отменился (≈400мс) а не раньше чем за 200мс
@@ -322,7 +328,7 @@ func TestPollUntilFree_StopFileZeroTimestamp(t *testing.T) {
 			t.Errorf("panic при нулевом timestamp StopFile: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 }
 
 // TestPollUntilFree_StopFileNegativeTimestamp проверяет устойчивость к
@@ -340,7 +346,7 @@ func TestPollUntilFree_StopFileNegativeTimestamp(t *testing.T) {
 			t.Errorf("panic при отрицательном timestamp: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 }
 
 // TestPollUntilFree_StopFileMaxInt64 проверяет устойчивость к максимальному
@@ -358,7 +364,7 @@ func TestPollUntilFree_StopFileMaxInt64(t *testing.T) {
 			t.Errorf("panic при max int64 timestamp: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 }
 
 // TestPollUntilFree_ExactColdStartBoundary проверяет граничное значение
@@ -379,7 +385,7 @@ func TestPollUntilFree_ExactColdStartBoundary(t *testing.T) {
 			t.Errorf("panic на границе coldStartThreshold: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 	// Либо пошёл по пути 2 (холодный, нет gap), либо по пути 3 (горячий, gap)
 	// В любом случае не должно быть паники
 }
@@ -404,7 +410,7 @@ func TestPollUntilFree_CorruptStopFile(t *testing.T) {
 			t.Errorf("panic при повреждённом StopFile: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 }
 
 // TestPollUntilFree_EmptyStopFile проверяет поведение при пустом StopFile.
@@ -421,7 +427,7 @@ func TestPollUntilFree_EmptyStopFile(t *testing.T) {
 			t.Errorf("panic при пустом StopFile: %v", r)
 		}
 	}()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 }
 
 // TestGapFile_Corrupt проверяет что повреждённый gap файл даёт minGapBase (60с).
@@ -430,8 +436,8 @@ func TestGapFile_Corrupt(t *testing.T) {
 
 	_ = os.WriteFile("wintun_gap_ns", []byte("BROKEN\x00"), 0644)
 	gap := wintun.ReadAdaptiveGap()
-	if gap != 60*time.Second {
-		t.Errorf("повреждённый gap файл: got %v, want 60s (fallback)", gap)
+	if gap != wintun.MinGapBase {
+		t.Errorf("повреждённый gap файл: got %v, want %v (fallback)", gap, wintun.MinGapBase)
 	}
 }
 
@@ -441,8 +447,8 @@ func TestGapFile_NegativeValue(t *testing.T) {
 
 	_ = os.WriteFile("wintun_gap_ns", []byte("-1000000000"), 0644)
 	gap := wintun.ReadAdaptiveGap()
-	if gap < 60*time.Second {
-		t.Errorf("отрицательный gap: должен быть >= 60s, got %v", gap)
+	if gap < wintun.MinGapBase {
+		t.Errorf("отрицательный gap: должен быть >= %v, got %v", wintun.MinGapBase, gap)
 	}
 }
 
@@ -457,7 +463,7 @@ func TestFastDeleteFile_Corrupted(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	// Маркер должен быть удалён (факт существования = сигнал, содержимое не важно)
 	if _, err := os.Stat(wintun.FastDeleteFile); !os.IsNotExist(err) {
@@ -474,7 +480,8 @@ func TestFastDeleteFile_Corrupted(t *testing.T) {
 func TestAdaptiveGap_SequenceOfCrashes(t *testing.T) {
 	defer simu(t)()
 
-	expected := []time.Duration{60 * time.Second, 120 * time.Second, 3 * time.Minute}
+	// MinGapBase(15s) → 30s → 60s при 2 увеличениях
+	expected := []time.Duration{wintun.MinGapBase, wintun.MinGapBase * 2, wintun.MinGapBase * 4}
 	for i, want := range expected {
 		got := wintun.ReadAdaptiveGap()
 		if got != want {
@@ -485,7 +492,9 @@ func TestAdaptiveGap_SequenceOfCrashes(t *testing.T) {
 		}
 	}
 
-	// Ещё одно увеличение — cap должен удерживать
+	// Несколько увеличений до cap — должен держаться на MaxGap=3m
+	wintun.IncreaseAdaptiveGap(&silentLog{})
+	wintun.IncreaseAdaptiveGap(&silentLog{})
 	wintun.IncreaseAdaptiveGap(&silentLog{})
 	if gap := wintun.ReadAdaptiveGap(); gap != 3*time.Minute {
 		t.Errorf("gap должен оставаться на cap=3m, got %v", gap)
@@ -505,8 +514,8 @@ func TestAdaptiveGap_ResetAfterSuccessfulStart(t *testing.T) {
 	// Успешный запуск — сброс
 	wintun.ResetAdaptiveGap()
 
-	if gap := wintun.ReadAdaptiveGap(); gap != 60*time.Second {
-		t.Errorf("после ResetAdaptiveGap gap должен быть 60s, got %v", gap)
+	if gap := wintun.ReadAdaptiveGap(); gap != wintun.MinGapBase {
+		t.Errorf("после ResetAdaptiveGap gap должен быть %v, got %v", wintun.MinGapBase, gap)
 	}
 	if _, err := os.Stat("wintun_gap_ns"); !os.IsNotExist(err) {
 		t.Error("файл gap должен быть удалён после ResetAdaptiveGap")
@@ -680,7 +689,7 @@ func TestConcurrent_PollUntilFree_MultipleGoroutines(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+			wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 		}()
 	}
 	done := make(chan struct{})
@@ -731,7 +740,7 @@ func TestScenario_AppKilledByUser(t *testing.T) {
 	// 2. Следующий старт — должен ждать gap
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+	wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 
 	if ctx.Err() == nil {
 		t.Error("Сценарий 'kill -9': PollUntilFree должна ждать gap, но вернулась мгновенно")
@@ -765,7 +774,7 @@ func TestScenario_SuccessfulStartResetsGap(t *testing.T) {
 	}
 	before := wintun.ReadAdaptiveGap()
 
-	// Успешный старт
+	// Успешный запуск
 	wintun.ResetAdaptiveGap()
 	wintun.RecordStop()
 	wintun.RecordCleanShutdown()
@@ -775,8 +784,8 @@ func TestScenario_SuccessfulStartResetsGap(t *testing.T) {
 	if after >= before {
 		t.Errorf("после успешного старта gap должен сброситься: before=%v, after=%v", before, after)
 	}
-	if after != 60*time.Second {
-		t.Errorf("после reset gap должен быть 60s, got %v", after)
+	if after != wintun.MinGapBase {
+		t.Errorf("после reset gap должен быть %v, got %v", wintun.MinGapBase, after)
 	}
 }
 
@@ -864,8 +873,8 @@ func TestInvariant_GapNeverBelowBase(t *testing.T) {
 	// Записываем очень маленькое значение
 	_ = os.WriteFile("wintun_gap_ns", []byte("1"), 0644) // 1 нс
 	gap := wintun.ReadAdaptiveGap()
-	if gap < 60*time.Second {
-		t.Errorf("ИНВАРИАНТ НАРУШЕН: gap=%v, должен быть >= 60s (minGapBase)", gap)
+	if gap < wintun.MinGapBase {
+		t.Errorf("ИНВАРИАНТ НАРУШЕН: gap=%v, должен быть >= %v (minGapBase)", gap, wintun.MinGapBase)
 	}
 }
 
@@ -905,7 +914,7 @@ func TestInvariant_ContextCancellationAlwaysWorks(t *testing.T) {
 	defer simu(t)()
 
 	scenarios := []struct {
-		name string
+		name  string
 		setup func()
 	}{
 		{"no_stop_file", func() {}},
@@ -932,7 +941,7 @@ func TestInvariant_ContextCancellationAlwaysWorks(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
+				wintun.PollUntilFree(ctx, &silentLog{}, "tun-test-nonexistent")
 			}()
 
 			time.Sleep(50 * time.Millisecond)
@@ -952,7 +961,7 @@ func TestInvariant_ContextCancellationAlwaysWorks(t *testing.T) {
 // БЛОК 10: SettleDelay — корректность расчёта
 // ─────────────────────────────────────────────────────────────────────────────
 
-// TestSettleDelay_BaseCap проверяет что базовый settle = settleDelayBase (5с).
+// TestSettleDelay_BaseCap проверяет что базовый settle = settleDelayBase (10с).
 func TestSettleDelay_BaseCap(t *testing.T) {
 	defer simu(t)()
 
@@ -960,7 +969,7 @@ func TestSettleDelay_BaseCap(t *testing.T) {
 	// Но если settle снизили до 5s, то max(5, 15) = 15s
 	settle := wintun.ReadSettleDelay()
 	if settle < 5*time.Second {
-		t.Errorf("settle не должен быть < settleDelayBase=5s, got %v", settle)
+		t.Errorf("settle не должен быть < settleDelayBase=10s, got %v", settle)
 	}
 	if settle > 20*time.Second {
 		t.Errorf("settle не должен быть > settleDelayMax=20s, got %v", settle)
@@ -1014,12 +1023,12 @@ func (s *silentLog) Error(f string, a ...interface{}) {}
 // либо корректно уходить в ожидание (path 2/3) без паники.
 func TestMarkerCombinations(t *testing.T) {
 	type combo struct {
-		hasStop         bool
-		hasFastDelete   bool
+		hasStop          bool
+		hasFastDelete    bool
 		hasCleanShutdown bool
-		stopAge         time.Duration // отрицательное = в прошлом
-		expectFast      bool          // ожидаем быстрый возврат (< 300мс без отмены ctx)?
-		desc            string
+		stopAge          time.Duration // отрицательное = в прошлом
+		expectFast       bool          // ожидаем быстрый возврат (< 300мс без отмены ctx)?
+		desc             string
 	}
 
 	cases := []combo{

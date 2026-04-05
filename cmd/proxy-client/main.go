@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -46,7 +50,10 @@ var (
 	// Имя procCreateMutexW (не procCreateMutex) — чтобы не конфликтовать с
 	// одноимённой переменной в orphan_test.go.
 	procCreateMutexW = kern32.NewProc("CreateMutexW")
+	// БАГ-3: для получения полного пути к процессу (фильтр по директории).
+	procQueryFullProcessImageName = kern32.NewProc("QueryFullProcessImageNameW")
 )
+
 const (
 	logFile         = "proxy-client.log"
 	shutdownTimeout = 10 * time.Second
@@ -82,9 +89,16 @@ func main() {
 		psCmd := fmt.Sprintf(`Start-Process -FilePath '%s' -Verb RunAs`,
 			strings.ReplaceAll(exePath, "'", "''"))
 		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", psCmd)
-		_ = cmd.Start()
+		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Не удалось запустить с правами администратора: %v\n", err)
+			os.Exit(1)
+		}
+		go func() { _ = cmd.Wait() }()
 		os.Exit(0)
 	}
+
+	runtime.LockOSThread()
 
 	// BUG FIX #1: ранний defer recover удалён.
 	// Два defer recover в LIFO-порядке: поздний (с output) перехватывает панику первым,
@@ -152,7 +166,12 @@ func main() {
 // run — главный оркестратор. Создаёт App, поднимает инфраструктуру,
 // запускает фоновую инициализацию sing-box, блокируется на трее.
 func run(output io.Writer) error {
+	turnPort := flag.Int("turn-port", 3478,
+		"UDP порт серверного vk-turn-relay (3478 по умолчанию, 443 если 3478 заблокирован)")
+	flag.Parse()
+
 	cfg := DefaultAppConfig()
+	cfg.TURNRelayPort = *turnPort
 	app := NewApp(cfg, output)
 
 	app.anomaly.Start()
@@ -286,6 +305,12 @@ func run(output io.Writer) error {
 		window.Open(cfg.WebUIURL)
 	}()
 
+	go func() {
+		tray.WaitReady()
+		<-apiReady
+		app.refreshTrayServers(cfg.APIAddress)
+	}()
+
 	tray.SetProxyAddr(proxyConfig.Address)
 	// BUG FIX #NEW-3: OnQuit callback трея не был защищён sync.Once.
 	// handleQuit (POST /api/quit) уже использует s.quitOnce.Do(...).
@@ -325,6 +350,23 @@ func run(output io.Writer) error {
 				notification.Send("Proxy", "Прокси отключён")
 			}
 		},
+		OnServerSwitch: func(serverID string) {
+			if serverID == "" {
+				return
+			}
+			if app.apiServer.IsWarming() {
+				notification.Send("Proxy", "Инициализация... подождите")
+				return
+			}
+			go func() {
+				if err := app.connectTrayServer(cfg.APIAddress, serverID); err != nil {
+					app.mainLogger.Error("Не удалось переключить сервер: %v", err)
+					notification.Send("Proxy", "Не удалось переключить сервер")
+					return
+				}
+				app.refreshTrayServers(cfg.APIAddress)
+			}()
+		},
 		OnQuit: func() { trayQuitOnce.Do(func() { close(app.quit) }) },
 	})
 
@@ -336,10 +378,150 @@ func run(output io.Writer) error {
 	return nil
 }
 
+// refreshTrayServers обновляет список серверов в меню трея через локальный API.
+func (a *App) refreshTrayServers(apiAddress string) {
+	type serverListResponse struct {
+		Servers []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"servers"`
+		ActiveID string `json:"active_id"`
+	}
+
+	url := "http://localhost" + apiAddress + "/api/servers"
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		a.mainLogger.Warn("Не удалось получить список серверов из API: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		a.mainLogger.Warn("API /api/servers вернул статус %d", resp.StatusCode)
+		return
+	}
+
+	var listResp serverListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		a.mainLogger.Warn("Не удалось распарсить список серверов: %v", err)
+		return
+	}
+
+	items := make([]tray.ServerItem, 0, len(listResp.Servers))
+	activeName := ""
+	for _, srv := range listResp.Servers {
+		isActive := srv.ID == listResp.ActiveID
+		items = append(items, tray.ServerItem{
+			ID:     srv.ID,
+			Name:   srv.Name,
+			Active: isActive,
+		})
+		if isActive {
+			activeName = srv.Name
+		}
+	}
+	if len(items) == 0 {
+		items = append(items, tray.ServerItem{Name: "Нет серверов", Active: false})
+	}
+
+	tray.SetServerList(items)
+	tray.SetActiveServer(activeName)
+}
+
+func (a *App) connectTrayServer(apiAddress, serverID string) error {
+	url := fmt.Sprintf("http://localhost%s/api/servers/%s/connect", apiAddress, serverID)
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // ── Windows helpers ───────────────────────────────────────────────────────────
 
 func killOrphanSingBox(log interface{ Info(string, ...interface{}) }) bool {
-	return killProcessesByName("sing-box.exe", log)
+	// БАГ-3: убиваем только sing-box.exe из нашей директории.
+	// Clash, Hiddify и другие VPN-клиенты тоже используют sing-box.exe —
+	// убивать их нельзя.
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = strings.ToLower(filepath.Dir(exe))
+	}
+	return killProcessesInDir("sing-box.exe", exeDir, log)
+}
+
+// killProcessesInDir — как killProcessesByName, но убивает только процессы из exeDir.
+// Защита: не трогаем sing-box.exe принадлежащий другим VPN-приложениям.
+func killProcessesInDir(targetName string, exeDir string, log interface{ Info(string, ...interface{}) }) bool {
+	snap, err := createToolhelp32Snapshot()
+	if err != nil {
+		return false
+	}
+	defer syscall.CloseHandle(snap)
+
+	type entry32 struct {
+		Size              uint32
+		CntUsage          uint32
+		ProcessID         uint32
+		DefaultHeapID     uintptr
+		ModuleID          uint32
+		CntThreads        uint32
+		ParentProcessID   uint32
+		PriorityClassBase int32
+		Flags             uint32
+		ExeFile           [syscall.MAX_PATH]uint16
+	}
+
+	var e entry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	selfPID := uint32(os.Getpid())
+	var procs []*os.Process
+	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
+	for ret != 0 {
+		name := syscall.UTF16ToString(e.ExeFile[:])
+		if strings.EqualFold(name, targetName) && e.ProcessID != selfPID {
+			// Проверяем директорию процесса если exeDir задан
+			if exeDir != "" {
+				procPath := getProcessExePath(e.ProcessID)
+				if procPath != "" && !strings.EqualFold(filepath.Dir(procPath), exeDir) {
+					ret, _, _ = procProcess32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
+					continue
+				}
+			}
+			if proc, err := os.FindProcess(int(e.ProcessID)); err == nil {
+				log.Info("Завершаем осиротевший процесс %s (PID: %d)", targetName, e.ProcessID)
+				_ = proc.Kill()
+				procs = append(procs, proc)
+			}
+		}
+		ret, _, _ = procProcess32Next.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
+	}
+	if len(procs) == 0 {
+		return false
+	}
+	for _, p := range procs {
+		done := make(chan struct{}, 1)
+		go func(proc *os.Process) {
+			_, _ = proc.Wait()
+			close(done)
+		}(p)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			log.Info("Таймаут ожидания завершения sing-box.exe (PID: %d) — продолжаем", p.Pid)
+		}
+	}
+	time.Sleep(1 * time.Second)
+	return true
 }
 
 func killProcessesByName(targetName string, log interface{ Info(string, ...interface{}) }) bool {
@@ -409,6 +591,29 @@ func createToolhelp32Snapshot() (syscall.Handle, error) {
 		return syscall.InvalidHandle, err
 	}
 	return syscall.Handle(h), nil
+}
+
+// getProcessExePath возвращает полный путь к исполняемому файлу процесса.
+// Использует QueryFullProcessImageNameW (Vista+). Возвращает "" при ошибке.
+func getProcessExePath(pid uint32) string {
+	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+	hProc, err := syscall.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return ""
+	}
+	defer syscall.CloseHandle(hProc)
+
+	buf := make([]uint16, syscall.MAX_PATH)
+	size := uint32(len(buf))
+	ret, _, _ := procQueryFullProcessImageName.Call(
+		uintptr(hProc), 0,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(unsafe.Pointer(&size)),
+	)
+	if ret == 0 {
+		return ""
+	}
+	return syscall.UTF16ToString(buf[:size])
 }
 
 // isRunningAsAdmin проверяет привилегии через Windows token elevation.

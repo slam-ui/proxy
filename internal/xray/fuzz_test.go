@@ -105,8 +105,13 @@ func FuzzTailWriter(f *testing.F) {
 		if maxSize < 0 {
 			maxSize = 0
 		}
-		if maxSize > 1<<20 { // 1MB max
-			maxSize = 1 << 20
+		if maxSize > 1<<16 { // 64KB max — 1MB вызывало OOM при миллионах итераций фаззера
+			maxSize = 1 << 16
+		}
+		// Ограничиваем размер data чтобы один вызов не занимал больше 64KB памяти.
+		const maxDataLen = 1 << 16
+		if len(data) > maxDataLen {
+			data = data[:maxDataLen]
 		}
 
 		defer func() {

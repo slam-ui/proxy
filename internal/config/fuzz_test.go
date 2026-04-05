@@ -12,7 +12,6 @@ package config
 
 import (
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 )
@@ -242,19 +241,14 @@ func FuzzParseVLESSURL(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, input string) {
-		// Пишем во временный файл
-		tmpFile, err := os.CreateTemp("", "vless_fuzz_*.key")
-		if err != nil {
-			t.Skip("не удалось создать tempfile")
-		}
-		tmpName := tmpFile.Name()
-		defer os.Remove(tmpName)
-
-		_, _ = tmpFile.WriteString(input)
-		_ = tmpFile.Close()
+		// BUG FIX: раньше здесь создавался temp-файл на каждую итерацию.
+		// Это давало ~3 exec/sec вместо ~60k/sec — Windows Defender/файловая
+		// система блокировала воркеров, минимизатор зависал и падал с
+		// "fuzzing process hung or terminated unexpectedly while minimizing: EOF".
+		// Теперь используем parseVLESSContentInternal напрямую — никакого I/O в цикле.
 
 		// Инвариант 1: нет паники
-		params, parseErr := readAndParseVLESS(tmpName)
+		params, parseErr := parseVLESSContentInternal(input)
 
 		// Инвариант 2: params == nil при ошибке
 		if parseErr != nil && params != nil {

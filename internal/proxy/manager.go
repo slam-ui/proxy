@@ -1,11 +1,13 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"proxyclient/internal/logger"
 )
@@ -21,6 +23,13 @@ type Manager interface {
 	Disable() error
 	IsEnabled() bool
 	GetConfig() Config
+	// B-2: StartGuard запускает периодическую проверку состояния системного прокси.
+	// Если прокси был отключён извне (antivirus, Windows Update, Teams, etc.),
+	// guard восстанавливает его с сохранённой конфигурацией.
+	// interval — интервал проверки (defautl 5s). Горутина запускается в фоне,
+	// вызови Stop() или отмени ctx чтобы завершить guard.
+	StartGuard(ctx context.Context, interval time.Duration) error
+	StopGuard()
 }
 
 type manager struct {
@@ -28,16 +37,21 @@ type manager struct {
 	enabled bool
 	logger  logger.Logger
 	mu      sync.RWMutex
+
+	// B-2: Proxy Guard поля
+	guardCtx     context.Context
+	guardCancel  context.CancelFunc
+	guardRunning bool // BUG FIX: sync.Once не позволяет перезапуск после StopGuard
 }
 
 func NewManager(log logger.Logger) Manager {
-	enabled, addr := getSystemProxyState()
+	enabled, addr, override := getSystemProxyState()
 	m := &manager{
 		logger:  log,
 		enabled: enabled,
 	}
 	if enabled && addr != "" {
-		m.config = Config{Address: addr}
+		m.config = Config{Address: addr, Override: override}
 	}
 	return m
 }
@@ -95,6 +109,97 @@ func (m *manager) GetConfig() Config {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
+}
+
+// B-2: StartGuard запускает периодическую проверку состояния системного прокси.
+func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error {
+	if interval < 1*time.Second {
+		interval = 5 * time.Second
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// BUG FIX: sync.Once срабатывает только один раз за lifetime объекта.
+	// После StopGuard() повторный StartGuard() был no-op — guard не перезапускался.
+	// Явный флаг guardRunning позволяет корректно перезапустить guard.
+	if m.guardRunning {
+		// Останавливаем старый перед перезапуском
+		if m.guardCancel != nil {
+			m.guardCancel()
+		}
+	}
+	m.guardCtx, m.guardCancel = context.WithCancel(ctx)
+	m.guardRunning = true
+	guardCtx := m.guardCtx
+	go func() {
+		m.guardLoop(guardCtx, interval)
+		m.mu.Lock()
+		m.guardRunning = false
+		m.mu.Unlock()
+	}()
+
+	return nil
+}
+
+// StopGuard останавливает proxy guard.
+func (m *manager) StopGuard() {
+	m.mu.Lock()
+	if m.guardCancel != nil {
+		m.guardCancel()
+		m.guardCancel = nil
+	}
+	m.mu.Unlock()
+}
+
+// guardLoop периодически проверяет состояние системного прокси.
+// Если текущее состояние не совпадает с ожидаемым — восстанавливает.
+func (m *manager) guardLoop(guardCtx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-guardCtx.Done():
+			m.logger.Debug("Proxy Guard остановлен")
+			return
+		case <-ticker.C:
+			m.checkAndRestore()
+		}
+	}
+}
+
+// checkAndRestore проверяет нужно ли восстанавливать системный прокси.
+func (m *manager) checkAndRestore() {
+	m.mu.Lock()
+	expectedEnabled := m.enabled
+	expectedConfig := m.config
+	m.mu.Unlock()
+
+	// Если мы не включали прокси — ничего не восстанавливаем
+	if !expectedEnabled {
+		return
+	}
+
+	// Читаем текущее состояние из реестра
+	systemEnabled, systemAddr, systemOverride := getSystemProxyState()
+
+	// Проверяем: соответствует ли текущее состояние ожидаемому
+	if systemEnabled && systemAddr == expectedConfig.Address && systemOverride == expectedConfig.Override {
+		// Всё в порядке
+		return
+	}
+
+	// Прокси был отключён или изменён извне — восстанавливаем
+	m.logger.Warn("Proxy Guard: обнаружено отключение/изменение прокси (was: %v %s %q, expected: %v %q), восстанавливаю...",
+		systemEnabled, systemAddr, systemOverride, expectedConfig.Address, expectedConfig.Override)
+
+	if err := setSystemProxy(expectedConfig.Address, expectedConfig.Override); err != nil {
+		m.logger.Error("Proxy Guard: не удалось восстановить прокси: %v", err)
+		return
+	}
+
+	m.logger.Info("Proxy Guard: прокси восстановлен успешно")
 }
 
 // validateConfig выполняет строгую проверку адреса прокси.

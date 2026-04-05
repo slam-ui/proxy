@@ -1,0 +1,38 @@
+[Unit]
+Description=VK TURN Relay — DTLS 1.2 masquerade tunnel
+Documentation=https://github.com/yourrepo/proxy
+After=network-online.target
+Wants=network-online.target
+# Запускаем после sing-box если он тоже управляется systemd
+After=sing-box.service
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+
+# Путь к бинарю после go build -o /usr/local/bin/vk-turn-relay
+ExecStart=/usr/local/bin/vk-turn-relay \
+    -listen 0.0.0.0:3478 \
+    -backend 127.0.0.1:1080
+
+# Автоматический рестарт при падении — критично для туннеля
+Restart=on-failure
+RestartSec=3s
+StartLimitInterval=60s
+StartLimitBurst=5
+
+# Hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/tmp
+
+# Логи идут в journald: journalctl -u vk-turn-relay -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vk-turn-relay
+
+[Install]
+WantedBy=multi-user.target

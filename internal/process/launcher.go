@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/logger"
@@ -66,6 +67,13 @@ func (l *launcher) Launch(executable string, rule *apprules.Rule, args ...string
 
 	// Создаем команду
 	cmd := exec.Command(resolved, args...)
+	// BUG FIX: CREATE_NO_WINDOW — подавляет мигание консольного окна при запуске.
+	// Все остальные exec.Command в codebase (manager.go, wintun.go) устанавливают этот флаг.
+	// Источник: Clash Verge Rev, v2rayN.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x08000000,
+		HideWindow:    true,
+	}
 
 	// Применяем правило если задано
 	if rule != nil {

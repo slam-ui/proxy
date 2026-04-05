@@ -188,9 +188,9 @@ func TestWaitForPort_IPv6_InvalidFormat_NoPanic(t *testing.T) {
 	}()
 
 	cases := []string{
-		"[::1]:0",         // порт 0
-		"[::1]",           // нет порта
-		"::1:8080",        // неправильный формат IPv6
+		"[::1]:0",  // порт 0
+		"[::1]",    // нет порта
+		"::1:8080", // неправильный формат IPv6
 	}
 	for _, addr := range cases {
 		err := WaitForPort(context.Background(), addr, 50*time.Millisecond)

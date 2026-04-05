@@ -22,34 +22,36 @@ type VLESSParams struct {
 	Mux       bool // true если URL содержит ?mux=1 или ?multiplex=1
 }
 
-// vlessCache кэш разобранных параметров.
-// OPT #6: parseVLESSKey читала файл с диска при каждом вызове GenerateSingBoxConfig.
-// Функция вызывается при старте, при каждом apply (дважды), при ошибках.
-// Кэш инвалидируется только когда mtime файла изменился — т.е. пользователь
-// обновил secret.key. Аналог: GUI.for.SingBox кэширует конфиг по mtime.
-var vlessCache struct {
+// VLESSCache кэш разобранных параметров VLESS.
+// Zero-value VLESSCache{} создаёт готовый к использованию кэш.
+// Все методы потокобезопасны.
+//
+// A-9: вынесен в именованный тип вместо пакетного анонимного struct —
+// тесты создают VLESSCache{} локально и не разделяют общее состояние.
+type VLESSCache struct {
 	mu     sync.Mutex
 	path   string
 	mtime  time.Time
 	params *VLESSParams
 }
 
-// parseVLESSKey читает и парсит VLESS URL из файла.
+// Parse читает и парсит VLESS URL из файла secretPath.
 // При повторных вызовах с тем же файлом и неизменённым mtime возвращает кэш.
-func parseVLESSKey(secretPath string) (*VLESSParams, error) {
+// Потокобезопасен.
+func (c *VLESSCache) Parse(secretPath string) (*VLESSParams, error) {
 	fi, err := os.Stat(secretPath)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось прочитать файл '%s': %w", secretPath, err)
 	}
 	modTime := fi.ModTime()
 
-	vlessCache.mu.Lock()
-	if vlessCache.path == secretPath && vlessCache.params != nil && vlessCache.mtime.Equal(modTime) {
-		cached := vlessCache.params
-		vlessCache.mu.Unlock()
+	c.mu.Lock()
+	if c.path == secretPath && c.params != nil && c.mtime.Equal(modTime) {
+		cached := c.params
+		c.mu.Unlock()
 		return cached, nil
 	}
-	vlessCache.mu.Unlock()
+	c.mu.Unlock()
 
 	// Кэш устарел или отсутствует — читаем файл заново.
 	params, err := readAndParseVLESS(secretPath)
@@ -57,13 +59,46 @@ func parseVLESSKey(secretPath string) (*VLESSParams, error) {
 		return nil, err
 	}
 
-	vlessCache.mu.Lock()
-	vlessCache.path = secretPath
-	vlessCache.mtime = modTime
-	vlessCache.params = params
-	vlessCache.mu.Unlock()
+	c.mu.Lock()
+	c.path = secretPath
+	c.mtime = modTime
+	c.params = params
+	c.mu.Unlock()
 
 	return params, nil
+}
+
+// Invalidate явно сбрасывает кэш.
+// Вызывать сразу после записи нового secret.key чтобы следующий вызов Parse
+// гарантированно перечитал файл с диска (mtime может не измениться на Windows).
+func (c *VLESSCache) Invalidate() {
+	c.mu.Lock()
+	c.params = nil
+	c.mu.Unlock()
+}
+
+// defaultVLESSCache глобальный кэш для обратной совместимости.
+// OPT #6: parseVLESSKey читала файл с диска при каждом вызове GenerateSingBoxConfig.
+// Кэш инвалидируется только когда mtime файла изменился.
+var defaultVLESSCache VLESSCache
+
+// ParseVLESSKeyForTest экспортирует parseVLESSKey для тестов из других пакетов.
+// Используется только в _test.go файлах — не вызывать из продакшн-кода.
+func ParseVLESSKeyForTest(secretPath string) (*VLESSParams, error) {
+	return parseVLESSKey(secretPath)
+}
+
+// InvalidateVLESSCache явно сбрасывает глобальный кэш парсера VLESS.
+// Вызывать сразу после записи нового secret.key, чтобы следующий вызов
+// parseVLESSKey гарантированно перечитал файл с диска, даже если mtime
+// на Windows не изменился (разрешение системных часов ~15мс + atomic rename).
+func InvalidateVLESSCache() {
+	defaultVLESSCache.Invalidate()
+}
+
+// parseVLESSKey читает и парсит VLESS URL из файла через глобальный defaultVLESSCache.
+func parseVLESSKey(secretPath string) (*VLESSParams, error) {
+	return defaultVLESSCache.Parse(secretPath)
 }
 
 // readAndParseVLESS выполняет фактическое чтение и парсинг файла.
@@ -72,10 +107,24 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 	if err != nil {
 		return nil, fmt.Errorf("не удалось прочитать файл '%s': %w", secretPath, err)
 	}
+	return parseVLESSContentInternal(string(secretBytes))
+}
 
+// ParseVLESSContent парсит содержимое VLESS-файла переданное как строка.
+// Вынесено отдельно чтобы фазз-тест мог работать без файлового I/O —
+// иначе создание temp-файла на каждую итерацию (~3 exec/sec вместо ~60k/sec)
+// приводит к зависанию минимизатора и ошибке
+// "fuzzing process hung or terminated unexpectedly while minimizing: EOF".
+// B-6: экспортировано для использования в handleImportClipboard.
+func ParseVLESSContent(content string) (*VLESSParams, error) {
+	return parseVLESSContentInternal(content)
+}
+
+// parseVLESSContentInternal содержит реальную реализацию парсинга.
+func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 	// Убираем BOM (U+FEFF) — Блокнот Windows добавляет его при сохранении
 	// в UTF-8, что ломает парсинг URL ("first path segment cannot contain colon").
-	vlessURL := strings.TrimPrefix(strings.TrimSpace(string(secretBytes)), "\ufeff")
+	vlessURL := strings.TrimPrefix(strings.TrimSpace(content), "\ufeff")
 
 	// Игнорируем строки-комментарии, берём первую непустую строку без #
 	for _, line := range strings.Split(vlessURL, "\n") {
@@ -90,13 +139,16 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 		return nil, fmt.Errorf("файл с ключом пуст или содержит только комментарии")
 	}
 
+	// BUG FIX (фаззер): url.Parse нормализует схему к lowercase, поэтому
+	// "vlEss://..." проходило проверку parsedURL.Scheme == "vless".
+	// Проверяем исходную строку ДО парсинга — только "vless://" (строго строчными).
+	if !strings.HasPrefix(vlessURL, "vless://") {
+		return nil, fmt.Errorf("ожидается протокол 'vless://', получен другой")
+	}
+
 	parsedURL, err := url.Parse(vlessURL)
 	if err != nil {
 		return nil, fmt.Errorf("неверный формат URL: %w", err)
-	}
-
-	if parsedURL.Scheme != "vless" {
-		return nil, fmt.Errorf("ожидается протокол 'vless', получен '%s'", parsedURL.Scheme)
 	}
 
 	port, err := strconv.Atoi(parsedURL.Port())
@@ -121,10 +173,8 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 		Mux:       muxParam == "1" || muxParam == "true",
 	}
 
-	// BUG FIX (фаззер): readAndParseVLESS возвращал params с port=0 / port=99999
-	// / пустым Address без ошибки. Вызывающий код (parseVLESSKey) вызывал
-	// validateVLESSParams отдельно, но это создавало окно где params != nil && invalid.
-	// Теперь базовая проверка выполняется здесь — fail-fast при парсинге.
+	// BUG FIX (фаззер): возвращал params с port=0 / port=99999 / пустым Address
+	// без ошибки. Теперь fail-fast прямо здесь, до возврата из парсера.
 	if params.Address == "" {
 		return nil, fmt.Errorf("пустой адрес сервера в URL")
 	}
@@ -135,11 +185,20 @@ func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
 	return params, nil
 }
 
-// validateVLESSParams проверяет параметры на корректность
+// validateVLESSParams проверяет параметры на корректность.
+//
+// Поддерживает два режима подключения:
+//   - Reality (pbk присутствует в URL): требует SNI, PublicKey, ShortID.
+//     Используется с серверами на базе sing-box/xray с XTLS Reality.
+//   - Plain TLS (pbk отсутствует): достаточно Address, Port, UUID.
+//     Используется с обычными VLESS+TLS серверами (например, v2fly, 3x-ui).
+//
+// BUG FIX: раньше SNI/PublicKey/ShortID требовались всегда, что ломало
+// подключение к новым серверам без Reality — generateSingBoxConfig падал
+// с "невалидные параметры: отсутствует SNI", приложение падало на старый
+// config.singbox.json, и sing-box крашился с FATAL при попытке открыть
+// несуществующий TUN-адаптер.
 func validateVLESSParams(params *VLESSParams) error {
-	// BUG FIX: используем TrimSpace чтобы отловить whitespace-only значения.
-	// Без TrimSpace: " " != "" — поле казалось непустым, но sing-box падал
-	// при старте с cryptic ошибкой вместо понятного сообщения здесь.
 	if strings.TrimSpace(params.Address) == "" {
 		return fmt.Errorf("отсутствует адрес сервера")
 	}
@@ -149,14 +208,22 @@ func validateVLESSParams(params *VLESSParams) error {
 	if strings.TrimSpace(params.UUID) == "" {
 		return fmt.Errorf("отсутствует UUID")
 	}
-	if strings.TrimSpace(params.SNI) == "" {
-		return fmt.Errorf("отсутствует SNI")
+	// Reality-режим: PublicKey (pbk) присутствует → требуем SNI и ShortID.
+	// Plain TLS: PublicKey отсутствует → SNI и ShortID необязательны.
+	// Whitespace-only PublicKey ("  ") → явная ошибка: не является ни пустым (plain TLS),
+	// ни валидным ключом (Reality). Без этой проверки TrimSpace(" ")="" → plain TLS
+	// молча принимался, хотя пользователь явно ввёл некорректное значение.
+	trimmedPK := strings.TrimSpace(params.PublicKey)
+	if params.PublicKey != "" && trimmedPK == "" {
+		return fmt.Errorf("PublicKey содержит только пробелы")
 	}
-	if strings.TrimSpace(params.PublicKey) == "" {
-		return fmt.Errorf("отсутствует публичный ключ")
-	}
-	if strings.TrimSpace(params.ShortID) == "" {
-		return fmt.Errorf("отсутствует ShortID")
+	if trimmedPK != "" {
+		if strings.TrimSpace(params.SNI) == "" {
+			return fmt.Errorf("отсутствует SNI (обязателен для Reality)")
+		}
+		if strings.TrimSpace(params.ShortID) == "" {
+			return fmt.Errorf("отсутствует ShortID (обязателен для Reality)")
+		}
 	}
 	return nil
 }

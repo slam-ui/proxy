@@ -166,7 +166,8 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 			lastErr = fmt.Sprintf("HTTP %d в %s", resp.StatusCode, url)
 			continue
 		}
-		data, err = io.ReadAll(resp.Body)
+		// Ограничиваем размер: типичный .srs файл 1-5 МБ, потолок 32 МБ.
+		data, err = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		resp.Body.Close()
 		if err != nil {
 			lastErr = err.Error()
@@ -197,4 +198,49 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 		"name": name,
 		"size": len(data),
 	})
+}
+
+// downloadGeositeFile скачивает geosite-{name}.bin в data/ директорию.
+// Используется GeoAutoUpdater для фонового обновления файлов по расписанию.
+// Пробует несколько источников по очереди через системный прокси (10807).
+func downloadGeositeFile(name string) error {
+	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
+		return fmt.Errorf("не удалось создать data/ директорию: %w", err)
+	}
+	destPath := filepath.Join(config.DataDir, "geosite-"+name+".bin")
+
+	proxyURL, _ := url.Parse("http://127.0.0.1:10807")
+	dlClient := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			Proxy: func(r *http.Request) (*url.URL, error) { return proxyURL, nil },
+		},
+	}
+
+	var data []byte
+	var lastErr string
+	for _, urlFmt := range geositeSources {
+		u := fmt.Sprintf(urlFmt, name)
+		resp, err := dlClient.Get(u)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			lastErr = fmt.Sprintf("HTTP %d в %s", resp.StatusCode, u)
+			continue
+		}
+		data, err = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		break
+	}
+	if data == nil {
+		return fmt.Errorf("geosite-%s не найден ни в одном источнике (%s)", name, lastErr)
+	}
+	return os.WriteFile(destPath, data, 0644)
 }

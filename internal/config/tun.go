@@ -37,10 +37,33 @@ type RoutingRule struct {
 	Note   string     `json:"note,omitempty"`
 }
 
+// B-7: DNSConfig конфигурирует DNS для sing-box.
+// RemoteDNS используется для трафика через прокси, DirectDNS для прямого трафика.
+// Разрешённые схемы: https://, tls://, udp://, tcp://, quic://
+type DNSConfig struct {
+	RemoteDNS string `json:"remote_dns"` // Default: "https://1.1.1.1/dns-query"
+	DirectDNS string `json:"direct_dns"` // Default: "udp://8.8.8.8"
+}
+
+// B-7: DefaultDNSConfig возвращает конфиг DNS по умолчанию
+func DefaultDNSConfig() *DNSConfig {
+	return &DNSConfig{
+		RemoteDNS: "https://1.1.1.1/dns-query",
+		DirectDNS: "udp://8.8.8.8",
+	}
+}
+
 // RoutingConfig конфиг маршрутизации
 type RoutingConfig struct {
 	DefaultAction RuleAction    `json:"default_action"`
 	Rules         []RoutingRule `json:"rules"`
+	// BypassEnabled — ручной режим обхода белых списков.
+	// Когда true, все пользовательские правила игнорируются и весь трафик
+	// (кроме локальных адресов) направляется через прокси.
+	// Сохраняется в routing.json, не сбрасывается при перезапуске/TURN-переключении.
+	BypassEnabled bool `json:"bypass_enabled,omitempty"`
+	// B-7: DNS конфигурация для настраиваемых DNS серверов
+	DNS *DNSConfig `json:"dns,omitempty"`
 }
 
 func DefaultRoutingConfig() *RoutingConfig {
@@ -69,31 +92,65 @@ func LoadRoutingConfig(path string) (*RoutingConfig, error) {
 // NormalizeRuleValue канонизирует значение правила:
 // убирает URL-схему (https://, http://), query-параметры, fragment, порт и trailing slash.
 // Например: "https://2ip.ru/" → "2ip.ru"
-//           "http://example.com:8080/path?q=1" → "example.com"
+//
+//	"http://example.com:8080/path?q=1" → "example.com"
+//
 // Процессы (.exe) и geosite: префиксы не затрагиваются.
 func NormalizeRuleValue(val string) string {
 	val = strings.TrimSpace(val)
-	val = strings.TrimPrefix(val, "\xef\xbb\xbf")
 
-	// BUG FIX (фаззер): нулевые байты (\x00) в значении правила ломают
-	// JSON-сериализацию конфига и маршрутизацию sing-box. Удаляем их.
+	// BUG FIX (фаззер): нулевые байты (\x00) удаляем ПЕРВЫМИ.
+	// Иначе "\xef\x00\xbb\xbf" (BOM с нулём внутри) не матчится TrimPrefix,
+	// после удаления нуля собирается в "\xef\xbb\xbf" = BOM — и остаётся.
 	val = strings.ReplaceAll(val, "\x00", "")
 
-	// BUG FIX (фаззер #97190ed3c6c50eca): strip inline comments (#...) ПЕРЕД TrimSpace.
-	// Без этого ":0 #" → strip '#' → ":0 " → TrimSpace → ":0" (первый вызов).
-	// Второй вызов NormalizeRuleValue(":0"): нет '#', strip порта ":0" → "" — нарушение идемпотентности.
-	// С исправлением: ":0 #" → strip '#' → ":0 " → TrimSpace → ":0" → strip порта → "" (первый вызов).
-	// Второй вызов NormalizeRuleValue("") = "" — идемпотентность восстановлена.
+	// Удаляем BOM (== "\xef\xbb\xbf" == "\ufeff") в цикле до стабилизации.
+	// Один проход не достаточен: "\xef\xbb\ufeff\xbf" (BOM внутри BOM-байтов)
+	// после первого ReplaceAll даёт "\xef\xbb\xbf" = новый BOM.
+	// Цикл гарантирует идемпотентность для любой глубины вложенности.
+	for strings.Contains(val, "\ufeff") {
+		val = strings.ReplaceAll(val, "\ufeff", "")
+	}
+
+	// Проверяем .exe ДО strip комментария.
+	//
+	// Инвариант фаззера: если raw input заканчивается на .exe, DetectRuleType
+	// возвращает process. NormalizeRuleValue тоже должен сохранять этот тип —
+	// иначе DetectRuleType(NormalizeRuleValue(input)) даст domain.
+	//
+	// Для "0#.EXe": raw заканчивается на .exe → ранний return "0#.EXe".
+	// DetectRuleType("0#.EXe") = process (видит .exe в конце) ✓
+	// Идемпотентность: NormalizeRuleValue("0#.EXe") = "0#.EXe" → повторный вызов тот же ✓
+	rawLower := strings.ToLower(val)
+	if strings.HasSuffix(rawLower, ".exe") {
+		return strings.TrimSpace(val)
+	}
+
+	// Strip inline comments (#...) ПЕРЕД остальной обработкой.
 	if idx := strings.IndexByte(val, '#'); idx != -1 {
 		val = val[:idx]
 	}
 	val = strings.TrimSpace(val)
 
-	lower := strings.ToLower(val)
-	if strings.HasSuffix(lower, ".exe") {
-		// Process names: сохраняем оригинальный регистр — sing-box матчит с учётом регистра
-		return strings.TrimSpace(val)
+	// Убираем пробельные символы в цикле до стабилизации.
+	// Проблема: один проход Fields/Join может СОЗДАВАТЬ новые Unicode-пробелы.
+	// Пример: "0\xc2 \xa00" — \xc2 и \xa0 разделены пробелом (невалидный UTF-8).
+	// После Join они сливаются в U+00A0 (NO-BREAK SPACE) — валидный пробел.
+	// Второй вызов NormalizeRuleValue разбивает по U+00A0 → нарушение идемпотентности.
+	// Цикл повторяет Fields/Join + BOM-удаление пока строка перестаёт меняться.
+	// Гарантированно сходится: каждая итерация либо сокращает строку, либо оставляет её.
+	for {
+		prev := val
+		val = strings.Join(strings.Fields(val), "")
+		for strings.Contains(val, "\ufeff") {
+			val = strings.ReplaceAll(val, "\ufeff", "")
+		}
+		if val == prev {
+			break
+		}
 	}
+
+	lower := strings.ToLower(val)
 	if strings.HasPrefix(lower, "geosite:") {
 		return lower
 	}
@@ -111,10 +168,8 @@ func NormalizeRuleValue(val string) string {
 		val = val[:idx]
 	}
 	if !strings.HasPrefix(val, "[") {
-		// BUG FIX (фаззер #F-5): стриппинг порта выполняем в цикле до стабильности.
-		// Без цикла: ":0:0" → strip последнего порта → ":0" → первый вызов вернул ":0",
-		// но второй вызов NormalizeRuleValue(":0") = "" → нарушение идемпотентности.
-		// С циклом: ":0:0" → ":0" → "" → стабильно (оба вызова дают "").
+		// Strip порта выполняем в цикле до стабильности.
+		// ":0:0" → ":0" → "" — каждая итерация удаляет один числовой суффикс после ':'.
 		for {
 			idx := strings.LastIndexByte(val, ':')
 			if idx < 0 {
@@ -150,22 +205,28 @@ func SanitizeRoutingConfig(cfg *RoutingConfig) {
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
 
+		// BUG FIX (фаззер): определяем тип ДО нормализации, потому что
+		// нормализация может уничтожить признак типа.
+		// Пример: "0#.EXe" → NormalizeRuleValue → "0" (комментарий обрезан),
+		// DetectRuleType("0") = domain, хотя исходное значение было process.
+		// Решение: детектим на оригинале, нормализуем значение, тип берём из детекта.
+		detectedFromOriginal := DetectRuleType(rule.Value)
+
 		normalized := NormalizeRuleValue(rule.Value)
 		if normalized != "" {
 			rule.Value = normalized
 		}
 
-		detected := DetectRuleType(rule.Value)
 		// BUG FIX (фаззер): ранее исправлялся только пустой тип ("").
 		// Невалидный тип ("unknown", произвольная строка) оставался нетронутым —
 		// sing-box не мог маршрутизировать такое правило.
-		// Теперь: любой не-валидный тип перезаписывается автодетектом.
+		// Теперь: любой не-валидный тип перезаписывается автодетектом от оригинала.
 		if !validTypes[rule.Type] {
-			rule.Type = detected
+			rule.Type = detectedFromOriginal
 		}
 		// Специальный случай: geosite-правило классифицировано как process (редко,
 		// но возможно при старых форматах данных)
-		if rule.Type == RuleTypeGeosite && detected == RuleTypeProcess {
+		if rule.Type == RuleTypeGeosite && detectedFromOriginal == RuleTypeProcess {
 			rule.Type = RuleTypeProcess
 		}
 	}
@@ -184,7 +245,11 @@ func SaveRoutingConfig(path string, cfg *RoutingConfig) error {
 	return nil
 }
 
-// DetectRuleType автоматически определяет тип правила по значению
+// DetectRuleType автоматически определяет тип правила по значению.
+// Работает с raw значением (без strip комментариев) — инвариант фаззера:
+// если TrimSpace(ToLower(input)) заканчивается на ".exe", должен вернуть process.
+// NormalizeRuleValue тоже проверяет .exe до strip комментариев, поэтому
+// DetectRuleType(input) == DetectRuleType(NormalizeRuleValue(input)) для process/geosite.
 func DetectRuleType(value string) RuleType {
 	v := strings.ToLower(strings.TrimSpace(value))
 	if strings.HasSuffix(v, ".exe") {
@@ -200,6 +265,12 @@ func DetectRuleType(value string) RuleType {
 }
 
 func isIPOrCIDR(s string) bool {
+	// Защита от DoS: IP адреса никогда не длинней ~45 символов (IPv6 адрес).
+	// CIDR: ~50 символов максимум. Более длинные строки точно не IP/CIDR.
+	if len(s) > 100 {
+		return false
+	}
+
 	// CIDR нотация
 	if strings.Contains(s, "/") {
 		_, _, err := net.ParseCIDR(s)

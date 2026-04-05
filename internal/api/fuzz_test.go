@@ -17,45 +17,21 @@ package api
 //  - Невозможность удалить CIDR правила — баг #NEW-I (фикс: {value:.+})
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
-
-	"proxyclient/internal/logger"
-	"proxyclient/internal/xray"
 )
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-// buildFuzzServer создаёт изолированный Server в tempdir — аналог buildTunServer
-// из handlers_test.go, но без t.Parallel() (Chdir не потокобезопасен).
+// buildFuzzServer делегирует buildTunServer и отбрасывает TunHandlers.
+// Chdir не потокобезопасен — не вызывать из параллельных тестов.
 func buildFuzzServer(t *testing.T) (*Server, func()) {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(dir+"/data", 0755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	old, _ := os.Getwd()
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
-
-	srv := NewServer(Config{
-		ListenAddress: ":0",
-		XRayManager:   &stubXray{running: true},
-		ProxyManager:  &stubProxy{},
-		Logger:        &logger.NoOpLogger{},
-	}, context.Background())
-
-	srv.SetupTunRoutes(xray.Config{})
-	SetupSettingsRoutes(srv)
-	srv.FinalizeRoutes()
-
-	return srv, func() { _ = os.Chdir(old) }
+	srv, _, cleanup := buildTunServer(t)
+	return srv, cleanup
 }
 
 func fuzzRequest(method, path, body, contentType string) *http.Request {

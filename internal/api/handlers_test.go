@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,23 +23,26 @@ import (
 
 type stubXray struct{ running bool }
 
-func (s *stubXray) Start() error       { return nil }
-func (s *stubXray) Stop() error        { return nil }
-func (s *stubXray) IsRunning() bool    { return s.running }
-func (s *stubXray) GetPID() int        { return 0 }
-func (s *stubXray) Wait() error        { return nil }
-func (s *stubXray) LastOutput() string              { return "" }
-func (s *stubXray) StartAfterManualCleanup() error  { return nil }
-func (s *stubXray) Uptime() time.Duration              { return 0 }
+func (s *stubXray) Start() error                          { return nil }
+func (s *stubXray) Stop() error                           { return nil }
+func (s *stubXray) IsRunning() bool                       { return s.running }
+func (s *stubXray) GetPID() int                           { return 0 }
+func (s *stubXray) Wait() error                           { return nil }
+func (s *stubXray) LastOutput() string                    { return "" }
+func (s *stubXray) StartAfterManualCleanup() error        { return nil }
+func (s *stubXray) Uptime() time.Duration                 { return 0 }
+func (s *stubXray) GetHealthStatus() (int, float64, bool) { return 0, 0, false } // БАГ #3
 
 // ─── mock proxy.Manager ───────────────────────────────────────────────────
 
 type stubProxy struct{ enabled bool }
 
-func (p *stubProxy) Enable(cfg proxy.Config) error { p.enabled = true; return nil }
-func (p *stubProxy) Disable() error                { p.enabled = false; return nil }
-func (p *stubProxy) IsEnabled() bool               { return p.enabled }
-func (p *stubProxy) GetConfig() proxy.Config       { return proxy.Config{} }
+func (p *stubProxy) Enable(cfg proxy.Config) error                                { p.enabled = true; return nil }
+func (p *stubProxy) Disable() error                                               { p.enabled = false; return nil }
+func (p *stubProxy) IsEnabled() bool                                              { return p.enabled }
+func (p *stubProxy) GetConfig() proxy.Config                                      { return proxy.Config{} }
+func (p *stubProxy) StartGuard(ctx context.Context, interval time.Duration) error { return nil } // B-2
+func (p *stubProxy) StopGuard()                                                   {}             // B-2
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -800,6 +805,170 @@ func TestSwitchClashMode_SingBoxDown_NoPanic(t *testing.T) {
 			t.Errorf("switchClashMode вызвал panic: %v", r)
 		}
 	}()
-	switchClashMode(&logger.NoOpLogger{}, "direct")
-	switchClashMode(&logger.NoOpLogger{}, "rule")
+	switchClashMode(context.Background(), &logger.NoOpLogger{}, "direct")
+	switchClashMode(context.Background(), &logger.NoOpLogger{}, "rule")
+}
+
+// A-1: switchClashMode должен завершаться за ≤ 2.5s даже если сервер медлит 3s.
+func TestSwitchClashMode_Timeout_CompletesWithin2500ms(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	// Подменяем URL Clash API на наш медленный сервер
+	old := clashAPIURL
+	clashAPIURL = ts.URL
+	defer func() { clashAPIURL = old }()
+
+	start := time.Now()
+	switchClashMode(context.Background(), &logger.NoOpLogger{}, "rule")
+	elapsed := time.Since(start)
+
+	if elapsed > 2500*time.Millisecond {
+		t.Errorf("switchClashMode занял %v, ожидалось ≤ 2.5s (клиент с таймаутом 2s)", elapsed)
+	}
+}
+
+// A-5: panic в хендлере → в лог записывается строка "Stack:".
+func TestRecoveryMiddleware_PanicLogsStack(t *testing.T) {
+	var logBuf strings.Builder
+	testLogger := &captureLogger{buf: &logBuf}
+
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{running: true},
+		ProxyManager: &stubProxy{},
+		Logger:       testLogger,
+	}, context.Background())
+
+	// Регистрируем роут который паникует
+	srv.router.HandleFunc("/api/test-panic", func(w http.ResponseWriter, r *http.Request) {
+		panic("тест паники")
+	}).Methods("GET")
+	srv.FinalizeRoutes()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/test-panic", nil)
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("panic handler code = %d, want 500", w.Code)
+	}
+	if !strings.Contains(logBuf.String(), "Stack:") {
+		t.Errorf("лог не содержит 'Stack:', got: %q", logBuf.String())
+	}
+}
+
+// captureLogger захватывает Error-сообщения в строку для тестирования.
+type captureLogger struct {
+	buf *strings.Builder
+	mu  sync.Mutex
+}
+
+func (l *captureLogger) Debug(f string, a ...interface{}) {}
+func (l *captureLogger) Info(f string, a ...interface{})  {}
+func (l *captureLogger) Warn(f string, a ...interface{})  {}
+func (l *captureLogger) Error(f string, a ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.buf.WriteString(fmt.Sprintf(f, a...))
+	l.buf.WriteString("\n")
+}
+
+// A-10: 10 быстрых POST запросов → часть получают 429.
+func TestRateLimit_MutatingRequests_Returns429(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	got429 := 0
+	got200 := 0
+	for i := 0; i < 10; i++ {
+		w := postJSON(t, srv.router, "/api/proxy/toggle", nil)
+		if w.Code == http.StatusTooManyRequests {
+			got429++
+		} else if w.Code == http.StatusOK {
+			got200++
+		}
+	}
+
+	if got429 == 0 {
+		t.Error("ожидалось хотя бы одно 429 при 10 быстрых запросах (burst=5)")
+	}
+	if got200 == 0 {
+		t.Error("ожидался хотя бы один успешный запрос")
+	}
+}
+
+// A-10: GET запросы не ограничиваются rate limiter.
+func TestRateLimit_GetRequestsNotLimited(t *testing.T) {
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	for i := 0; i < 20; i++ {
+		w := getJSON(t, srv.router, "/api/status")
+		if w.Code == http.StatusTooManyRequests {
+			t.Errorf("GET /api/status получил 429 (итерация %d) — GET не должен ограничиваться", i)
+		}
+	}
+}
+
+// ─── SetTURNMode / turn_active в /api/status ────────────────────────────────
+
+func TestSetTURNMode_StatusReflectsTURNActive(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{running: true},
+		ProxyManager: &stubProxy{enabled: true},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	srv.FinalizeRoutes()
+
+	// По умолчанию TURN неактивен.
+	w := getJSON(t, srv.router, "/api/status")
+	var resp StatusResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.TurnActive {
+		t.Error("TurnActive должен быть false по умолчанию")
+	}
+
+	// Активируем TURN.
+	srv.SetTURNMode(true)
+	w = getJSON(t, srv.router, "/api/status")
+	resp = StatusResponse{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.TurnActive {
+		t.Error("TurnActive должен быть true после SetTURNMode(true)")
+	}
+
+	// Возвращаем direct.
+	srv.SetTURNMode(false)
+	w = getJSON(t, srv.router, "/api/status")
+	resp = StatusResponse{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp.TurnActive {
+		t.Error("TurnActive должен стать false после SetTURNMode(false)")
+	}
+}
+
+func TestSetTURNMode_Concurrent_NoRace(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{running: true},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	srv.FinalizeRoutes()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func(v bool) {
+			defer wg.Done()
+			srv.SetTURNMode(v)
+		}(i%2 == 0)
+		go func() {
+			defer wg.Done()
+			getJSON(t, srv.router, "/api/status")
+		}()
+	}
+	wg.Wait()
 }

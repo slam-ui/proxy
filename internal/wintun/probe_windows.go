@@ -5,6 +5,7 @@ package wintun
 import (
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -19,10 +20,10 @@ import (
 // не существует — прямая проверка без угадывания через временной gap.
 
 var (
-	modwintun          = syscall.NewLazyDLL("wintun.dll")
-	procOpenAdapter    = modwintun.NewProc("WintunOpenAdapter")
-	procCloseAdapter   = modwintun.NewProc("WintunCloseAdapter")
-	procDeleteAdapter  = modwintun.NewProc("WintunDeleteAdapter")
+	modwintun         = syscall.NewLazyDLL("wintun.dll")
+	procOpenAdapter   = modwintun.NewProc("WintunOpenAdapter")
+	procCloseAdapter  = modwintun.NewProc("WintunCloseAdapter")
+	procDeleteAdapter = modwintun.NewProc("WintunDeleteAdapter")
 )
 
 // kernelObjectFree возвращает true если wintun kernel-объект для ifName свободен.
@@ -52,19 +53,49 @@ func ForceDeleteAdapter(ifName string) bool {
 	if err != nil {
 		return false
 	}
+
 	// Сначала открываем адаптер
 	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
 	if r0 == 0 {
-		// NULL → адаптер уже не существует; с точки зрения очистки это успех —
-		// kernel-объект точно свободен.
-		return true
+		// NULL на первый вызов может означать:
+		// 1. Адаптер не существует (успех)
+		// 2. wintun драйвер не загруженный (ложный успех)
+		// БАГ #1: раньше мы предполагали успех, но на самом деле нужна проверка.
+		//
+		// Решение: попробуем открыть адаптер ещё раз после небольшой задержки.
+		// Если по-прежнему NULL — адаптер действительно не существует.
+		// Если во второй раз получили хэндл — драйвер заработал, но адаптер не был удалён.
+		time.Sleep(100 * time.Millisecond)
+		r0, _, _ = procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+		if r0 == 0 {
+			// По-прежнему не открывается → адаптер точно не существует
+			return true
+		}
+		// Во второй раз открылось → адаптер жив, нужно его удалить.
+		// Продолжаем ниже с полученным хэндлом.
 	}
+
 	// Удаляем: WintunDeleteAdapter(adapter) — освобождает kernel-объект синхронно
 	r1, _, _ := procDeleteAdapter.Call(r0)
 	// Закрываем handle (на случай если Delete не закрыл)
 	_, _, _ = procCloseAdapter.Call(r0)
+
 	// WintunDeleteAdapter возвращает TRUE (non-zero) при успехе
-	return r1 != 0
+	// БАГ #1: добавим финальную проверку что адаптер действительно удалён
+	if r1 == 0 {
+		return false // удаление не удалось
+	}
+
+	// Финальная верификация: убедимся что адаптер действительно больше не существует
+	time.Sleep(100 * time.Millisecond)
+	r2, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	if r2 != 0 {
+		// Адаптер всё ещё существует после "удаления" — не удалось
+		_, _, _ = procCloseAdapter.Call(r2)
+		return false
+	}
+
+	return true
 }
 
 func kernelObjectFree(ifName string) bool {

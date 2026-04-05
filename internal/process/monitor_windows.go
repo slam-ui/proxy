@@ -72,14 +72,26 @@ func (m *monitor) Start() error {
 	// иначе повторный Start() приведёт к панике при чтении закрытого канала.
 	m.stopChan = make(chan struct{})
 
-	// Запускаем периодическое сканирование
+	// Запускаем периодическое сканирование.
 	// 10с вместо 5с: CreateToolhelp32Snapshot перечисляет ВСЕ процессы системы.
 	// На Windows это ~200-500 процессов, каждый с OpenProcess + GetProcessTimes.
 	// Список процессов пользователя меняется редко — 10с достаточно.
 	m.ticker = time.NewTicker(10 * time.Second)
 	m.running = true
 
-	go m.monitorLoop()
+	// DATA RACE FIX: захватываем локальные копии пока держим мьютекс,
+	// передаём параметрами в горутину.
+	//
+	// Без этого: monitorLoop читает m.ticker и m.stopChan без лока, а следующий
+	// Start() (при повторном цикле) пишет те же поля под локом — race detector
+	// фиксирует гонку (строки 73/79 write vs 196/203 read).
+	//
+	// «capture then pass» — стандартный Go-паттерн: горутина работает только
+	// со своими snapshot-копиями и никогда не обращается к полям структуры
+	// напрямую.
+	ticker := m.ticker
+	stopChan := m.stopChan
+	go m.monitorLoop(ticker, stopChan)
 
 	m.logger.Info("Process monitor started")
 	return nil
@@ -189,18 +201,21 @@ func (m *monitor) refresh() error {
 	return nil
 }
 
-// monitorLoop основной цикл мониторинга
-func (m *monitor) monitorLoop() {
+// monitorLoop основной цикл мониторинга.
+// Принимает ticker и stopChan параметрами (а не читает из полей структуры) —
+// это устраняет data race при Start/Stop циклах: горутина работает только
+// со своими локальными копиями, не трогая поля m.ticker / m.stopChan.
+func (m *monitor) monitorLoop(ticker *time.Ticker, stopChan <-chan struct{}) {
 	for {
 		select {
-		case <-m.ticker.C:
+		case <-ticker.C:
 			m.mu.Lock()
 			if err := m.refresh(); err != nil {
 				m.logger.Warn("Failed to refresh processes: %v", err)
 			}
 			m.mu.Unlock()
 
-		case <-m.stopChan:
+		case <-stopChan:
 			return
 		}
 	}
