@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,12 @@ import (
 
 // geoCache — in-memory кэш результатов GeoIP-определения.
 // TTL 24 часа: IP-адрес меняет страну крайне редко, кэш снижает нагрузку DNS.
+const (
+	geoCacheSuccessTTL = 24 * time.Hour
+	geoCacheMissTTL    = 2 * time.Minute
+	geoCacheMax        = 512
+)
+
 var (
 	geoCacheMu sync.Mutex
 	geoCache   = map[string]geoCacheEntry{}
@@ -54,14 +61,10 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 		host = h
 	}
 
-	// Шаг 0: кэш
-	geoCacheMu.Lock()
-	if e, ok := geoCache[host]; ok && time.Now().Before(e.expires) {
-		geoCacheMu.Unlock()
-		respondGeoIP(w, e.cc)
+	if cc, ok := getGeoCached(host); ok {
+		respondGeoIP(w, cc)
 		return
 	}
-	geoCacheMu.Unlock()
 
 	// Ограничиваем весь resolve 5 секундами.
 	// Это позволяет PTR-lookup попробоваться (~1.5s), и в случае неудачи
@@ -76,15 +79,62 @@ func handleGeoIP(w http.ResponseWriter, r *http.Request) {
 	// (машина только что вышла в сеть, ip-api.com временно недоступен, и т.д.).
 	// 30 минут было слишком агрессивно — флаг страны не показывался полчаса после
 	// любой транзиентной ошибки сети при старте приложения.
-	ttl := 24 * time.Hour
+	ttl := geoCacheSuccessTTL
 	if cc == "" {
-		ttl = 2 * time.Minute
+		ttl = geoCacheMissTTL
 	}
-	geoCacheMu.Lock()
-	geoCache[host] = geoCacheEntry{cc: cc, expires: time.Now().Add(ttl)}
-	geoCacheMu.Unlock()
+	setGeoCached(host, cc, ttl)
 
 	respondGeoIP(w, cc)
+}
+
+func getGeoCached(host string) (string, bool) {
+	geoCacheMu.Lock()
+	defer geoCacheMu.Unlock()
+	if e, ok := geoCache[host]; ok {
+		if time.Now().Before(e.expires) {
+			return e.cc, true
+		}
+		delete(geoCache, host)
+	}
+	return "", false
+}
+
+func setGeoCached(host, cc string, ttl time.Duration) {
+	geoCacheMu.Lock()
+	defer geoCacheMu.Unlock()
+	now := time.Now()
+	if len(geoCache) >= geoCacheMax {
+		pruneGeoCacheLocked(now)
+	}
+	if len(geoCache) >= geoCacheMax {
+		dropOldestGeoCacheEntryLocked()
+	}
+	geoCache[host] = geoCacheEntry{cc: cc, expires: now.Add(ttl)}
+}
+
+func pruneGeoCacheLocked(now time.Time) {
+	for host, entry := range geoCache {
+		if !now.Before(entry.expires) {
+			delete(geoCache, host)
+		}
+	}
+}
+
+func dropOldestGeoCacheEntryLocked() {
+	var (
+		oldestHost    string
+		oldestExpires time.Time
+	)
+	for host, entry := range geoCache {
+		if oldestHost == "" || entry.expires.Before(oldestExpires) {
+			oldestHost = host
+			oldestExpires = entry.expires
+		}
+	}
+	if oldestHost != "" {
+		delete(geoCache, oldestHost)
+	}
 }
 
 // resolveGeoIP — логика определения страны без кэша.
@@ -150,8 +200,7 @@ func resolveGeoIP(ctx context.Context, host string) string {
 func countryFromIPAPI(ctx context.Context, ipStr string) string {
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet,
-		"http://ip-api.com/json/"+ipStr+"?fields=countryCode", nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, geoIPAPIURL(ipStr), nil)
 	if err != nil {
 		return ""
 	}
@@ -170,6 +219,10 @@ func countryFromIPAPI(ctx context.Context, ipStr string) string {
 		return strings.ToUpper(d.CountryCode)
 	}
 	return ""
+}
+
+func geoIPAPIURL(ipStr string) string {
+	return "http://ip-api.com/json/" + url.PathEscape(ipStr) + "?fields=countryCode"
 }
 
 func respondGeoIP(w http.ResponseWriter, cc string) {

@@ -10,35 +10,26 @@ import (
 	"proxyclient/internal/logger"
 )
 
-// ── BUG-РИСК #1: validateConfig не проверяет формат host:port ─────────────
+// ── BUG-РИСК #1: validateConfig обязан проверять формат host:port ─────────
 //
-// validateConfig принимает "invalid" (без порта), "127.0.0.1" (без порта),
-// "127.0.0.1:99999" (порт вне диапазона) и ":8080" (пустой хост).
-// Все эти значения попадают в реестр Windows → InternetSetOption падает
-// с cryptic ошибкой вместо понятного сообщения при вызове Enable().
-//
-// Тест документирует ТЕКУЩЕЕ (баговое) поведение — при добавлении
-// net.SplitHostPort в validateConfig все закомментированные случаи
-// должны начать возвращать ошибку.
-func TestValidateConfig_MissingPort_CurrentlyAccepted(t *testing.T) {
+// Невалидные значения не должны доходить до реестра Windows.
+func TestValidateConfig_MissingPort_Rejected(t *testing.T) {
 	badAddresses := []struct {
 		addr string
 		note string
 	}{
-		{"invalid", "нет порта — принимается (баг: не валидируется host:port)"},
-		{"127.0.0.1", "нет порта — принимается (баг)"},
-		{":8080", "пустой хост — принимается (баг)"},
-		{"127.0.0.1:99999", "порт > 65535 — принимается (баг)"},
-		{"127.0.0.1:0", "порт 0 — принимается (баг)"},
-		{"[::1]", "IPv6 без порта — принимается (баг)"},
+		{"invalid", "нет порта"},
+		{"127.0.0.1", "нет порта"},
+		{":8080", "пустой хост"},
+		{"127.0.0.1:99999", "порт > 65535"},
+		{"127.0.0.1:0", "порт 0"},
+		{"[::1]", "IPv6 без порта"},
 	}
 	for _, tc := range badAddresses {
 		err := validateConfig(Config{Address: tc.addr, Override: "<local>"})
-		// Сейчас эти случаи НЕ возвращают ошибку — тест это фиксирует.
-		// Если validateConfig улучшат, тест упадёт здесь и его нужно
-		// переписать чтобы ожидать wantErr=true.
-		_ = err
-		t.Logf("validateConfig(%q): err=%v — %s", tc.addr, err, tc.note)
+		if err == nil {
+			t.Errorf("validateConfig(%q) должен вернуть ошибку: %s", tc.addr, tc.note)
+		}
 	}
 }
 
@@ -143,6 +134,41 @@ func TestManager_Enable_ConcurrentSameConfig_NoError(t *testing.T) {
 	}
 }
 
+func TestManager_Enable_SameConfigDoesNotWriteTwice(t *testing.T) {
+	mgr, backend := newFakeManager(false, Config{})
+	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
+
+	if err := mgr.Enable(cfg); err != nil {
+		t.Fatalf("first Enable: %v", err)
+	}
+	if err := mgr.Enable(cfg); err != nil {
+		t.Fatalf("second Enable: %v", err)
+	}
+
+	backend.mu.Lock()
+	setCalls := backend.setCalls
+	backend.mu.Unlock()
+	if setCalls != 1 {
+		t.Fatalf("backend setCalls=%d, want 1", setCalls)
+	}
+}
+
+func TestProxyGuard_RestoresWhenBackendDisabledExternally(t *testing.T) {
+	mgr, backend := newFakeManager(false, Config{})
+	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
+	if err := mgr.Enable(cfg); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	backend.setDisabledExternally()
+
+	mgr.checkAndRestore()
+
+	enabled, stored := backend.state()
+	if !enabled || stored != cfg {
+		t.Fatalf("backend state=(%v, %+v), want enabled with %+v", enabled, stored, cfg)
+	}
+}
+
 // ── BUG-РИСК #5: Enable→Disable→Enable — IsEnabled корректен ────────────────
 //
 // Цикл enable/disable/enable проверяет что internal state (m.enabled) не
@@ -168,27 +194,23 @@ func TestManager_EnableDisableEnable_StateConsistent(t *testing.T) {
 	}
 }
 
-// ── BUG-РИСК #6: validateConfig пропускает адреса с управляющими символами ─
+// ── BUG-РИСК #6: Enable не должен писать whitespace/control в ProxyServer ──
 //
 // "\t127.0.0.1:8080" содержит ведущий таб — strings.TrimSpace обрезает его,
-// но только если обрезание происходит ДО установки в реестр.
-// Сейчас validateConfig обрезает через TrimSpace только для проверки пустоты —
-// сам адрес В РЕЕСТР пишется с табом, что может сломать Windows networking.
-func TestValidateConfig_TabInAddress_CurrentBehavior(t *testing.T) {
-	cases := []struct {
-		addr    string
-		note    string
-		wantErr bool
-	}{
-		{"\t127.0.0.1:8080", "ведущий таб", false},      // TrimSpace пустоту поймает, но таб сохранится в config
-		{"127.0.0.1:8080\n", "трейлинг newline", false}, // аналогично
-		{"127.0.0.1 :8080", "пробел перед двоеточием", false},
+// но в backend должен попасть уже нормализованный host:port.
+func TestManager_Enable_NormalizesAddressWhitespace(t *testing.T) {
+	mgr, backend := newFakeManager(false, Config{})
+
+	if err := mgr.Enable(Config{Address: "\t127.0.0.1:8080\n", Override: "<local>"}); err != nil {
+		t.Fatalf("Enable с trim-able whitespace вернул ошибку: %v", err)
 	}
-	for _, tc := range cases {
-		err := validateConfig(Config{Address: tc.addr})
-		if (err != nil) != tc.wantErr {
-			t.Logf("validateConfig(%q): err=%v (note: %s)", tc.addr, err, tc.note)
-		}
+	_, stored := backend.state()
+	if stored.Address != "127.0.0.1:8080" {
+		t.Fatalf("backend получил Address=%q, want %q", stored.Address, "127.0.0.1:8080")
+	}
+
+	if err := mgr.Enable(Config{Address: "127.0.0.1 :8080", Override: "<local>"}); err == nil {
+		t.Fatal("Enable должен отвергнуть пробел внутри host")
 	}
 }
 
@@ -277,7 +299,7 @@ func TestManager_Enable_LongOverride_NoPanic(t *testing.T) {
 // Тест проверяет что если NewManager вернул enabled=true,
 // то немедленный Disable() возвращает nil (не «уже отключён»).
 func TestNewManager_AfterCrash_DisableWorks(t *testing.T) {
-	mgr := NewManager(&logger.NoOpLogger{})
+	mgr, _ := newFakeManager(true, Config{Address: "127.0.0.1:8080", Override: "<local>"})
 	// Если реестр говорит включён — Disable не должен вернуть ошибку
 	if mgr.IsEnabled() {
 		if err := mgr.Disable(); err != nil {

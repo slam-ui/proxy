@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"proxyclient/internal/logger"
 )
@@ -16,6 +17,31 @@ import (
 type Config struct {
 	Address  string
 	Override string
+}
+
+type proxyBackend interface {
+	set(config Config) error
+	disable() error
+	state() (bool, Config)
+}
+
+type systemProxyBackend struct{}
+
+func (systemProxyBackend) set(config Config) error {
+	return setSystemProxy(config.Address, config.Override)
+}
+
+func (systemProxyBackend) disable() error {
+	return disableSystemProxy()
+}
+
+func (systemProxyBackend) state() (bool, Config) {
+	enabled, addr, override := getSystemProxyState()
+	return enabled, Config{Address: addr, Override: override}
+}
+
+var newProxyBackend = func() proxyBackend {
+	return systemProxyBackend{}
 }
 
 type Manager interface {
@@ -41,6 +67,7 @@ type manager struct {
 	config  Config
 	enabled bool
 	logger  logger.Logger
+	backend proxyBackend
 	mu      sync.RWMutex
 
 	// B-2: Proxy Guard поля
@@ -61,13 +88,24 @@ type manager struct {
 }
 
 func NewManager(log logger.Logger) Manager {
-	enabled, addr, override := getSystemProxyState()
+	return newManagerWithBackend(log, newProxyBackend())
+}
+
+func newManagerWithBackend(log logger.Logger, backend proxyBackend) *manager {
+	if log == nil {
+		log = logger.NewNop()
+	}
+	if backend == nil {
+		backend = systemProxyBackend{}
+	}
+	enabled, config := backend.state()
 	m := &manager{
 		logger:  log,
+		backend: backend,
 		enabled: enabled,
 	}
-	if enabled && addr != "" {
-		m.config = Config{Address: addr, Override: override}
+	if enabled && config.Address != "" {
+		m.config = config
 	}
 	return m
 }
@@ -76,22 +114,23 @@ func (m *manager) Enable(config Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := validateConfig(config); err != nil {
+	normalized, err := normalizeConfig(config)
+	if err != nil {
 		return fmt.Errorf("невалидная конфигурация прокси: %w", err)
 	}
 
-	if m.enabled && m.config == config {
+	if m.enabled && m.config == normalized {
 		m.logger.Debug("Системный прокси уже включён с теми же параметрами")
 		return nil
 	}
 
-	if err := setSystemProxy(config.Address, config.Override); err != nil {
+	if err := m.currentBackend().set(normalized); err != nil {
 		return fmt.Errorf("не удалось включить системный прокси: %w", err)
 	}
 
-	m.config = config
+	m.config = normalized
 	m.enabled = true
-	m.logger.Info("Системный прокси включён: %s", config.Address)
+	m.logger.Info("Системный прокси включён: %s", normalized.Address)
 
 	return nil
 }
@@ -105,7 +144,7 @@ func (m *manager) Disable() error {
 		return nil
 	}
 
-	if err := disableSystemProxy(); err != nil {
+	if err := m.currentBackend().disable(); err != nil {
 		return fmt.Errorf("не удалось отключить системный прокси: %w", err)
 	}
 
@@ -127,8 +166,18 @@ func (m *manager) GetConfig() Config {
 	return m.config
 }
 
+func (m *manager) currentBackend() proxyBackend {
+	if m.backend != nil {
+		return m.backend
+	}
+	return systemProxyBackend{}
+}
+
 // B-2: StartGuard запускает периодическую проверку состояния системного прокси.
 func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if interval < 1*time.Second {
 		interval = 5 * time.Second
 	}
@@ -220,19 +269,19 @@ func (m *manager) checkAndRestore() {
 	}
 
 	// Читаем текущее состояние из реестра
-	systemEnabled, systemAddr, systemOverride := getSystemProxyState()
+	systemEnabled, systemConfig := m.currentBackend().state()
 
 	// Проверяем: соответствует ли текущее состояние ожидаемому
-	if systemEnabled && systemAddr == expectedConfig.Address && systemOverride == expectedConfig.Override {
+	if systemEnabled && systemConfig == expectedConfig {
 		// Всё в порядке
 		return
 	}
 
 	// Прокси был отключён или изменён извне — восстанавливаем
 	m.logger.Warn("Proxy Guard: обнаружено отключение/изменение прокси (was: %v %s %q, expected: %v %q), восстанавливаю...",
-		systemEnabled, systemAddr, systemOverride, expectedConfig.Address, expectedConfig.Override)
+		systemEnabled, systemConfig.Address, systemConfig.Override, expectedConfig.Address, expectedConfig.Override)
 
-	if err := setSystemProxy(expectedConfig.Address, expectedConfig.Override); err != nil {
+	if err := m.currentBackend().set(expectedConfig); err != nil {
 		m.logger.Error("Proxy Guard: не удалось восстановить прокси: %v", err)
 		return
 	}
@@ -242,30 +291,48 @@ func (m *manager) checkAndRestore() {
 
 // validateConfig выполняет строгую проверку адреса прокси.
 func validateConfig(config Config) error {
+	_, err := normalizeConfig(config)
+	return err
+}
+
+func normalizeConfig(config Config) (Config, error) {
 	addr := strings.TrimSpace(config.Address)
 	if addr == "" {
-		return fmt.Errorf("отсутствует адрес прокси")
+		return Config{}, fmt.Errorf("отсутствует адрес прокси")
 	}
 
 	// ФИКС: Используем net.SplitHostPort для проверки формата host:port
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {
-		return fmt.Errorf("некорректный формат (ожидается host:port): %w", err)
+		return Config{}, fmt.Errorf("некорректный формат (ожидается host:port): %w", err)
 	}
 
 	if host == "" {
 		// net.SplitHostPort пропускает ":8080", но для системного прокси это невалидно
-		return fmt.Errorf("хост не может быть пустым")
+		return Config{}, fmt.Errorf("хост не может быть пустым")
+	}
+	if containsInvalidAddressRune(host) {
+		return Config{}, fmt.Errorf("хост содержит пробельные или управляющие символы")
+	}
+	if containsInvalidAddressRune(portStr) {
+		return Config{}, fmt.Errorf("порт содержит пробельные или управляющие символы")
 	}
 
 	// Проверяем диапазон порта
 	p, err := strconv.Atoi(portStr)
 	if err != nil {
-		return fmt.Errorf("порт должен быть числом")
+		return Config{}, fmt.Errorf("порт должен быть числом")
 	}
 	if p <= 0 || p > 65535 {
-		return fmt.Errorf("порт вне диапазона 1-65535: %d", p)
+		return Config{}, fmt.Errorf("порт вне диапазона 1-65535: %d", p)
 	}
 
-	return nil
+	config.Address = net.JoinHostPort(host, portStr)
+	return config, nil
+}
+
+func containsInvalidAddressRune(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) >= 0
 }
