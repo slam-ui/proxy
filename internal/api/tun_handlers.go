@@ -395,7 +395,7 @@ func (h *TunHandlers) TriggerApplyWithConfig() error {
 
 	// Используем существующий конфиг (уже записан вызывающей стороной с TURN override).
 	// tmpConfigPath="" означает для doApply: не переименовывать, применять текущий config.
-	go h.doApply(snapshot, "", false)
+	go h.doApply(snapshot, "", true)
 	return nil
 }
 
@@ -997,10 +997,6 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 			return
 		}
 	}
-
-	// Пользовательские изменения применяем только полным перезапуском. Hot-reload оставлен
-	// как кодовый fallback прошлого поведения, но штатные apply-пути до него не доходят.
-	forceRestart = true
 
 	// FIX 30: вычисляем diff один раз на уровне функции — используется и в restart пути.
 	diff := computeRoutingDiff(h.lastApplied, snapshot)

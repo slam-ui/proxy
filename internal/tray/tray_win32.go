@@ -58,7 +58,6 @@ var (
 
 	// GDI32
 	pCreateSolidBrush = gdi32dll.NewProc("CreateSolidBrush")
-	pCreateFontW      = gdi32dll.NewProc("CreateFontIndirectW")
 	pCreateFontDirect = gdi32dll.NewProc("CreateFontW")
 	pSelectObject     = gdi32dll.NewProc("SelectObject")
 	pDeleteObject     = gdi32dll.NewProc("DeleteObject")
@@ -874,11 +873,6 @@ func setMenuBackground(hMenu uintptr) {
 		HbrBack: menuBgBrush,
 	}
 	pSetMenuInfo.Call(hMenu, uintptr(unsafe.Pointer(&mi)))
-}
-
-func createSolidBrush(colorref uint32) uintptr {
-	h, _, _ := pCreateSolidBrush.Call(uintptr(colorref))
-	return h
 }
 
 // ── Icon helpers ──────────────────────────────────────────────────────────
