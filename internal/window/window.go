@@ -1,3 +1,5 @@
+//go:build windows
+
 package window
 
 import (
@@ -220,31 +222,43 @@ func applyHackerTitle(hwnd uintptr) {
 func applyMidnightTitle(hwnd uintptr) {
 	dark := uint32(1)
 	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	runtime.KeepAlive(dark)
 	capColor := colorref(0x08, 0x08, 0x18)
 	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	runtime.KeepAlive(capColor)
 	textColor := colorref(0xa7, 0x8b, 0xfa)
 	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	runtime.KeepAlive(textColor)
 	borderColor := colorref(0x1a, 0x1a, 0x40)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	runtime.KeepAlive(borderColor)
 	cornerPref := uint32(2)
 	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	runtime.KeepAlive(cornerPref)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	runtime.KeepAlive(backdrop)
 }
 
 func applySepiaTitle(hwnd uintptr) {
 	dark := uint32(1)
 	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	runtime.KeepAlive(dark)
 	capColor := colorref(0x1c, 0x15, 0x10)
 	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	runtime.KeepAlive(capColor)
 	textColor := colorref(0xc4, 0x93, 0x3f)
 	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	runtime.KeepAlive(textColor)
 	borderColor := colorref(0x3a, 0x2e, 0x1e)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	runtime.KeepAlive(borderColor)
 	cornerPref := uint32(2)
 	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	runtime.KeepAlive(cornerPref)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	runtime.KeepAlive(backdrop)
 }
 
 // Размеры окна под axiom-ui:

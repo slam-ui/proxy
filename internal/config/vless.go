@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -8,18 +9,26 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"proxyclient/internal/dpapi"
+	"proxyclient/internal/fileutil"
 )
+
+const dpapiMagic = "DPAPI:"
 
 // VLESSParams параметры из VLESS URL
 type VLESSParams struct {
-	Address   string
-	Port      int
-	UUID      string
-	SNI       string
-	PublicKey string
-	ShortID   string
-	Flow      string
-	Mux       bool // true если URL содержит ?mux=1 или ?multiplex=1
+	Address      string
+	Port         int
+	UUID         string
+	SNI          string
+	PublicKey    string
+	ShortID      string
+	Flow         string
+	Mux          bool // true если URL содержит ?mux=1 или ?multiplex=1
+	Fragment     bool
+	FragmentSize string
+	Fingerprint  string
 }
 
 // VLESSCache кэш разобранных параметров VLESS.
@@ -113,11 +122,42 @@ func parseVLESSKey(secretPath string) (*VLESSParams, error) {
 
 // readAndParseVLESS выполняет фактическое чтение и парсинг файла.
 func readAndParseVLESS(secretPath string) (*VLESSParams, error) {
-	secretBytes, err := os.ReadFile(secretPath)
+	content, err := ReadSecretKey(secretPath)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось прочитать файл '%s': %w", secretPath, err)
 	}
-	return parseVLESSContentInternal(string(secretBytes))
+	return parseVLESSContentInternal(content)
+}
+
+// ReadSecretKey reads secret.key with support for DPAPI-encrypted and legacy plaintext formats.
+func ReadSecretKey(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	content := strings.TrimSpace(strings.TrimPrefix(string(data), "\ufeff"))
+	if strings.HasPrefix(content, dpapiMagic) {
+		enc, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(content, dpapiMagic))
+		if err != nil {
+			return "", fmt.Errorf("dpapi base64: %w", err)
+		}
+		plain, err := dpapi.Decrypt(enc)
+		if err != nil {
+			return "", fmt.Errorf("dpapi decrypt: %w", err)
+		}
+		return strings.TrimSpace(string(plain)), nil
+	}
+	return content, nil
+}
+
+// WriteSecretKey writes a VLESS URL to secret.key using DPAPI when available.
+func WriteSecretKey(path, vlessURL string) error {
+	enc, err := dpapi.Encrypt([]byte(vlessURL))
+	content := []byte(vlessURL)
+	if err == nil {
+		content = []byte(dpapiMagic + base64.StdEncoding.EncodeToString(enc))
+	}
+	return fileutil.WriteAtomic(path, content, 0600)
 }
 
 // ParseVLESSContent парсит содержимое VLESS-файла переданное как строка.
@@ -182,6 +222,10 @@ func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 		Flow:      queryParams.Get("flow"),
 		Mux:       muxParam == "1" || muxParam == "true",
 	}
+	fragParam := strings.ToLower(strings.TrimSpace(queryParams.Get("fragment")))
+	params.Fragment = fragParam != "0" && fragParam != "false"
+	params.FragmentSize = queryParams.Get("fragment_size")
+	params.Fingerprint = queryParams.Get("fp")
 
 	// BUG FIX (фаззер): возвращал params с port=0 / port=99999 / пустым Address
 	// без ошибки. Теперь fail-fast прямо здесь, до возврата из парсера.
@@ -193,6 +237,13 @@ func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 	}
 
 	return params, nil
+}
+
+func (p *VLESSParams) UTLSFingerprint() string {
+	if p != nil && strings.TrimSpace(p.Fingerprint) != "" {
+		return strings.TrimSpace(p.Fingerprint)
+	}
+	return "random"
 }
 
 // validateVLESSParams проверяет параметры на корректность.

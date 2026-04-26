@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -109,9 +111,8 @@ func main() {
 
 	if !isRunningAsAdmin() {
 		exePath, _ := os.Executable()
-		psCmd := fmt.Sprintf(`Start-Process -FilePath '%s' -Verb RunAs`,
-			strings.ReplaceAll(exePath, "'", "''"))
-		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", psCmd)
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", "Start-Process -FilePath $env:SAFESKY_ELEVATE_EXE -Verb RunAs")
+		cmd.Env = append(os.Environ(), "SAFESKY_ELEVATE_EXE="+exePath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 		if err := cmd.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] Не удалось запустить с правами администратора: %v\n", err)
@@ -276,6 +277,11 @@ func run(output io.Writer) error {
 	appSettings, settingsErr := config.LoadAppSettings(cfg.SettingsFile)
 	if settingsErr == nil {
 		cfg.StartProxyOnLaunch = appSettings.StartProxyOnLaunch
+		cfg.ReconnectIntervalMin = appSettings.ReconnectIntervalMin
+		cfg.KeepaliveEnabled = appSettings.KeepaliveEnabled
+		cfg.KeepaliveIntervalSec = appSettings.KeepaliveIntervalSec
+		cfg.Schedule = appSettings.Schedule
+		cfg.MemoryLimitMB = appSettings.MemoryLimitMB
 	}
 	app := NewApp(cfg, output)
 
@@ -816,6 +822,7 @@ func getProcessExePath(pid uint32) string {
 		uintptr(unsafe.Pointer(&buf[0])),
 		uintptr(unsafe.Pointer(&size)),
 	)
+	runtime.KeepAlive(buf)
 	if ret == 0 {
 		return ""
 	}
@@ -839,6 +846,7 @@ func createSingleInstanceMutex(name string) (syscall.Handle, error) {
 		return 0, err
 	}
 	h, _, lastErr := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(namePtr)))
+	runtime.KeepAlive(namePtr)
 	if h == 0 {
 		return 0, lastErr
 	}

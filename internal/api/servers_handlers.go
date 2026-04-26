@@ -16,6 +16,9 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
+	"proxyclient/internal/latency"
+
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/gorilla/mux"
 )
@@ -23,11 +26,24 @@ import (
 // noProxyTransport — HTTP транспорт без системного прокси.
 // C-5: используется при загрузке subscription URL чтобы обойти возможные петли.
 var noProxyTransport = &http.Transport{
-	Proxy: nil,
+	Proxy:              nil,
+	DisableCompression: true,
 	DialContext: (&net.Dialer{
 		Timeout: 10 * time.Second,
 	}).DialContext,
 	TLSHandshakeTimeout: 10 * time.Second,
+}
+
+func (h *ServersHandlers) AutoConnect() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, _, err := h.doAutoConnect(ctx); err != nil {
+		h.server.logger.Warn("AutoConnect: %v", err)
+	}
+}
+
+func (h *ServersHandlers) Shutdown() {
+	noProxyTransport.CloseIdleConnections()
 }
 
 const serversFile = "servers.json"
@@ -61,12 +77,46 @@ func SetupServerRoutes(s *Server, secretKeyPath string) *ServersHandlers {
 	api.HandleFunc("/servers/{id}/connect", h.handleConnect).Methods("POST", "OPTIONS")
 	api.HandleFunc("/servers/{id}/ping", h.handlePing).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/{id}/real-ping", h.handleRealPing).Methods("GET", "OPTIONS") // B-3
+	api.HandleFunc("/servers/{id}/qr", h.handleQR).Methods("GET", "OPTIONS")
+	api.HandleFunc("/servers/{id}/latency-history", h.handleLatencyHistory).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/ping-all", h.handlePingAll).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/auto-connect", h.handleAutoConnect).Methods("POST", "OPTIONS")         // B-4
 	api.HandleFunc("/servers/import-clipboard", h.handleImportClipboard).Methods("POST", "OPTIONS") // B-6
 	api.HandleFunc("/servers/fetch-url", h.handleFetchURL).Methods("POST", "OPTIONS")               // C-5
 	api.HandleFunc("/servers/{id}/refresh", h.handleRefresh).Methods("POST", "OPTIONS")             // C-5
 	return h
+}
+
+func (h *ServersHandlers) handleQR(w http.ResponseWriter, r *http.Request) {
+	id := mux.Vars(r)["id"]
+	h.mu.RLock()
+	list, err := loadServers()
+	h.mu.RUnlock()
+	if err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения")
+		return
+	}
+	for _, srv := range list {
+		if srv.ID == id {
+			png, err := qrcode.Encode(srv.URL, qrcode.Medium, 256)
+			if err != nil {
+				h.server.respondError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			if _, err := w.Write(png); err != nil {
+				h.server.logger.Warn("handleQR: write response: %v", err)
+			}
+			return
+		}
+	}
+	h.server.respondError(w, http.StatusNotFound, "сервер не найден")
+}
+
+func (h *ServersHandlers) handleLatencyHistory(w http.ResponseWriter, r *http.Request) {
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"history": latency.Global.Get(mux.Vars(r)["id"]),
+	})
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────
@@ -101,12 +151,11 @@ func saveServers(list []ServerEntry) error {
 // activeServerIDFromList возвращает ID активного сервера из уже загруженного списка.
 // FIX 40: избегает двойного чтения servers.json (loadServers вызывается вызывающей стороной).
 func (h *ServersHandlers) activeServerIDFromList(list []ServerEntry) string {
-	raw, err := os.ReadFile(h.secretKey)
+	active, err := config.ReadSecretKey(h.secretKey)
 	if err != nil {
 		return ""
 	}
-	active := strings.TrimSpace(string(raw))
-	active = strings.TrimPrefix(active, "\xef\xbb\xbf") // strip BOM
+	active = strings.TrimSpace(strings.TrimPrefix(active, "\xef\xbb\xbf"))
 	for _, s := range list {
 		if strings.TrimSpace(s.URL) == active {
 			return s.ID
@@ -190,7 +239,7 @@ func (h *ServersHandlers) handleAdd(w http.ResponseWriter, r *http.Request) {
 	// BUG FIX: используем fileutil.WriteAtomic — secret.key критичен, его повреждение
 	// делает приложение неработоспособным.
 	if len(list) == 1 {
-		_ = fileutil.WriteAtomic(h.secretKey, []byte(entry.URL), 0644)
+		_ = config.WriteSecretKey(h.secretKey, entry.URL)
 		config.InvalidateVLESSCache()
 		// FIX 19: уведомляем о смене secret.key.
 		if h.server.config.SecretKeyUpdatedFn != nil {
@@ -238,8 +287,8 @@ func (h *ServersHandlers) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// FIX 35: если удалён активный сервер — очищаем secret.key.
 	// Без этого sing-box продолжает использовать удалённый сервер до ручного рестарта.
 	if deletedURL != "" {
-		if raw, rerr := os.ReadFile(h.secretKey); rerr == nil {
-			active := strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
+		if active, rerr := config.ReadSecretKey(h.secretKey); rerr == nil {
+			active = strings.TrimSpace(strings.TrimPrefix(active, "\xef\xbb\xbf"))
 			if active == strings.TrimSpace(deletedURL) {
 				_ = fileutil.WriteAtomic(h.secretKey, []byte(""), 0644)
 				config.InvalidateVLESSCache()
@@ -277,7 +326,7 @@ func (h *ServersHandlers) handleConnect(w http.ResponseWriter, r *http.Request) 
 	// Записываем URL в secret.key атомарно.
 	// BUG FIX: os.WriteFile не атомарен — при крэше secret.key будет повреждён
 	// и приложение не запустится. fileutil.WriteAtomic использует MoveFileExW.
-	if err := fileutil.WriteAtomic(h.secretKey, []byte(target.URL), 0644); err != nil {
+	if err := config.WriteSecretKey(h.secretKey, target.URL); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "не удалось обновить secret.key: "+err.Error())
 		return
 	}
@@ -390,18 +439,26 @@ func (h *ServersHandlers) handleRealPing(w http.ResponseWriter, r *http.Request)
 
 // B-4: handleAutoConnect POST /api/servers/auto-connect — автоматически подключиться к серверу с минимальной задержкой
 func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Request) {
+	resp, status, err := h.doAutoConnect(r.Context())
+	if err != nil {
+		h.server.respondError(w, status, err.Error())
+		return
+	}
+	h.server.respondJSON(w, status, resp)
+}
+
+func (h *ServersHandlers) doAutoConnect(ctx context.Context) (map[string]interface{}, int, error) {
 	h.mu.RLock()
 	list, _ := loadServers()
 	h.mu.RUnlock()
 
 	if len(list) == 0 {
-		h.server.respondError(w, http.StatusBadRequest, "нет доступных серверов")
-		return
+		return nil, http.StatusBadRequest, fmt.Errorf("нет доступных серверов")
 	}
 
-	// Используем r.Context() как базовый контекст: если клиент отвалился,
+	// Используем переданный context как базовый: если клиент отвалился,
 	// пинги прерываются автоматически. Таймаут 20s — защита от долгих пингов.
-	pingCtx, pingCancel := context.WithTimeout(r.Context(), 20*time.Second)
+	pingCtx, pingCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer pingCancel()
 
 	// B-4: пингуем все серверы параллельно
@@ -434,8 +491,7 @@ func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Reque
 	}
 
 	if bestResult == nil {
-		h.server.respondError(w, http.StatusServiceUnavailable, "не удалось пропинговать ни один сервер")
-		return
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("не удалось пропинговать ни один сервер")
 	}
 
 	// FIX 17+20: проверяем нужно ли менять сервер (threshold 50ms)
@@ -443,13 +499,12 @@ func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Reque
 	currentID := h.activeServerIDFromList(list) // FIX 40: используем уже загруженный список
 	// FIX 17: ранний выход если уже на оптимальном сервере.
 	if currentID == bestResult.id {
-		h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+		return map[string]interface{}{
 			"connected_id": currentID,
 			"latency_ms":   bestResult.latency,
 			"changed":      false,
 			"reason":       "уже подключены к оптимальному серверу",
-		})
-		return
+		}, http.StatusOK, nil
 	}
 	// Получаем задержку текущего сервера для сравнения
 	var currentLatency int64
@@ -468,14 +523,13 @@ func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Reque
 			diff = -diff
 		}
 		if diff < int64(latencyThreshold) {
-			h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+			return map[string]interface{}{
 				"connected_id":    currentID,
 				"latency_ms":      currentLatency,
 				"changed":         false,
 				"reason":          "текущий сервер близок по задержке к оптимальному",
 				"best_latency_ms": bestResult.latency,
-			})
-			return
+			}, http.StatusOK, nil
 		}
 	}
 
@@ -489,13 +543,11 @@ func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	if bestServer == nil {
-		h.server.respondError(w, http.StatusInternalServerError, "внутренняя ошибка: сервер не найден")
-		return
+		return nil, http.StatusInternalServerError, fmt.Errorf("внутренняя ошибка: сервер не найден")
 	}
 
-	if err := fileutil.WriteAtomic(h.secretKey, []byte(bestServer.URL), 0644); err != nil {
-		h.server.respondError(w, http.StatusInternalServerError, "не удалось обновить secret.key: "+err.Error())
-		return
+	if err := config.WriteSecretKey(h.secretKey, bestServer.URL); err != nil {
+		return nil, http.StatusInternalServerError, fmt.Errorf("не удалось обновить secret.key: %w", err)
 	}
 	config.InvalidateVLESSCache()
 	// FIX 16: уведомляем о смене secret.key — аналогично handleConnect.
@@ -510,12 +562,12 @@ func (h *ServersHandlers) handleAutoConnect(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+	return map[string]interface{}{
 		"connected_id": bestResult.id,
 		"latency_ms":   bestResult.latency,
 		"changed":      true, // всегда true здесь — early return выше покрывает unchanged case
 		"previous_id":  currentID,
-	})
+	}, http.StatusOK, nil
 }
 
 // B-6: handleImportClipboard POST /api/servers/import-clipboard — импортировать VLESS URL из буфера обмена.
@@ -587,7 +639,7 @@ func (h *ServersHandlers) handleImportClipboard(w http.ResponseWriter, r *http.R
 
 	// B-6: автоактивируем если это первый сервер
 	if len(list) == 1 {
-		_ = fileutil.WriteAtomic(h.secretKey, []byte(entry.URL), 0644)
+		_ = config.WriteSecretKey(h.secretKey, entry.URL)
 		config.InvalidateVLESSCache()
 		// FIX 19: уведомляем о смене secret.key.
 		if h.server.config.SecretKeyUpdatedFn != nil {
@@ -660,7 +712,8 @@ func medianInt64(values []int64) int64 {
 	}
 	// Для чётного количества элементов возвращаем среднее арифметическое двух средних.
 	// BUG FIX: используем midpoint-формулу вместо (a+b)/2 чтобы избежать переполнения int64.
-	return sorted[mid-1] + (sorted[mid]-sorted[mid-1])/2
+	a, b := sorted[mid-1], sorted[mid]
+	return a/2 + b/2 + (a%2+b%2)/2
 }
 
 // B-5 / БАГ 12: pingServerWithProbes измеряет TCP RTT с несколькими пробами.
@@ -784,11 +837,18 @@ func validateSubscriptionURL(rawURL string) error {
 	// FIX 39: блокируем loopback, link-local и RFC1918 private IP (SSRF защита).
 	// Без этого злоумышленник мог запрашивать 192.168.x.x, 10.x.x.x, 169.254.x.x.
 	if ip := net.ParseIP(host); ip != nil {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsPrivate() {
+		if isPrivateOrLoopback(ip) {
 			return fmt.Errorf("приватные и локальные IP-адреса не разрешены")
 		}
 	}
 	return nil
+}
+
+func isPrivateOrLoopback(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		ip = ip4
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
 }
 
 // fetchVLESSFromURL загружает URL и возвращает первый найденный VLESS URI.
@@ -806,9 +866,13 @@ func fetchVLESSFromURL(rawURL string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d от сервера", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10)) // 64 KB
+	const maxSubscriptionBody = 64 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBody+1))
 	if err != nil {
 		return "", fmt.Errorf("ошибка чтения ответа: %w", err)
+	}
+	if len(body) > maxSubscriptionBody {
+		return "", fmt.Errorf("ответ subscription слишком большой")
 	}
 	content := string(body)
 
@@ -924,7 +988,7 @@ func (h *ServersHandlers) handleFetchURL(w http.ResponseWriter, r *http.Request)
 	}
 	// Автоактивация первого сервера
 	if len(list) == 1 {
-		_ = fileutil.WriteAtomic(h.secretKey, []byte(entry.URL), 0644)
+		_ = config.WriteSecretKey(h.secretKey, entry.URL)
 		config.InvalidateVLESSCache()
 		// FIX 19: уведомляем о смене secret.key.
 		if h.server.config.SecretKeyUpdatedFn != nil {
@@ -998,10 +1062,10 @@ func (h *ServersHandlers) handleRefresh(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		// FIX 15: если обновлён активный сервер — обновляем secret.key.
-		if raw, rerr := os.ReadFile(h.secretKey); rerr == nil {
-			active := strings.TrimSpace(strings.TrimPrefix(string(raw), "\xef\xbb\xbf"))
+		if active, rerr := config.ReadSecretKey(h.secretKey); rerr == nil {
+			active = strings.TrimSpace(strings.TrimPrefix(active, "\xef\xbb\xbf"))
 			if active == strings.TrimSpace(oldURL) {
-				_ = fileutil.WriteAtomic(h.secretKey, []byte(newVLESS), 0644)
+				_ = config.WriteSecretKey(h.secretKey, newVLESS)
 				config.InvalidateVLESSCache()
 				if h.server.config.SecretKeyUpdatedFn != nil {
 					h.server.config.SecretKeyUpdatedFn()

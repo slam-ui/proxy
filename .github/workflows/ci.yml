@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: ["main"]
     paths-ignore:
@@ -35,6 +36,7 @@ jobs:
   build:
     name: Build (proxy-client)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GOOS: windows
       GOARCH: amd64
@@ -69,6 +71,7 @@ jobs:
   test:
     name: Test & Coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -103,6 +106,7 @@ jobs:
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -133,11 +137,23 @@ jobs:
       - name: Run API handler tests
         run: go test -timeout=120s ./internal/api/...
 
+      - name: Run Windows package tests
+        run: |
+          go test -timeout=120s \
+            ./cmd/proxy-client/... \
+            ./internal/engine/... \
+            ./internal/process/... \
+            ./internal/proxy/... \
+            ./internal/tray/... \
+            ./internal/wintun/... \
+            ./internal/xray/...
+
   # ── 4. FUZZ: short regression fuzzing, two targets in parallel ───────────────
   # Runs each target for 30 s — enough to replay the corpus and explore new paths.
   fuzz:
     name: Fuzz / ${{ matrix.target }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -162,6 +178,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -187,6 +204,7 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       security-events: write
       actions: read
@@ -257,6 +275,7 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       security-events: write
       actions: read
@@ -294,6 +313,7 @@ jobs:
   gitleaks:
     name: Secret Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -309,6 +329,7 @@ jobs:
   license-check:
     name: License Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -335,7 +356,7 @@ jobs:
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
-    needs: [build, test, test-windows, fuzz, lint, security, gitleaks]
+    needs: [build, test, test-windows, fuzz, lint, security, codeql, gitleaks, license-check]
     if: always()
     steps:
       - name: Evaluate results
@@ -347,7 +368,9 @@ jobs:
             [fuzz]="${{ needs.fuzz.result }}"
             [lint]="${{ needs.lint.result }}"
             [security]="${{ needs.security.result }}"
+            [codeql]="${{ needs.codeql.result }}"
             [gitleaks]="${{ needs.gitleaks.result }}"
+            [license-check]="${{ needs.license-check.result }}"
           )
           failed=0
           for job in "${!results[@]}"; do

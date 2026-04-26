@@ -97,7 +97,9 @@ type SBOutbound struct {
 	// tcp_fast_open — валидный dial-field в sing-box v1.10+.
 	// tcp_no_delay, tcp_keep_alive, connect_timeout удалены: не существуют в схеме
 	// sing-box v1.13.5 и вызывают FATAL[0000] "json: unknown field" при старте.
-	TCPFastOpen *bool `json:"tcp_fast_open,omitempty"`
+	TCPFastOpen  *bool          `json:"tcp_fast_open,omitempty"`
+	TCPMultiPath bool           `json:"tcp_multi_path,omitempty"`
+	TLSFragment  *SBTLSFragment `json:"-"`
 }
 
 type SBTLS struct {
@@ -105,6 +107,15 @@ type SBTLS struct {
 	ServerName string     `json:"server_name,omitempty"`
 	Reality    *SBReality `json:"reality,omitempty"`
 	UTLS       *SBUTLS    `json:"utls,omitempty"`
+	ALPN       []string   `json:"alpn,omitempty"`
+	MinVersion string     `json:"min_version,omitempty"`
+}
+
+// SBTLSFragment configures ClientHello fragmentation for sing-box.
+type SBTLSFragment struct {
+	Enabled bool   `json:"enabled"`
+	Size    string `json:"size,omitempty"`
+	Sleep   string `json:"sleep,omitempty"`
 }
 
 type SBReality struct {

@@ -14,16 +14,22 @@ type healthTrackingWriter struct {
 	mu         sync.Mutex
 	dst        io.Writer
 	checker    *HealthChecker
+	manager    *manager
 	buf        []byte
 	errorRe    *regexp.Regexp
 	outboundRe *regexp.Regexp
 }
 
 // NewHealthTrackingWriter creates a writer that tracks connection errors.
-func NewHealthTrackingWriter(dst io.Writer, checker *HealthChecker) *healthTrackingWriter {
+func NewHealthTrackingWriter(dst io.Writer, checker *HealthChecker, mgr ...*manager) *healthTrackingWriter {
+	var m *manager
+	if len(mgr) > 0 {
+		m = mgr[0]
+	}
 	return &healthTrackingWriter{
 		dst:        dst,
 		checker:    checker,
+		manager:    m,
 		buf:        make([]byte, 0, 4096),
 		errorRe:    regexp.MustCompile(`ERROR.*connection.*(?:wsarecv|i/o timeout|dial tcp|bind:|timeout)`),
 		outboundRe: regexp.MustCompile(`using outbound/([^ \[\]]+)`),
@@ -82,8 +88,16 @@ func (h *healthTrackingWriter) Write(p []byte) (int, error) {
 				errorType = "bind_error"
 			}
 
-			// Record in health checker
-			h.checker.RecordError(time.Now(), errorType, outbound, lineStr)
+			if triggered := h.checker.RecordError(time.Now(), errorType, outbound, lineStr); triggered {
+				if h.manager != nil {
+					h.manager.healthAlertMu.Lock()
+					fn := h.manager.healthAlertFn
+					h.manager.healthAlertMu.Unlock()
+					if fn != nil {
+						go fn()
+					}
+				}
+			}
 		}
 	}
 

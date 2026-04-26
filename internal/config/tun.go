@@ -41,8 +41,9 @@ type RoutingRule struct {
 // RemoteDNS используется для трафика через прокси, DirectDNS для прямого трафика.
 // Разрешённые схемы: https://, tls://, udp://, tcp://, quic://
 type DNSConfig struct {
-	RemoteDNS string `json:"remote_dns"` // Default: "https://1.1.1.1/dns-query"
-	DirectDNS string `json:"direct_dns"` // Default: "udp://8.8.8.8"
+	RemoteDNS         string   `json:"remote_dns"` // Default: "https://1.1.1.1/dns-query"
+	DirectDNS         string   `json:"direct_dns"` // Default: "udp://8.8.8.8"
+	RemoteDNSFallback []string `json:"remote_dns_fallback,omitempty"`
 }
 
 // B-7: DefaultDNSConfig возвращает конфиг DNS по умолчанию
@@ -50,6 +51,11 @@ func DefaultDNSConfig() *DNSConfig {
 	return &DNSConfig{
 		RemoteDNS: "https://1.1.1.1/dns-query",
 		DirectDNS: "udp://8.8.8.8",
+		RemoteDNSFallback: []string{
+			"https://8.8.8.8/dns-query",
+			"https://9.9.9.9/dns-query",
+			"quic://dns.adguard.com",
+		},
 	}
 }
 
@@ -63,13 +69,18 @@ type RoutingConfig struct {
 	// Сохраняется в routing.json, не сбрасывается при перезапуске/TURN-переключении.
 	BypassEnabled bool `json:"bypass_enabled,omitempty"`
 	// B-7: DNS конфигурация для настраиваемых DNS серверов
-	DNS *DNSConfig `json:"dns,omitempty"`
+	DNS             *DNSConfig `json:"dns,omitempty"`
+	BlockQUIC       bool       `json:"block_quic"`
+	BlockTelemetry  bool       `json:"block_telemetry,omitempty"`
+	LANShareEnabled bool       `json:"lan_share_enabled,omitempty"`
+	LANSharePort    int        `json:"lan_share_port,omitempty"`
 }
 
 func DefaultRoutingConfig() *RoutingConfig {
 	return &RoutingConfig{
 		DefaultAction: ActionProxy,
 		Rules:         []RoutingRule{},
+		BlockQUIC:     true,
 	}
 }
 
@@ -84,6 +95,12 @@ func LoadRoutingConfig(path string) (*RoutingConfig, error) {
 	var cfg RoutingConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("неверный формат routing config: %w", err)
+	}
+	if cfg.DNS != nil && len(cfg.DNS.RemoteDNSFallback) == 0 {
+		cfg.DNS.RemoteDNSFallback = DefaultDNSConfig().RemoteDNSFallback
+	}
+	if !strings.Contains(string(data), `"block_quic"`) {
+		cfg.BlockQUIC = true
 	}
 	SanitizeRoutingConfig(&cfg)
 	return &cfg, nil

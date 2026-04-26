@@ -12,13 +12,28 @@ import (
 const AppSettingsFile = DataDir + "/settings.json"
 
 type AppSettings struct {
-	StartProxyOnLaunch bool `json:"start_proxy_on_launch"`
+	StartProxyOnLaunch   bool     `json:"start_proxy_on_launch"`
+	ReconnectIntervalMin int      `json:"reconnect_interval_min"`
+	KeepaliveEnabled     bool     `json:"keepalive_enabled"`
+	KeepaliveIntervalSec int      `json:"keepalive_interval_sec"`
+	Schedule             Schedule `json:"schedule"`
+	MemoryLimitMB        uint64   `json:"memory_limit_mb"`
+	ManualSingBoxConfig  bool     `json:"manual_singbox_config"`
 }
 
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
-		StartProxyOnLaunch: true,
+		StartProxyOnLaunch:   true,
+		KeepaliveEnabled:     true,
+		KeepaliveIntervalSec: 120,
 	}
+}
+
+type Schedule struct {
+	Enabled  bool   `json:"enabled"`
+	ProxyOn  string `json:"proxy_on"`
+	ProxyOff string `json:"proxy_off"`
+	Weekdays []int  `json:"weekdays"`
 }
 
 func LoadAppSettings(path string) (AppSettings, error) {
@@ -32,13 +47,40 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	}
 
 	var raw struct {
-		StartProxyOnLaunch *bool `json:"start_proxy_on_launch"`
+		StartProxyOnLaunch   *bool     `json:"start_proxy_on_launch"`
+		ReconnectIntervalMin *int      `json:"reconnect_interval_min"`
+		KeepaliveEnabled     *bool     `json:"keepalive_enabled"`
+		KeepaliveIntervalSec *int      `json:"keepalive_interval_sec"`
+		Schedule             *Schedule `json:"schedule"`
+		MemoryLimitMB        *uint64   `json:"memory_limit_mb"`
+		ManualSingBoxConfig  *bool     `json:"manual_singbox_config"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return settings, fmt.Errorf("неверный формат настроек: %w", err)
 	}
 	if raw.StartProxyOnLaunch != nil {
 		settings.StartProxyOnLaunch = *raw.StartProxyOnLaunch
+	}
+	if raw.ReconnectIntervalMin != nil {
+		settings.ReconnectIntervalMin = *raw.ReconnectIntervalMin
+	}
+	if raw.KeepaliveEnabled != nil {
+		settings.KeepaliveEnabled = *raw.KeepaliveEnabled
+	}
+	if raw.KeepaliveIntervalSec != nil {
+		settings.KeepaliveIntervalSec = *raw.KeepaliveIntervalSec
+	}
+	if raw.Schedule != nil {
+		settings.Schedule = *raw.Schedule
+	}
+	if raw.MemoryLimitMB != nil {
+		settings.MemoryLimitMB = *raw.MemoryLimitMB
+	}
+	if raw.ManualSingBoxConfig != nil {
+		settings.ManualSingBoxConfig = *raw.ManualSingBoxConfig
+	}
+	if settings.KeepaliveIntervalSec <= 0 {
+		settings.KeepaliveIntervalSec = 120
 	}
 	return settings, nil
 }

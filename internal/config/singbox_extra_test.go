@@ -74,6 +74,38 @@ func TestBuildDNSConfig_DoH_PathSetSeparately(t *testing.T) {
 	}
 }
 
+func TestBuildDNSConfig_RemoteFallbacks(t *testing.T) {
+	dns := buildDNSConfig(&DNSConfig{
+		RemoteDNS: "https://1.1.1.1/dns-query",
+		DirectDNS: "udp://8.8.8.8",
+		RemoteDNSFallback: []string{
+			"https://9.9.9.9/dns-query",
+			"quic://dns.adguard.com",
+		},
+	})
+	want := map[string]struct {
+		server string
+		path   string
+		typ    string
+	}{
+		"remote-fb1": {"9.9.9.9", "/dns-query", "https"},
+		"remote-fb2": {"dns.adguard.com", "", "quic"},
+	}
+	for _, srv := range dns.Servers {
+		w, ok := want[srv.Tag]
+		if !ok {
+			continue
+		}
+		if srv.Server != w.server || srv.Path != w.path || srv.Type != w.typ || srv.Detour != "proxy-out" {
+			t.Fatalf("%s = %+v, want server=%q path=%q type=%q detour=proxy-out", srv.Tag, srv, w.server, w.path, w.typ)
+		}
+		delete(want, srv.Tag)
+	}
+	if len(want) != 0 {
+		t.Fatalf("fallback DNS servers missing: %#v", want)
+	}
+}
+
 // ── buildRoute: domain-suffix правила ─────────────────────────────────────
 
 // BUG-РИСК: правило с доменом начинающимся на "." должно попасть в
@@ -262,6 +294,73 @@ func TestBuildRoute_DNSHijack_IsFirstRule(t *testing.T) {
 	if first.Protocol != "dns" {
 		t.Errorf("первое правило после sniff должно быть dns-hijack, got Protocol=%q Outbound=%q",
 			first.Protocol, first.Outbound)
+	}
+}
+
+func TestBuildRoute_BlockQUICExceptionPrecedesReject(t *testing.T) {
+	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}, BlockQUIC: true}
+	route := buildRoute(cfg, "1.2.3.4")
+
+	exceptionIdx, rejectIdx := -1, -1
+	for i, r := range route.Rules {
+		if r.Network != "udp" || len(r.Port) != 1 || r.Port[0] != 443 {
+			continue
+		}
+		if r.Outbound == "proxy-out" {
+			for _, s := range r.DomainSuffix {
+				if s == "openai.com" {
+					exceptionIdx = i
+				}
+			}
+		}
+		if r.Action == "reject" && rejectIdx == -1 {
+			rejectIdx = i
+		}
+	}
+	if exceptionIdx < 0 {
+		t.Fatal("QUIC AI exception rule not found")
+	}
+	if rejectIdx < 0 {
+		t.Fatal("blanket QUIC reject rule not found")
+	}
+	if exceptionIdx > rejectIdx {
+		t.Fatalf("QUIC exception must precede blanket reject: exception=%d reject=%d", exceptionIdx, rejectIdx)
+	}
+}
+
+func TestBuildRoute_BlockQUICCanBeDisabled(t *testing.T) {
+	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}, BlockQUIC: false}
+	route := buildRoute(cfg, "1.2.3.4")
+	for _, r := range route.Rules {
+		if r.Network == "udp" && len(r.Port) == 1 && r.Port[0] == 443 && r.Action == "reject" {
+			t.Fatal("UDP/443 reject must not be generated when BlockQUIC=false")
+		}
+	}
+}
+
+func TestBuildRoute_StunAndTelemetryRejects(t *testing.T) {
+	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}, BlockTelemetry: true}
+	route := buildRoute(cfg, "1.2.3.4")
+	var hasSTUN, hasTelemetry bool
+	for _, r := range route.Rules {
+		if r.Action == "reject" {
+			for _, s := range r.DomainSuffix {
+				if s == "stun.l.google.com" {
+					hasSTUN = true
+				}
+			}
+			for _, d := range r.Domain {
+				if d == "telemetry.microsoft.com" {
+					hasTelemetry = true
+				}
+			}
+		}
+	}
+	if !hasSTUN {
+		t.Fatal("STUN reject rule not found")
+	}
+	if !hasTelemetry {
+		t.Fatal("telemetry reject rule not found")
 	}
 }
 

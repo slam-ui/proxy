@@ -28,6 +28,14 @@ type Callbacks struct {
 	OnServerSwitch func(serverID string)
 }
 
+type HealthState int
+
+const (
+	HealthOK HealthState = iota
+	HealthDegraded
+	HealthCritical
+)
+
 const maxServerSlots = 10
 
 var (
@@ -49,7 +57,10 @@ func WaitReady() {
 
 // SetEnabled переключает иконку и состояние пунктов меню.
 func SetEnabled(enabled bool) {
-	win32SetIcon(enabled)
+	healthMu.Lock()
+	state := healthState
+	healthMu.Unlock()
+	win32SetIconForHealth(enabled, state)
 	win32SetTooltip(buildTooltip(enabled))
 
 	win32MenuState.Lock()
@@ -117,6 +128,17 @@ func SetWarming(warming bool) {
 	win32SetTooltip(buildTooltip(isEnabled))
 }
 
+func SetHealthState(state HealthState) {
+	healthMu.Lock()
+	healthState = state
+	healthMu.Unlock()
+	win32MenuState.Lock()
+	isEnabled := win32MenuState.disableEnabled
+	win32MenuState.Unlock()
+	win32SetIconForHealth(isEnabled, state)
+	win32SetTooltip(buildTooltip(isEnabled))
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────
 
 var (
@@ -125,6 +147,8 @@ var (
 
 	warmingMu     sync.Mutex // защищает warmingActive
 	warmingActive bool
+	healthMu      sync.Mutex
+	healthState   HealthState
 )
 
 func buildTooltip(enabled bool) string {
@@ -139,6 +163,15 @@ func buildTooltip(enabled bool) string {
 		return "SafeSky — Выключен"
 	}
 	tip := "SafeSky — Включён"
+	healthMu.Lock()
+	state := healthState
+	healthMu.Unlock()
+	switch state {
+	case HealthDegraded:
+		tip += " — деградация"
+	case HealthCritical:
+		tip += " — проблемы соединения"
+	}
 	win32MenuState.Lock()
 	servers := win32MenuState.servers
 	win32MenuState.Unlock()

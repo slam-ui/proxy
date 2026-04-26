@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 )
@@ -123,6 +124,7 @@ func switchClashMode(ctx context.Context, log logger.Logger, mode string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+config.ClashAPISecret())
 	resp, err := clashModeHTTPClient.Do(req)
 	if err != nil {
 		if log != nil {

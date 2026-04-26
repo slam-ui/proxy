@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package autorun управляет автозапуском приложения при входе в Windows.
 // Использует HKCU\Software\Microsoft\Windows\CurrentVersion\Run — стандарт
 // для всех proxy-клиентов (Clash Verge, Hiddify, Mihomo Party).

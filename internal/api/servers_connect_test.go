@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 
 	"proxyclient/internal/config"
@@ -104,7 +103,7 @@ func TestHandleConnect_NoTun_ReturnsRestartRequired(t *testing.T) {
 
 // ── Тест 2: handleConnect записывает URL в secret.key ────────────────────────
 //
-// После POST /connect содержимое secret.key должно совпадать с URL сервера.
+// После POST /connect secret.key должен читаться как URL сервера.
 func TestHandleConnect_WritesSecretKey(t *testing.T) {
 	srv, secretKeyPath, cleanup := buildServersServer(t)
 	defer cleanup()
@@ -120,11 +119,10 @@ func TestHandleConnect_WritesSecretKey(t *testing.T) {
 		t.Fatalf("/connect = %d: %s", w.Code, w.Body.String())
 	}
 
-	raw, err := os.ReadFile(secretKeyPath)
+	got, err := config.ReadSecretKey(secretKeyPath)
 	if err != nil {
-		t.Fatalf("ReadFile secret.key: %v", err)
+		t.Fatalf("ReadSecretKey secret.key: %v", err)
 	}
-	got := strings.TrimSpace(string(raw))
 	if got != urlB {
 		t.Errorf("secret.key содержит %q, ожидался %q", got, urlB)
 	}

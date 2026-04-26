@@ -138,3 +138,5 @@ func (m *mockXRayManager) Wait() error                           { return m.err 
 func (m *mockXRayManager) LastOutput() string                    { return "" }
 func (m *mockXRayManager) Uptime() time.Duration                 { return 0 }
 func (m *mockXRayManager) GetHealthStatus() (int, float64, bool) { return 0, 0, false }
+func (m *mockXRayManager) SetHealthAlertFn(fn func())            {}
+func (m *mockXRayManager) MemoryMB() uint64                      { return 0 }

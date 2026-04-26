@@ -40,7 +40,7 @@ git clone https://github.com/slam-ui/proxy.git
 cd proxy
 
 go mod download
-go build -o proxy-client.exe ./cmd/proxy-client
+.\build.ps1 -NoPause
 ```
 
 ---
@@ -63,7 +63,7 @@ vless://uuid@host:port?security=reality&sni=example.com&pbk=...&sid=...&fp=chrom
 ### 2. Запустить
 
 ```powershell
-.\proxy-client.exe
+.\dist\SafeSky.exe
 ```
 
 После запуска:
@@ -234,19 +234,21 @@ proxy/
 
 ## CI/CD
 
-GitHub Actions запускает 9 джобов на каждый push/PR в `main`:
+GitHub Actions запускается на push/PR в `main` и вручную через `workflow_dispatch`.
+Основной required check для branch protection — `CI Gate`; он ждёт все обязательные проверки.
 
 | Джоб | Что делает |
 |------|-----------|
-| **Build** | `go vet` + сборка Windows `.exe` |
-| **Unit Tests** | `go test -race` для кросс-платформенных пакетов + coverage report |
-| **Staticcheck** | Статический анализ (Windows target) |
-| **Gosec** | SAST сканирование → SARIF |
-| **Semgrep** | SAST сканирование → SARIF |
-| **CodeQL** | Анализ безопасности GitHub |
-| **Dependency Scan** | `govulncheck` — уязвимости в зависимостях |
+| **Build** | `go mod verify`, `go mod tidy` check, `go vet`, Windows build artifact |
+| **Test & Coverage** | `go test -race` для кросс-платформенных пакетов + `coverage.out` |
+| **Test (Windows)** | native Windows build, API tests, Windows-only package tests |
+| **Fuzz** | короткий regression fuzzing для `apprules` и `config` |
+| **Lint** | `staticcheck` под Windows target |
+| **Security Scan** | `gosec` SARIF + `govulncheck` JSON |
+| **CodeQL** | GitHub security analysis |
 | **Secret Scan** | Gitleaks — утечки секретов в коде |
 | **License Check** | `go-licenses` — лицензии зависимостей |
+| **CI Gate** | единый итоговый статус для branch protection |
 
 ---
 

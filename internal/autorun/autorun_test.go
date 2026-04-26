@@ -11,6 +11,13 @@ import (
 	"testing"
 )
 
+func requireAutorunIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("SAFESKY_RUN_AUTORUN_INTEGRATION") != "1" {
+		t.Skip("set SAFESKY_RUN_AUTORUN_INTEGRATION=1 to run tests that mutate Windows autorun state")
+	}
+}
+
 // ── exeAbsPath Tests ──────────────────────────────────────────────────────────────
 
 func TestExeAbsPath_ReturnsValidPath(t *testing.T) {
@@ -54,6 +61,7 @@ func TestExeAbsPath_IsConsistent(t *testing.T) {
 // These tests are designed to be safe and cleanup after themselves.
 
 func TestEnableDisable_RoundTrip(t *testing.T) {
+	requireAutorunIntegration(t)
 	// Skip if not running as a normal test (might need admin)
 	if testing.Short() {
 		t.Skip("Skipping registry test in short mode")
@@ -112,6 +120,7 @@ func TestIsEnabled_ReturnsFalse_WhenNotRegistered(t *testing.T) {
 }
 
 func TestDisable_IsIdempotent(t *testing.T) {
+	requireAutorunIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping registry test in short mode")
 	}
@@ -199,6 +208,7 @@ func TestIsEnabled_Concurrent(t *testing.T) {
 }
 
 func TestEnableDisable_Concurrent(t *testing.T) {
+	requireAutorunIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping registry test in short mode")
 	}
@@ -225,6 +235,7 @@ func TestEnableDisable_Concurrent(t *testing.T) {
 // ── State Consistency Tests ───────────────────────────────────────────────────────
 
 func TestEnableDisable_StateConsistency(t *testing.T) {
+	requireAutorunIntegration(t)
 	if testing.Short() {
 		t.Skip("Skipping registry test in short mode")
 	}

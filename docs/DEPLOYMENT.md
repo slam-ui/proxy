@@ -9,7 +9,7 @@
 ## 📋 Что включено
 
 ```
-✓ proxy-client.exe          — Основное приложение
+✓ SafeSky.exe               — Основное приложение (результат `.\build.ps1`)
 ✓ sing-box.exe              — Прокси-движок (VLESS/Reality)
 ✓ wintun.dll                — Windows TUN драйвер
 ✓ secret.key                — Конфиг VLESS (нужна настройка!)
@@ -86,7 +86,7 @@ vless://550e8400-e29b-41d4-a716-446655440000@proxy.example.com:443?security=real
 ### Способ 1: Графический интерфейс
 
 ```powershell
-.\proxy-client.exe
+.\dist\SafeSky.exe
 ```
 
 Откроется:
@@ -94,10 +94,10 @@ vless://550e8400-e29b-41d4-a716-446655440000@proxy.example.com:443?security=real
 - ✓ Web UI на `http://localhost:8080`
 - ✓ Event log для отладки
 
-### Способ 2: Консобань (отладка)
+### Способ 2: Консоль (отладка)
 
 ```powershell
-.\proxy-client.exe -NoGui
+.\dist\SafeSky.exe -NoGui
 ```
 
 ---
@@ -271,7 +271,7 @@ netsh advfirewall firewall show rule name="proxy-client" verbose
 
 Отключить kill-switch:
 ```powershell
-.\proxy-client.exe -NoKillswitch
+.\dist\SafeSky.exe -NoKillswitch
 ```
 
 ---
@@ -369,7 +369,7 @@ Copy-Item anomaly-*.log ./logs_export/
 │  ✓ Документация создана                    │
 │                                             │
 │  Для запуска:                              │
-│  > .\proxy-client.exe                      │
+│  > .\dist\SafeSky.exe                      │
 │                                             │
 │  Затем откройте:                           │
 │  > http://localhost:8080                   │

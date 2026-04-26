@@ -107,8 +107,7 @@ func (s *Server) handleGeositeList(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(GeositeListResponse{Items: items})
+	s.respondJSON(w, http.StatusOK, GeositeListResponse{Items: items})
 }
 
 type GeositeDownloadRequest struct {
@@ -211,8 +210,7 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 				bulkApplyErr = err.Error()
 			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		s.respondJSON(w, http.StatusOK, map[string]interface{}{
 			"ok":          len(errs) == 0,
 			"requested":   names,
 			"updated":     updated,
@@ -232,9 +230,7 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ErrGeositeNotFound) {
 			status = http.StatusNotFound
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(map[string]string{
+		s.respondJSON(w, status, map[string]string{
 			"error": err.Error(),
 		})
 		return
@@ -255,8 +251,7 @@ func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":          true,
 		"name":        name,
 		"size":        size,
@@ -364,22 +359,33 @@ func downloadGeositeFile(ctx context.Context, name string) error {
 				continue
 			}
 			if resp.StatusCode == 404 {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				errs = append(errs, fmt.Sprintf("src%d/%s: 404", i+1, c.name))
 				break // для этого источника файл отсутствует; прямой повтор не поможет
 			}
 			if resp.StatusCode != 200 {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				errs = append(errs, fmt.Sprintf("src%d/%s: HTTP %d", i+1, c.name, resp.StatusCode))
 				allNotFound = false
 				continue
 			}
 			allNotFound = false
 			var readErr error
-			data, readErr = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
-			resp.Body.Close()
+			const maxGeositeBytes = 32 << 20
+			data, readErr = io.ReadAll(io.LimitReader(resp.Body, maxGeositeBytes+1))
+			closeErr := resp.Body.Close()
 			if readErr != nil {
 				errs = append(errs, fmt.Sprintf("src%d/%s: read: %s", i+1, c.name, readErr.Error()))
+				data = nil
+				continue
+			}
+			if closeErr != nil {
+				errs = append(errs, fmt.Sprintf("src%d/%s: close: %s", i+1, c.name, closeErr.Error()))
+				data = nil
+				continue
+			}
+			if len(data) > maxGeositeBytes {
+				errs = append(errs, fmt.Sprintf("src%d/%s: too large", i+1, c.name))
 				data = nil
 				continue
 			}

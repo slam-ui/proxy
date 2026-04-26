@@ -1,14 +1,36 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"proxyclient/internal/fileutil"
 )
+
+var (
+	clashSecretOnce sync.Once
+	clashSecret     string
+)
+
+// ClashAPISecret returns the per-process bearer secret for the sing-box Clash API.
+func ClashAPISecret() string {
+	clashSecretOnce.Do(func() {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			clashSecret = fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+			return
+		}
+		clashSecret = hex.EncodeToString(b)
+	})
+	return clashSecret
+}
 
 // ptrBool возвращает указатель на bool value
 func ptrBool(b bool) *bool {
@@ -27,9 +49,8 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 	tls := &SBTLS{
 		Enabled:    true,
 		ServerName: params.SNI,
-		// random вместо chrome: случайный fingerprint из нескольких браузеров.
-		// Усложняет детектирование трафика DPI системами, не влияет на скорость.
-		UTLS: &SBUTLS{Enabled: true, Fingerprint: "random"},
+		ALPN:       []string{"h2", "http/1.1"},
+		UTLS:       &SBUTLS{Enabled: true, Fingerprint: params.UTLSFingerprint()},
 	}
 	// Reality включается только при наличии непустого PublicKey (pbk в URL).
 	// Без PublicKey используется plain TLS — стандартный handshake без Reality.
@@ -41,17 +62,20 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 			PublicKey: params.PublicKey,
 			ShortID:   params.ShortID,
 		}
+	} else {
+		tls.MinVersion = "1.3"
 	}
 
 	out := SBOutbound{
-		Type:        "vless",
-		Tag:         "proxy-out",
-		Server:      params.Address,
-		ServerPort:  params.Port,
-		UUID:        params.UUID,
-		Flow:        params.Flow,
-		TLS:         tls,
-		TCPFastOpen: ptrBool(true), // ускорение установки соединения (dial-field, valid v1.10+)
+		Type:         "vless",
+		Tag:          "proxy-out",
+		Server:       params.Address,
+		ServerPort:   params.Port,
+		UUID:         params.UUID,
+		Flow:         params.Flow,
+		TLS:          tls,
+		TCPFastOpen:  ptrBool(true), // ускорение установки соединения (dial-field, valid v1.10+)
+		TCPMultiPath: true,
 	}
 	// Multiplex (mux): поддерживается с sing-box 1.6+.
 	// Включается только при явном ?mux=1 в VLESS URL — безопасно для любой версии.
@@ -66,7 +90,15 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 			Enabled:    true,
 			Protocol:   "h2mux",
 			MaxStreams: 8,
+			Padding:    true,
 		}
+	}
+	if params.Fragment {
+		size := "10-50"
+		if params.FragmentSize != "" {
+			size = params.FragmentSize
+		}
+		out.TLSFragment = &SBTLSFragment{Enabled: true, Size: size, Sleep: "0-5ms"}
 	}
 	return out
 }
@@ -86,17 +118,28 @@ func buildDNSConfig(dnsCfg *DNSConfig) SBDNS {
 	// Парсим direct DNS URL
 	directServer, directPort, directType := parseDNSURLWithPort(dnsCfg.DirectDNS)
 
-	return SBDNS{
+	servers := []SBDNSServer{
 		// ipv4_only: не возвращать AAAA записи — IPv6 недоступен на большинстве машин — подключение к IPv6-адресам
 		// завершается "The requested address is not valid in its context".
+		// Remote DNS идёт через прокси-туннель (detour: proxy-out).
+		// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
+		{Tag: "remote", Type: remoteType, Server: remoteServer, Path: remotePath, Detour: "proxy-out"},
+		// Прямой DNS для локального трафика (http-in inbound) — без прокси.
+		{Tag: "direct-dns", Type: directType, Server: directServer, ServerPort: directPort},
+	}
+	for i, fb := range dnsCfg.RemoteDNSFallback {
+		fbServer, fbPath, fbType := parseDNSURL(fb)
+		servers = append(servers, SBDNSServer{
+			Tag:    fmt.Sprintf("remote-fb%d", i+1),
+			Type:   fbType,
+			Server: fbServer,
+			Path:   fbPath,
+			Detour: "proxy-out",
+		})
+	}
+	return SBDNS{
 		Strategy: "ipv4_only",
-		Servers: []SBDNSServer{
-			// Remote DNS идёт через прокси-туннель (detour: proxy-out).
-			// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
-			{Tag: "remote", Type: remoteType, Server: remoteServer, Path: remotePath, Detour: "proxy-out"},
-			// Прямой DNS для локального трафика (http-in inbound) — без прокси.
-			{Tag: "direct-dns", Type: directType, Server: directServer, ServerPort: directPort},
-		},
+		Servers:  servers,
 		Rules: []SBDNSRule{
 			{Inbound: []string{"http-in"}, Server: "direct-dns"},
 		},
@@ -189,12 +232,15 @@ func parsePortString(s string) (int, error) {
 
 // buildSingBoxConfig собирает SingBoxConfig из уже подготовленных компонентов.
 func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr string, routingCfg *RoutingConfig) *SingBoxConfig {
-	return &SingBoxConfig{
+	if routingCfg == nil {
+		routingCfg = DefaultRoutingConfig()
+	}
+	cfg := &SingBoxConfig{
 		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
 		Experimental: SBExperimental{
 			ClashAPI: SBClashAPI{
 				ExternalController: ClashAPIAddr,
-				Secret:             "",
+				Secret:             ClashAPISecret(),
 			},
 			// CacheFile: персистентный DNS кэш между перезапусками.
 			// При рестарте sing-box не делает холодные DNS запросы —
@@ -227,6 +273,19 @@ func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr
 		},
 		Route: buildRoute(routingCfg, tunExcludeAddr),
 	}
+	if routingCfg.LANShareEnabled {
+		lanPort := routingCfg.LANSharePort
+		if lanPort == 0 {
+			lanPort = 10808
+		}
+		cfg.Inbounds = append(cfg.Inbounds, SBInbound{
+			Type:       "http",
+			Tag:        "http-lan",
+			Listen:     "0.0.0.0",
+			ListenPort: lanPort,
+		})
+	}
+	return cfg
 }
 
 // ipOrEmpty возвращает addr если это валидный IP, иначе "".
@@ -397,6 +456,21 @@ var telegramCIDRRanges = []string{
 	"2a0a:f280::/32",
 }
 
+var windowsTelemetryDomains = []string{
+	"telemetry.microsoft.com",
+	"vortex.data.microsoft.com",
+	"settings-win.data.microsoft.com",
+	"watson.telemetry.microsoft.com",
+	"oca.telemetry.microsoft.com",
+	"sqm.telemetry.microsoft.com",
+	"v10.events.data.microsoft.com",
+	"v20.events.data.microsoft.com",
+	"self.events.data.microsoft.com",
+	"pipe.aria.microsoft.com",
+	"browser.pipe.aria.microsoft.com",
+	"telecommand.telemetry.microsoft.com",
+}
+
 func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 	if routingCfg == nil {
 		routingCfg = DefaultRoutingConfig()
@@ -422,9 +496,28 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 		// ПОРЯДОК ВАЖЕН: это правило должно быть раньше любых proxy-out правил,
 		// чтобы приватные IP (192.168.x.x, 10.x.x.x, 127.x.x.x) не попали в прокси.
 		{IPCIDR: directCIDR, Outbound: "direct"},
+	}
+	rules = append(rules,
 		// Telegram часто обращается к DC по IP, а не по домену. Это правило должно
 		// быть до blanket IPv6 reject, иначе IPv6 Telegram DC будут отброшены.
-		{IPCIDR: telegramCIDRRanges, Outbound: "proxy-out"},
+		SBRouteRule{IPCIDR: telegramCIDRRanges, Outbound: "proxy-out"},
+		// WebRTC/STUN leak prevention: блокируем UDP/TCP к STUN серверам.
+		SBRouteRule{
+			Network: "udp",
+			Port:    []uint16{3478, 3479, 5349},
+			DomainSuffix: []string{
+				"stun.l.google.com", "stun.cloudflare.com", "stun.ekiga.net",
+				"stun.ideasip.com", "stun.softjoys.com", "stun.voiparound.com",
+				"stun.voipbuster.com", "stun.voipstunt.com", "stun.voxgratia.org",
+			},
+			Action: "reject",
+		},
+		SBRouteRule{
+			Network:      "tcp",
+			Port:         []uint16{3478, 3479, 5349},
+			DomainSuffix: []string{"stun.l.google.com", "stun.cloudflare.com"},
+			Action:       "reject",
+		},
 		// IPv6 глобальный unicast: DNS strategy=ipv4_only предотвращает новые AAAA lookup,
 		// но приложения с hardcoded IPv6 адресами (Telegram DC: 2001:b28:f23d::/48 и др.)
 		// всё равно пытаются подключиться напрямую к IPv6 адресам.
@@ -436,7 +529,10 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 		// Исключения уже обработаны правилом directCIDR выше:
 		//   ::1/128 (loopback), fc00::/7 (ULA), fe80::/10 (link-local) → direct
 		// ::/0 матчит всё оставшееся IPv6 (включая 2000::/3 global unicast).
-		{IPCIDR: []string{"::/0"}, Action: "reject"},
+		SBRouteRule{IPCIDR: []string{"::/0"}, Action: "reject"},
+	)
+	if routingCfg.BlockTelemetry {
+		rules = append(rules, SBRouteRule{Domain: windowsTelemetryDomains, Action: "reject"})
 	}
 
 	if routingCfg.BypassEnabled {
@@ -448,34 +544,36 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 		}
 	}
 
-	rules = append(rules,
-		// QUIC (UDP/443) для AI-сервисов: явно пропускаем через прокси ДО blanket reject.
-		// VS Code Codex, GitHub Copilot, ChatGPT используют HTTP/3 (QUIC) для API-вызовов.
-		// С mixed stack + gVisor gVisor перехватывает UDP и форвардит через VLESS туннель.
-		// DomainSuffix матчится по SNI (sniff выше извлекает его из QUIC Initial packet).
-		// Приватные IP уже обработаны выше — сюда доходит только публичный трафик AI-сервисов.
-		SBRouteRule{
-			Network: "udp",
-			Port:    []uint16{443},
-			DomainSuffix: []string{
-				"openai.com",         // ChatGPT, Codex API, Whisper
-				"chatgpt.com",        // ChatGPT web
-				"oaistatic.com",      // OpenAI static assets
-				"oaiusercontent.com", // OpenAI user content
-				"github.com",         // GitHub Copilot (VS Code extension)
-				"githubcopilot.com",  // GitHub Copilot API
-				"copilot.github.com", // GitHub Copilot
-				"anthropic.com",      // Claude API
-				"claude.ai",          // Claude web
+	if routingCfg.BlockQUIC {
+		rules = append(rules,
+			// QUIC (UDP/443) для AI-сервисов: явно пропускаем через прокси ДО blanket reject.
+			// VS Code Codex, GitHub Copilot, ChatGPT используют HTTP/3 (QUIC) для API-вызовов.
+			// С mixed stack + gVisor gVisor перехватывает UDP и форвардит через VLESS туннель.
+			// DomainSuffix матчится по SNI (sniff выше извлекает его из QUIC Initial packet).
+			// Приватные IP уже обработаны выше — сюда доходит только публичный трафик AI-сервисов.
+			SBRouteRule{
+				Network: "udp",
+				Port:    []uint16{443},
+				DomainSuffix: []string{
+					"openai.com",         // ChatGPT, Codex API, Whisper
+					"chatgpt.com",        // ChatGPT web
+					"oaistatic.com",      // OpenAI static assets
+					"oaiusercontent.com", // OpenAI user content
+					"github.com",         // GitHub Copilot (VS Code extension)
+					"githubcopilot.com",  // GitHub Copilot API
+					"copilot.github.com", // GitHub Copilot
+					"anthropic.com",      // Claude API
+					"claude.ai",          // Claude web
+				},
+				Outbound: "proxy-out",
 			},
-			Outbound: "proxy-out",
-		},
-		// Blanket-reject остального QUIC (UDP/443): браузеры переключаются на TCP/443.
-		// Без этого браузер кэширует "Alt-Svc: h3" и пытается использовать QUIC для всех сайтов,
-		// что с некоторыми серверами даёт некорректную маршрутизацию.
-		// AI-сервисы выше уже обработаны — сюда попадают только прочие домены.
-		SBRouteRule{Network: "udp", Port: []uint16{443}, Action: "reject"},
-	)
+			// Blanket-reject остального QUIC (UDP/443): браузеры переключаются на TCP/443.
+			// Без этого браузер кэширует "Alt-Svc: h3" и пытается использовать QUIC для всех сайтов,
+			// что с некоторыми серверами даёт некорректную маршрутизацию.
+			// AI-сервисы выше уже обработаны — сюда попадают только прочие домены.
+			SBRouteRule{Network: "udp", Port: []uint16{443}, Action: "reject"},
+		)
+	}
 
 	var proxyProcs, directProcs, blockProcs []string
 	var proxyDom, directDom, blockDom []string

@@ -34,6 +34,8 @@ func (s *stubXray) LastOutput() string                    { return "" }
 func (s *stubXray) StartAfterManualCleanup() error        { return nil }
 func (s *stubXray) Uptime() time.Duration                 { return 0 }
 func (s *stubXray) GetHealthStatus() (int, float64, bool) { return 0, 0, false } // БАГ #3
+func (s *stubXray) SetHealthAlertFn(fn func())            {}
+func (s *stubXray) MemoryMB() uint64                      { return 0 }
 
 // ─── mock proxy.Manager ───────────────────────────────────────────────────
 

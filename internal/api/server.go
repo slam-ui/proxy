@@ -109,9 +109,12 @@ type Server struct {
 	tunAttempt     int
 	tunMaxAttempt  int
 
-	silentMu    sync.RWMutex
-	silentCache map[string]bool
-	tunHandlers *TunHandlers
+	silentMu        sync.RWMutex
+	silentCache     map[string]bool
+	tunHandlers     *TunHandlers
+	serversHandlers *ServersHandlers
+	reconnectMu     sync.Mutex
+	reconnectCancel context.CancelFunc
 
 	proxyEnabledAtMu sync.RWMutex
 	proxyEnabledAt   time.Time
@@ -193,6 +196,7 @@ func (s *Server) StopProxyGuard() {
 func (s *Server) SetGeoAutoUpdater(g *GeoAutoUpdater) {
 	// BUG-5 FIX: подключаем TriggerApply как callback — sing-box перезагружает
 	// конфиг сразу после обновления geosite файлов, а не ждёт следующего ручного apply.
+	s.geoUpdaterMu.Lock()
 	if g != nil {
 		g.SetOnUpdated(func() {
 			if s.tunHandlers != nil {
@@ -202,8 +206,6 @@ func (s *Server) SetGeoAutoUpdater(g *GeoAutoUpdater) {
 			}
 		})
 	}
-
-	s.geoUpdaterMu.Lock()
 	old := s.geoUpdater
 	s.geoUpdater = g
 	s.geoUpdaterMu.Unlock()
@@ -270,14 +272,17 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
+	SetupImprovementRoutes(s)
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
 	if s.config.SecretKeyPath != "" {
-		SetupServerRoutes(s, s.config.SecretKeyPath)
+		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
 	}
 
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")
 	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST")
+	api.HandleFunc("/singbox-config", s.handleGetSingBoxConfig).Methods("GET", "OPTIONS")
+	api.HandleFunc("/singbox-config", s.handleSetSingBoxConfig).Methods("POST", "OPTIONS")
 	// B-8: Backup и restore endpoints
 	api.HandleFunc("/backup", s.handleBackup).Methods("GET", "OPTIONS")
 	api.HandleFunc("/backup/restore", s.handleBackupRestore).Methods("POST", "OPTIONS")
@@ -289,6 +294,9 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/connections")
 	s.addSilentPath("/api/servers")  // FIX 31: подавляем шумные логи при опросе списка серверов
 	s.addSilentPath("/api/procicon") // иконки процессов — частые запросы, не нужно логировать
+	s.addSilentPath("/api/traffic/by-process")
+	s.addSilentPath("/api/stats/total")
+	s.addSilentPath("/api/connections/history")
 }
 
 func (s *Server) FinalizeRoutes() {
@@ -305,10 +313,16 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	errChan := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		s.logger.Info("API сервер запущен на %s", s.config.ListenAddress)
 		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errChan <- err
+			select {
+			case errChan <- err:
+			default:
+			}
 		}
 	}()
 
@@ -321,15 +335,23 @@ func (s *Server) Start(ctx context.Context) error {
 		if err := s.httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(shutdownCtx.Err(), context.DeadlineExceeded) {
 				s.logger.Warn("API сервер не завершился graceful за 5s — закрываем активные соединения")
-				return s.httpServer.Close()
+				closeErr := s.httpServer.Close()
+				wg.Wait()
+				return closeErr
 			}
+			wg.Wait()
 			return err
 		}
+		wg.Wait()
 		return nil
 	}
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.StopPeriodicReconnect()
+	if s.serversHandlers != nil {
+		s.serversHandlers.Shutdown()
+	}
 	if s.httpServer == nil {
 		return nil
 	}
@@ -346,6 +368,44 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return fmt.Errorf("ошибка при остановке API сервера: %w", err)
 	}
 	return nil
+}
+
+func (s *Server) StartPeriodicReconnect(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	s.reconnectMu.Lock()
+	if s.reconnectCancel != nil {
+		s.reconnectCancel()
+	}
+	ctx, cancel := context.WithCancel(s.lifecycleCtx)
+	s.reconnectCancel = cancel
+	s.reconnectMu.Unlock()
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				if s.tunHandlers != nil {
+					s.logger.Debug("PeriodicReconnect: ротация сессии")
+					_ = s.tunHandlers.TriggerApply()
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func (s *Server) StopPeriodicReconnect() {
+	s.reconnectMu.Lock()
+	cancel := s.reconnectCancel
+	s.reconnectCancel = nil
+	s.reconnectMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (s *Server) GetXRayManager() xray.Manager {
@@ -408,6 +468,13 @@ func (s *Server) DrainQueuedApply() {
 	go s.tunHandlers.drainQueuedApply()
 }
 
+func (s *Server) IsApplyBusy() bool {
+	if s.tunHandlers == nil {
+		return false
+	}
+	return s.tunHandlers.IsApplyBusy()
+}
+
 // TriggerRestart программно запускает рестарт sing-box с уже готовым конфигом на диске.
 // Используется applyTURNMode: конфиг уже записан с TURN override ДО этого вызова.
 // TriggerApplyWithConfig НЕ перегенерирует конфиг — иначе TURN override был бы уничтожен.
@@ -420,7 +487,21 @@ func (s *Server) TriggerRestart(configPath string) error {
 	return s.tunHandlers.TriggerApplyWithConfig()
 }
 
+func (s *Server) TriggerApply() error {
+	if s.tunHandlers == nil {
+		return fmt.Errorf("TunHandlers не инициализированы")
+	}
+	return s.tunHandlers.TriggerApply()
+}
+
+func (s *Server) AutoConnect() {
+	if s.serversHandlers != nil {
+		s.serversHandlers.AutoConnect()
+	}
+}
+
 func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	proxyConfig := s.config.ProxyManager.GetConfig()
 
 	s.configMu.RLock()
@@ -504,6 +585,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	s.respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
