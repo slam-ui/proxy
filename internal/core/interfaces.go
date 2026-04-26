@@ -75,11 +75,3 @@ type LogService interface {
 type NotificationService interface {
 	Notify(title, message string)
 }
-
-// TURNService управляет TURN туннелем (VK DTLS masquerade).
-type TURNService interface {
-	// SetActive переключает режим TURN туннеля.
-	SetActive(active bool) error
-	// IsActive возвращает текущий статус TURN туннеля.
-	IsActive() bool
-}

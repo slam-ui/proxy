@@ -25,19 +25,35 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"proxyclient/internal/config"
+	"proxyclient/internal/fileutil"
 )
 
 // retryBaseDelay базовая задержка первой повторной попытки (1s → 2s → 4s).
 // Переопределяется в тестах для ускорения проверок.
 var retryBaseDelay = time.Second
 
+var (
+	ensureMu      sync.Mutex
+	ensureRunning atomic.Bool
+)
+
+// pinnedVersion — зафиксированная версия sing-box.
+// Используем конкретный тег вместо "latest", чтобы при выходе v1.14+
+// поведение не менялось. Обновляй здесь при каждом плановом обновлении движка.
+const pinnedVersion = "v1.13.7"
+
 // githubAPI — var (не const) чтобы тесты могли подменять на httptest.Server.
-var githubAPI = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+// Запрашиваем конкретный тег вместо latest — предсказуемое поведение при выходе новых версий.
+var githubAPI = "https://api.github.com/repos/SagerNet/sing-box/releases/tags/" + pinnedVersion
 
 // githubReleasesPage — fallback когда API заблокирован/rate-limited.
-// Редиректит на /releases/tag/vX.Y.Z — версию можно извлечь из Location header.
-var githubReleasesPage = "https://github.com/SagerNet/sing-box/releases/latest"
+// Указывает на конкретный тег, а не latest — URL конструируется напрямую без HTTP-редиректа.
+var githubReleasesPage = "https://github.com/SagerNet/sing-box/releases/tag/" + pinnedVersion
 
 // noProxyTransport не использует системный прокси Windows.
 // Загрузка sing-box происходит ДО его запуска: порт 10807 ещё не слушает,
@@ -121,19 +137,46 @@ func LatestVersion(ctx context.Context) (string, error) {
 	return version, err
 }
 
-// NeedsDownload возвращает true если sing-box.exe отсутствует или пустой.
+// NeedsDownload возвращает true если sing-box.exe отсутствует или повреждён (< 1 MB).
+// FIX 28+45: проверяем MinValidBinarySize — 0-байтный или усечённый файл считается отсутствующим.
 func NeedsDownload(execPath string) bool {
 	fi, err := os.Stat(execPath)
 	if err != nil {
 		return true
 	}
-	return fi.Size() == 0
+	return fi.Size() < config.MinValidBinarySize
+}
+
+// EnsureInProgress reports whether an EnsureEngine call is currently downloading,
+// extracting, or verifying sing-box.exe. Apply/restart paths use this to avoid
+// executing a binary while Windows Defender/SmartScreen may still be scanning it.
+func EnsureInProgress() bool {
+	return ensureRunning.Load()
+}
+
+// WaitForEnsure blocks until the current EnsureEngine call finishes.
+func WaitForEnsure(ctx context.Context) error {
+	for EnsureInProgress() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return nil
 }
 
 // EnsureEngine проверяет наличие sing-box.exe и при необходимости скачивает его.
 // Прогресс отправляется в канал progress (может быть nil).
 // Возвращает nil при успехе или если файл уже существует.
 func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress) error {
+	ensureMu.Lock()
+	ensureRunning.Store(true)
+	defer func() {
+		ensureRunning.Store(false)
+		ensureMu.Unlock()
+	}()
+
 	send := func(p Progress) {
 		if progress != nil {
 			select {
@@ -181,7 +224,8 @@ func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress
 	}); fetchErr != nil {
 		// ВЫС-4: fallback — пробуем извлечь версию из HTML-редиректа GitHub
 		send(Progress{Stage: "fetch_meta", Message: "GitHub API недоступен, пробуем fallback...", Percent: 5})
-		if fallbackAsset, fallbackVer, fallbackErr := fetchLatestAssetFallback(ctx); fallbackErr == nil {
+		fallbackClient := &http.Client{Timeout: 15 * time.Second, Transport: noProxyTransport}
+		if fallbackAsset, fallbackVer, fallbackErr := fetchLatestAssetFallback(ctx, fallbackClient); fallbackErr == nil {
 			asset = fallbackAsset
 			version = fallbackVer
 		} else {
@@ -250,14 +294,14 @@ func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress
 	//
 	// Retry важен: Windows Defender и другие AV сканируют свежескачанный .exe при первом
 	// запуске и могут вернуть 0xc0000005 (ACCESS VIOLATION) на первой попытке.
-	// Повторная попытка через несколько секунд обычно успешна после завершения сканирования.
+	// Облачная проверка SmartScreen занимает до 2 минут — используем 30 попыток × 5s = 150s.
 	// При полном провале — удаляем повреждённый файл и возвращаем ошибку: позволяет
 	// пользователю увидеть правильную диагностику и при следующем запуске NeedsDownload
 	// обнаружит отсутствие файла и перескачает бинарник заново.
 	send(Progress{Stage: "extract", Message: "Проверяем бинарник...", Percent: 95, Version: version})
 	{
-		const verifyAttempts = 10
-		verifyDelay := 2 * time.Second
+		const verifyAttempts = 30
+		verifyDelay := 5 * retryBaseDelay
 		var verifyErr error
 		for i := 1; i <= verifyAttempts; i++ {
 			verifyErr = verifySingBoxBinaryFn(ctx, execPath)
@@ -286,7 +330,8 @@ func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress
 	}
 
 	// A-3: атомарно сохраняем версию рядом с exe для InstalledVersion()
-	_ = os.WriteFile(versionFilePath(execPath), []byte(version), 0644)
+	// FIX 52: fileutil.WriteAtomic предотвращает повреждение файла при сбое питания.
+	_ = fileutil.WriteAtomic(versionFilePath(execPath), []byte(version), 0644)
 
 	send(Progress{Stage: "done", Message: fmt.Sprintf("sing-box %s готов ✓", version), Percent: 100, Version: version})
 	return nil
@@ -343,8 +388,9 @@ func fetchLatestAsset(ctx context.Context) (githubAsset, string, error) {
 			base := a.Name[:len(a.Name)-7]
 			checksumURLs[strings.ToLower(base)] = a.DownloadURL
 		}
-		// БАГ-2: поддержка глобального SHA256SUMS файла (sing-box v1.9+)
-		if n == "sha256sums" || n == "sha256sums.txt" {
+		// БАГ-5: поддержка глобального SHA256SUMS файла (sing-box v1.9+).
+		// n уже lowercase — покрываем SHA256SUMS, sha256sum, sha256sums.txt и варианты без 's'.
+		if n == "sha256sums" || n == "sha256sums.txt" || n == "sha256sum" || n == "sha256sum.txt" {
 			sha256SumsURL = a.DownloadURL
 		}
 		if strings.Contains(n, assetOS) && strings.Contains(n, assetArch) && strings.HasSuffix(n, ".zip") {
@@ -374,43 +420,14 @@ func fetchLatestAsset(ctx context.Context) (githubAsset, string, error) {
 	return *found, release.TagName, nil
 }
 
-// fetchLatestAssetFallback извлекает версию из GitHub HTML-редиректа когда API заблокирован.
-// https://github.com/SagerNet/sing-box/releases/latest редиректит на /releases/tag/vX.Y.Z.
-// Версия извлекается из Location header без парсинга HTML.
-func fetchLatestAssetFallback(ctx context.Context) (githubAsset, string, error) {
-	client := &http.Client{
-		Timeout:   15 * time.Second,
-		Transport: noProxyTransport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // не следуем редиректу — нужен Location
-		},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, githubReleasesPage, nil)
-	if err != nil {
-		return githubAsset{}, "", err
-	}
-	req.Header.Set("User-Agent", userAgent)
-	resp, err := client.Do(req)
-	if err != nil {
-		return githubAsset{}, "", fmt.Errorf("fallback: %w", err)
-	}
-	defer resp.Body.Close()
-
-	location := resp.Header.Get("Location")
-	if location == "" {
-		return githubAsset{}, "", fmt.Errorf("fallback: Location header отсутствует (status %d)", resp.StatusCode)
-	}
-
-	// Location: https://github.com/SagerNet/sing-box/releases/tag/v1.10.0
-	parts := strings.Split(location, "/")
-	if len(parts) == 0 {
-		return githubAsset{}, "", fmt.Errorf("fallback: не удалось извлечь версию из %q", location)
-	}
-	version := parts[len(parts)-1]
-	if !strings.HasPrefix(version, "v") {
-		return githubAsset{}, "", fmt.Errorf("fallback: неожиданный формат версии %q", version)
-	}
-	// Конструируем имя zip-архива по стандартному шаблону sing-box
+// fetchLatestAssetFallback конструирует URL для скачивания pinned версии напрямую,
+// без HTTP-запросов к GitHub API. Используется когда GitHub API недоступен (rate limit, блокировка).
+//
+// БАГ 5: ранее функция не заполняла asset.Checksum — верификация SHA256 всегда пропускалась
+// в fallback-пути. Теперь пробуем скачать sha256sums.txt и заполнить Checksum.
+// Если sha256sums.txt недоступен — логируем WARN и продолжаем без верификации.
+func fetchLatestAssetFallback(ctx context.Context, client *http.Client) (githubAsset, string, error) {
+	version := pinnedVersion
 	ver := strings.TrimPrefix(version, "v")
 	zipName := fmt.Sprintf("sing-box-%s-%s-%s.zip", ver, assetOS, assetArch)
 	downloadURL := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/%s/%s", version, zipName)
@@ -418,6 +435,15 @@ func fetchLatestAssetFallback(ctx context.Context) (githubAsset, string, error) 
 		Name:        zipName,
 		DownloadURL: downloadURL,
 	}
+
+	// БАГ 5: пробуем получить SHA256 из sha256sums.txt того же релиза.
+	sumsURL := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/%s/sha256sums.txt", version)
+	if sum, err := fetchChecksumFromSums(ctx, sumsURL, zipName, client); err == nil {
+		a.Checksum = sum
+	}
+	// При ошибке (файл недоступен, сеть заблокирована) — продолжаем без верификации.
+	// verifyChecksum залогирует предупреждение если Checksum == "".
+
 	return a, version, nil
 }
 

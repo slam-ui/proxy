@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"proxyclient/internal/logger"
 )
@@ -83,7 +84,7 @@ func TestHandleSetDNS_InvalidRemoteDNS(t *testing.T) {
 		"http://8.8.8.8",   // неправильная схема
 		"ftp://dns.google", // неправильная схема
 		"8.8.8.8:53",       // без схемы
-		"",                 // пуст
+		// "" намеренно убран: пустая строка теперь означает «использовать default» (Bug 8)
 	}
 
 	for _, dns := range invalidDNS {
@@ -164,4 +165,83 @@ func buildDNSTestServer(t *testing.T) (*Server, func()) {
 	srv.FinalizeRoutes()
 
 	return srv, func() { _ = os.Chdir(old) }
+}
+
+// ── БАГ 10: handleSetGeositeUpdate lifecycle ──────────────────────────────────
+
+// TestHandleSetGeositeUpdate_DisablesUpdater проверяет что enabled=false останавливает updater.
+func TestHandleSetGeositeUpdate_DisablesUpdater(t *testing.T) {
+	srv, cleanup := buildDNSTestServer(t)
+	defer cleanup()
+
+	// Запускаем updater
+	g := NewGeoAutoUpdater(&logger.NoOpLogger{}, 7*24*time.Hour)
+	srv.SetGeoAutoUpdater(g)
+	g.Start(context.Background())
+
+	if !g.IsRunning() {
+		t.Fatal("updater должен быть запущен")
+	}
+
+	body := `{"enabled":false,"interval_days":7}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/geosite-update", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	// Ждём остановки (Stop() вызван синхронно)
+	time.Sleep(50 * time.Millisecond)
+	if g.IsRunning() {
+		t.Error("updater должен быть остановлен после enabled=false")
+	}
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["applied"] != true {
+		t.Errorf("applied должен быть true, got %v", resp["applied"])
+	}
+}
+
+// TestHandleSetGeositeUpdate_IntervalChange проверяет что изменение интервала
+// пересоздаёт updater с новым значением.
+func TestHandleSetGeositeUpdate_IntervalChange(t *testing.T) {
+	srv, cleanup := buildDNSTestServer(t)
+	defer cleanup()
+
+	// Первый запуск с интервалом 7 дней
+	body7 := `{"enabled":true,"interval_days":7}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/geosite-update", bytes.NewBufferString(body7))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first request status=%d", w.Code)
+	}
+	first := srv.GetGeoAutoUpdater()
+
+	// Меняем на 14 дней
+	body14 := `{"enabled":true,"interval_days":14}`
+	req2 := httptest.NewRequest(http.MethodPost, "/api/settings/geosite-update", bytes.NewBufferString(body14))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.router.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second request status=%d", w2.Code)
+	}
+	second := srv.GetGeoAutoUpdater()
+
+	if first == second {
+		t.Error("при смене интервала должен быть создан новый updater")
+	}
+	if second == nil || !second.IsRunning() {
+		t.Error("новый updater должен быть запущен")
+	}
+
+	// Cleanup
+	if second != nil {
+		second.Stop()
+	}
 }

@@ -32,7 +32,7 @@ type monitor struct {
 	// OPT #2: опциональная ссылка на engine для кэширования ProxyStatus во время refresh().
 	// Без этого handleListProcesses делал O(процессы × правила) при каждом HTTP-запросе.
 	// Теперь matching выполняется раз в 10с при refresh() — результат хранится в ProcessInfo.
-	engine    apprules.Engine
+	engine apprules.Engine
 }
 
 // NewMonitor создает новый process monitor
@@ -234,10 +234,10 @@ var (
 )
 
 const (
-	TH32CS_SNAPPROCESS              = 0x00000002
-	PROCESS_QUERY_INFO              = 0x0400
-	PROCESS_QUERY_LIMITED_INFO      = 0x1000
-	MAX_PATH                        = 260
+	TH32CS_SNAPPROCESS         = 0x00000002
+	PROCESS_QUERY_INFO         = 0x0400
+	PROCESS_QUERY_LIMITED_INFO = 0x1000
+	MAX_PATH                   = 260
 )
 
 type processEntry32 struct {

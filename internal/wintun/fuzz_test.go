@@ -80,12 +80,14 @@ func FuzzStopFileContent(f *testing.F) {
 		_ = eta
 
 		// Инвариант 3: PollUntilFree завершается при отмене ctx (не зависает)
-		// BUG FIX (фаззер): 300ms слишком мало — netsh вызывается 3 раза по 300ms = 900ms.
-		// Увеличиваем до 1500ms чтобы ctx гарантированно истёк ДО 2500ms time.After.
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		// BUG FIX: NetAdapterExistsCtx теперь имеет WaitDelay=50ms — CombinedOutput()
+		// возвращается в течение 50ms после отмены ctx (pipe закрывается принудительно).
+		// 300ms достаточно: ctx отменяется → все subprocess-вызовы возвращают ошибку
+		// в течение 50ms → PollUntilFree завершается до истечения time.After.
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
 		wintun.PollUntilFree(ctx, &silentLog{}, "tun0")
-		// Если зависнет дольше 1500мс — ctx timeout поймает
+		// Если зависнет дольше 300мс — ctx timeout поймает
 	})
 }
 
@@ -266,11 +268,9 @@ func FuzzPollUntilFreeFiles(f *testing.F) {
 		}
 
 		// ГЛАВНЫЙ ИНВАРИАНТ: ctx отмена всегда прерывает функцию
-		// BUG FIX (фаззер): 400ms ctx + 600ms time.After слишком мало.
-		// fast=true: пропускаем ETA, но netsh вызывается 3 раза (confirmRequired=3).
-		// 3 × 300ms (InterfaceExists timeout) + overhead = ~1s.
-		// ctx 1500ms гарантирует выход; time.After 2500ms — "зависание".
-		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		// BUG FIX: NetAdapterExistsCtx теперь имеет WaitDelay=50ms — возвращается
+		// в течение 50ms после отмены ctx. 300ms достаточно для гарантированного выхода.
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
 
 		done := make(chan struct{}, 1)

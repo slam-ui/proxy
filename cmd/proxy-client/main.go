@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -55,21 +56,43 @@ var (
 )
 
 const (
-	logFile         = "proxy-client.log"
+	logFile         = "safesky.log" // FIX 34: переименован с proxy-client.log
 	shutdownTimeout = 10 * time.Second
 )
+
+type preflightAddr struct{ name, addr string }
+
+var preflightAddrs = []preflightAddr{
+	{"ProxyPort (sing-box inbound)", config.ProxyAddr},
+	{"ClashAPI (sing-box API)", config.ClashAPIAddr},
+	{"APIAddress (SafeSky)", "localhost" + config.APIAddress},
+}
 
 func openLogFile() (*os.File, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = "."
 	}
-	f, err := os.OpenFile(filepath.Join(filepath.Dir(exe), logFile),
-		os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+	logPath := filepath.Join(filepath.Dir(exe), logFile)
+
+	// BUG FIX #2: ротация при > 5 MB.
+	// O_TRUNC уничтожал лог предыдущего сеанса при перезапуске — краш-диагностика
+	// терялась. Теперь дописываем в конец (O_APPEND), а если файл > 5 MB —
+	// переименовываем в .old (сохраняем последний сеанс) и начинаем заново.
+	const maxLogSize = 5 * 1024 * 1024 // 5 MB
+	if fi, statErr := os.Stat(logPath); statErr == nil && fi.Size() > maxLogSize {
+		_ = os.Rename(logPath, logPath+".old")
+	}
+
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
 	}
-	_, _ = f.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM для Блокнота
+	// BOM пишем только если файл только что создан (размер 0).
+	// В режиме O_APPEND на существующий файл BOM посередине ломает UTF-8.
+	if fi, _ := f.Stat(); fi != nil && fi.Size() == 0 {
+		_, _ = f.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM для Блокнота
+	}
 	return f, nil
 }
 
@@ -163,23 +186,116 @@ func main() {
 	}
 }
 
+// preflightCheck проверяет что ни один из критичных портов не занят.
+// Запускается до старта sing-box и API-сервера — даёт понятную диагностику
+// вместо молчаливого сбоя когда порт занят предыдущим экземпляром или другим VPN.
+// При обнаружении занятого порта пытается убить осиротевший sing-box из exeDir
+// и повторяет проверку через 2 секунды — без этого при аварийном завершении нужен ручной killall.
+func preflightCheck(ctx context.Context, log interface {
+	Info(string, ...interface{})
+	Error(string, ...interface{})
+}) error {
+	exeDir := ""
+	if exe, err := os.Executable(); err == nil {
+		exeDir = strings.ToLower(filepath.Dir(exe))
+	}
+
+	for _, a := range preflightAddrs {
+		ln, err := net.Listen("tcp", a.addr)
+		if err == nil {
+			ln.Close()
+			continue
+		}
+
+		// Порт занят — пробуем убить осиротевший sing-box из нашей директории.
+		log.Info("порт %s (%s) занят, пробую освободить...", a.addr, a.name)
+		if !killProcessesInDir("sing-box.exe", exeDir, log) {
+			// killProcessesInDir ничего не нашёл по exeDir. Это происходит когда
+			// os.Executable() вернул путь к тестовому бинарю (go test помещает его
+			// во временную директорию), а не к реальному proxy-client.exe.
+			// Запасной вариант: убиваем sing-box.exe без фильтрации по директории.
+			killProcessesInDir("sing-box.exe", "", log)
+		}
+
+		// Ждём 2 секунды чтобы ОС освободила порт (уважаем ctx).
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return fmt.Errorf("прерван при ожидании освобождения порта %s", a.addr)
+		}
+
+		// Повторная проверка.
+		ln2, err2 := net.Listen("tcp", a.addr)
+		if err2 != nil {
+			log.Error("порт %s (%s) всё ещё занят — завершите предыдущий экземпляр приложения", a.addr, a.name)
+			notification.Send("SafeSky — ошибка", fmt.Sprintf("Порт %s занят", a.addr))
+			return fmt.Errorf("порт %s (%s) занят — завершите предыдущий экземпляр приложения", a.addr, a.name)
+		}
+		ln2.Close()
+		log.Info("порт %s освобождён успешно", a.addr)
+	}
+	return nil
+}
+
+// initDataDir копирует бандлованные geosite-*.bin из geosite/ в data/
+// если они там отсутствуют (первый запуск, ручная установка без build.ps1).
+// Файлы НЕ перезаписываются если уже существуют — сохраняем обновлённые версии.
+func initDataDir(log interface {
+	Info(string, ...interface{})
+	Warn(string, ...interface{})
+}) {
+	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
+		log.Warn("initDataDir: не удалось создать %s: %v", config.DataDir, err)
+		return
+	}
+	entries, _ := filepath.Glob("geosite/geosite-*.bin")
+	for _, src := range entries {
+		dst := filepath.Join(config.DataDir, filepath.Base(src))
+		if _, err := os.Stat(dst); err == nil {
+			continue // уже существует — не перезаписываем
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			log.Warn("initDataDir: не удалось прочитать %s: %v", src, err)
+			continue
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			log.Warn("initDataDir: %s → %s: %v", filepath.Base(src), dst, err)
+		} else {
+			log.Info("initDataDir: скопирован %s", filepath.Base(src))
+		}
+	}
+}
+
 // run — главный оркестратор. Создаёт App, поднимает инфраструктуру,
 // запускает фоновую инициализацию sing-box, блокируется на трее.
 func run(output io.Writer) error {
-	turnPort := flag.Int("turn-port", 3478,
-		"UDP порт серверного vk-turn-relay (3478 по умолчанию, 443 если 3478 заблокирован)")
 	flag.Parse()
 
 	cfg := DefaultAppConfig()
-	cfg.TURNRelayPort = *turnPort
+	appSettings, settingsErr := config.LoadAppSettings(cfg.SettingsFile)
+	if settingsErr == nil {
+		cfg.StartProxyOnLaunch = appSettings.StartProxyOnLaunch
+	}
 	app := NewApp(cfg, output)
+
+	initDataDir(app.mainLogger)
+	if settingsErr != nil {
+		app.mainLogger.Warn("Не удалось загрузить настройки приложения: %v", settingsErr)
+	}
 
 	app.anomaly.Start()
 	defer app.anomaly.Stop()
 
-	app.mainLogger.Info("Запуск прокси-клиента...")
+	app.mainLogger.Info("Запуск SafeSky...")
 	if autorun.IsEnabled() {
 		app.mainLogger.Info("Автозапуск: включён")
+	}
+
+	// Предварительная проверка занятости портов — даёт понятную диагностику вместо
+	// молчаливого падения sing-box или API-сервера когда порт уже занят.
+	if err := preflightCheck(app.lifecycleCtx, app.mainLogger); err != nil {
+		return err
 	}
 
 	// ОПТИМИЗАЦИЯ: убиваем осиротевший sing-box ПАРАЛЛЕЛЬНО с загрузкой Rules engine.
@@ -218,14 +334,20 @@ func run(output io.Writer) error {
 		// После kill orphan пробуем синхронно освободить wintun kernel-объект.
 		// proc.Wait() уже вернулся — sing-box выгрузил wintun.dll handle.
 		// Если ForceDeleteAdapter успешен — PollUntilFree пропустит полный gap (60с → ~7-10с).
-		if wintun.ForceDeleteAdapter(config.TunInterfaceName) {
+		if wintun.ForceDeleteAdapter(app.lifecycleCtx, config.TunInterfaceName) {
 			app.mainLogger.Info("wintun: orphan kill → ForceDeleteAdapter succeeded — gap будет пропущен")
 			_ = os.WriteFile(wintun.FastDeleteFile, []byte("1"), 0644)
 		}
 	}
 
 	xrayCfg := app.buildXRayCfg()
-	proxyConfig := proxy.Config{Address: config.ProxyAddr, Override: "<local>"}
+	// Override: <local> — все хосты без точки (включая "localhost") обходят прокси.
+	// Явно добавляем 127.0.0.1 и ::1 — на Windows <local> не всегда покрывает IP-формат.
+	// Это исправляет OAuth callback для Claude Code, Codex и других CLI-инструментов:
+	// они стартуют локальный HTTP-сервер на случайном порту, браузер (с системным прокси)
+	// должен добраться до него без прокси — иначе редирект http://localhost:PORT/callback
+	// идёт через sing-box и может падать при перезапуске TUN.
+	proxyConfig := proxy.Config{Address: config.ProxyAddr, Override: api.DefaultProxyOverride}
 
 	// API сервер создаётся БЕЗ xrayManager (nil) — он будет установлен фоновой горутиной.
 	// /api/status возвращает warming=true пока менеджер не установлен.
@@ -242,6 +364,10 @@ func run(output io.Writer) error {
 		Logger:        app.mainLogger,
 		EventLog:      app.evLog,
 		QuitChan:      app.quit,
+		// Мгновенно обновляем список серверов в трее при смене сервера через UI.
+		SecretKeyUpdatedFn: func() {
+			go app.refreshTrayServers(cfg.APIAddress)
+		},
 	}, app.lifecycleCtx)
 
 	// Собираем app rules.
@@ -309,16 +435,32 @@ func run(output io.Writer) error {
 		tray.WaitReady()
 		<-apiReady
 		app.refreshTrayServers(cfg.APIAddress)
+		// Периодически синхронизируем список серверов в трее (каждые 15с).
+		// Это гарантирует актуальность списка если пользователь добавил/переключил
+		// сервер через UI, а не через меню трея.
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-app.quit:
+				return
+			case <-t.C:
+				app.refreshTrayServers(cfg.APIAddress)
+			}
+		}
 	}()
 
 	tray.SetProxyAddr(proxyConfig.Address)
+	// Регистрируем callback для переноса окна на передний план (правый клик по трею).
+	tray.SetBringToFront(func() { window.BringToFront(cfg.WebUIURL) })
+
 	// BUG FIX #NEW-3: OnQuit callback трея не был защищён sync.Once.
 	// handleQuit (POST /api/quit) уже использует s.quitOnce.Do(...).
 	// Если systray вызвал бы OnQuit дважды (двойной клик, некоторые версии Windows)
 	// → close(уже закрытого канала) → panic: close of closed channel.
 	var trayQuitOnce sync.Once
 	tray.Run(tray.Callbacks{
-		OnOpen: func() { window.Open(cfg.WebUIURL) },
+		OnOpen: func() { window.BringToFront(cfg.WebUIURL) },
 		OnCopyAddr: func(addr string) {
 			if addr == "" {
 				return
@@ -330,7 +472,7 @@ func run(output io.Writer) error {
 		},
 		OnEnable: func() {
 			if app.apiServer.IsWarming() {
-				notification.Send("Proxy", "Инициализация... подождите")
+				notification.Send("SafeSky", "Инициализация... подождите")
 				return
 			}
 			if err := app.proxyManager.Enable(proxyConfig); err != nil {
@@ -338,7 +480,7 @@ func run(output io.Writer) error {
 			} else {
 				tray.SetEnabled(true)
 				app.mainLogger.Info("Прокси включён через трей")
-				notification.Send("Proxy", "Прокси включён ✓")
+				notification.Send("SafeSky", "Прокси включён ✓")
 			}
 		},
 		OnDisable: func() {
@@ -347,7 +489,7 @@ func run(output io.Writer) error {
 			} else {
 				tray.SetEnabled(false)
 				app.mainLogger.Info("Прокси отключён через трей")
-				notification.Send("Proxy", "Прокси отключён")
+				notification.Send("SafeSky", "Прокси отключён")
 			}
 		},
 		OnServerSwitch: func(serverID string) {
@@ -355,13 +497,13 @@ func run(output io.Writer) error {
 				return
 			}
 			if app.apiServer.IsWarming() {
-				notification.Send("Proxy", "Инициализация... подождите")
+				notification.Send("SafeSky", "Инициализация... подождите")
 				return
 			}
 			go func() {
 				if err := app.connectTrayServer(cfg.APIAddress, serverID); err != nil {
 					app.mainLogger.Error("Не удалось переключить сервер: %v", err)
-					notification.Send("Proxy", "Не удалось переключить сервер")
+					notification.Send("SafeSky", "Не удалось переключить сервер")
 					return
 				}
 				app.refreshTrayServers(cfg.APIAddress)
@@ -384,6 +526,7 @@ func (a *App) refreshTrayServers(apiAddress string) {
 		Servers []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
+			URL  string `json:"url"`
 		} `json:"servers"`
 		ActiveID string `json:"active_id"`
 	}
@@ -411,13 +554,17 @@ func (a *App) refreshTrayServers(apiAddress string) {
 	activeName := ""
 	for _, srv := range listResp.Servers {
 		isActive := srv.ID == listResp.ActiveID
+		// FIX: используем реальное имя из VLESS URL-фрагмента (#Название).
+		// Аналог JS serverDisplayName() в index.html.
+		// Большинство VLESS URL имеют вид: vless://uuid@host:port?params#Имя Сервера
+		displayName := serverDisplayName(srv.URL, srv.Name)
 		items = append(items, tray.ServerItem{
 			ID:     srv.ID,
-			Name:   srv.Name,
+			Name:   displayName,
 			Active: isActive,
 		})
 		if isActive {
-			activeName = srv.Name
+			activeName = displayName
 		}
 	}
 	if len(items) == 0 {
@@ -426,6 +573,65 @@ func (a *App) refreshTrayServers(apiAddress string) {
 
 	tray.SetServerList(items)
 	tray.SetActiveServer(activeName)
+}
+
+// serverDisplayName возвращает отображаемое имя сервера.
+// Приоритет: 1) фрагмент VLESS URL (#Название), 2) сохранённое имя в servers.json.
+// Логика совпадает с JS функцией serverDisplayName() в index.html.
+func serverDisplayName(vlessURL, fallbackName string) string {
+	if vlessURL != "" {
+		// Ищем фрагмент после #
+		if i := strings.LastIndex(vlessURL, "#"); i >= 0 && i+1 < len(vlessURL) {
+			fragment := strings.TrimSpace(vlessURL[i+1:])
+			if fragment != "" {
+				// URL-decode фрагмента (простой decode без url.PathUnescape который требует импорт)
+				decoded := urlDecodeFragment(fragment)
+				if decoded != "" {
+					return decoded
+				}
+			}
+		}
+	}
+	if fallbackName != "" {
+		return fallbackName
+	}
+	return "Сервер"
+}
+
+// urlDecodeFragment декодирует URL-encoded строку (%XX → символ).
+func urlDecodeFragment(s string) string {
+	result := make([]byte, 0, len(s))
+	for i := 0; i < len(s); {
+		if s[i] == '%' && i+2 < len(s) {
+			hi := hexVal(s[i+1])
+			lo := hexVal(s[i+2])
+			if hi >= 0 && lo >= 0 {
+				result = append(result, byte(hi<<4|lo))
+				i += 3
+				continue
+			}
+		}
+		if s[i] == '+' {
+			result = append(result, ' ')
+			i++
+			continue
+		}
+		result = append(result, s[i])
+		i++
+	}
+	return string(result)
+}
+
+func hexVal(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
 }
 
 func (a *App) connectTrayServer(apiAddress, serverID string) error {

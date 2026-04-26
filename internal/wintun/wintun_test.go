@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -418,6 +419,53 @@ func TestPollUntilFree_ContextCancel(t *testing.T) {
 			// OK — прервалась по ctx
 		case <-time.After(3 * time.Second):
 			t.Error("PollUntilFree должна прерваться при отмене ctx")
+		}
+	})
+}
+
+// ── БАГ 11: RecordStop atomic + corrupted file guard ─────────────────────────
+
+// TestRecordStop_AtomicWrite проверяет что RecordStop создаёт файл с валидным timestamp.
+func TestRecordStop_AtomicWrite(t *testing.T) {
+	inTempDir(t, func() {
+		stopFile := filepath.Join(t.TempDir(), "wintun_stopped_at")
+		wintun.RecordStop(stopFile)
+
+		data, err := os.ReadFile(stopFile)
+		if err != nil {
+			t.Fatalf("RecordStop не создал файл: %v", err)
+		}
+		ns, parseErr := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+		if parseErr != nil {
+			t.Fatalf("timestamp не валиден: %v (data=%q)", parseErr, string(data))
+		}
+		if ns == 0 {
+			t.Fatal("timestamp == 0, ожидался ненулевой UnixNano")
+		}
+		stopTime := time.Unix(0, ns)
+		if time.Since(stopTime) > 5*time.Second {
+			t.Errorf("timestamp слишком старый: %v", stopTime)
+		}
+	})
+}
+
+// TestEstimateReadyAt_CorruptedStopFile проверяет что повреждённый файл (ns==0)
+// не приводит к 3-минутному ожиданию.
+func TestEstimateReadyAt_CorruptedStopFile(t *testing.T) {
+	inTempDir(t, func() {
+		stopFile := filepath.Join(t.TempDir(), "wintun_stopped_at")
+		cleanFile := filepath.Join(t.TempDir(), "wintun_clean_shutdown")
+		gapFile := filepath.Join(t.TempDir(), "wintun_gap_ns")
+
+		// Пишем "0" — повреждённый timestamp
+		if err := os.WriteFile(stopFile, []byte("0"), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		eta := wintun.EstimateReadyAtWithFiles(stopFile, cleanFile, gapFile)
+		// Должно вернуть time.Now() (не будущее с 3-минутным gap)
+		if eta.After(time.Now().Add(5 * time.Second)) {
+			t.Errorf("при corrupted stop file ожидали ETA ≈ now, получили %v (через %v)", eta, time.Until(eta))
 		}
 	})
 }

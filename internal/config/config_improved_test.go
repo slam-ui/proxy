@@ -11,9 +11,9 @@ import (
 // ── BUG-РИСК #1: vlessCache — race при конкурентном чтении разных файлов ──
 //
 // vlessCache — глобальная переменная. parseVLESSKey делает:
-//   1. mu.Lock → проверяет кэш → mu.Unlock
-//   2. readAndParseVLESS (без lock!)
-//   3. mu.Lock → записывает кэш → mu.Unlock
+//  1. mu.Lock → проверяет кэш → mu.Unlock
+//  2. readAndParseVLESS (без lock!)
+//  3. mu.Lock → записывает кэш → mu.Unlock
 //
 // TOCTOU: между шагами 1 и 3 другая горутина может записать в кэш
 // ДРУГОЙ файл. В итоге кэш будет содержать данные от горутины B,
@@ -250,7 +250,7 @@ func TestBuildRoute_GeoSite_PrefixHandling(t *testing.T) {
 		wantTag string
 	}{
 		{"geosite:youtube", "geosite-youtube"},
-		{"youtube", "geosite-youtube"},             // без префикса — trim не применяется
+		{"youtube", "geosite-youtube"},                         // без префикса — trim не применяется
 		{"geosite:geosite:youtube", "geosite-geosite:youtube"}, // двойной префикс — документируем
 	}
 

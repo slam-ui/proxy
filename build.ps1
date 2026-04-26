@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Сборка и упаковка proxy-client в папку dist/
+    Сборка и упаковка SafeSky в папку dist/
 
 .DESCRIPTION
     Структура проекта:
@@ -10,7 +10,7 @@
         routing.json        чистые правила роутинга (без личных доменов)
         secret.key          заготовка для VLESS-ключа
       dist/                 результат сборки (не коммитить личные файлы!)
-        proxy-client.exe
+        SafeSky.exe
         sing-box.exe
         secret.key          <- НЕ перезаписывается если уже содержит vless://
         README.txt
@@ -64,7 +64,7 @@ $DIST_DIR      = "dist"
 $DATA_DIR      = "$DIST_DIR\data"
 $GEOSITE_DIR   = "geosite"
 $TEMPLATES_DIR = "templates"
-$BINARY        = "proxy-client.exe"
+$BINARY        = "SafeSky.exe"
 $MAIN_PATH     = ".\cmd\proxy-client"
 
 function Write-Banner([string]$text) {
@@ -82,7 +82,7 @@ function Write-Skip([string]$text)  { Write-Host "     $text" -ForegroundColor D
 function Write-Warn([string]$text)  { Write-Host "  !! $text" -ForegroundColor DarkYellow }
 function Write-Fail([string]$text)  { Write-Host ""; Write-Host "  XX $text" -ForegroundColor Red; Write-Host "" }
 
-Write-Banner "proxy-client build"
+Write-Banner "SafeSky build"
 
 # Admin check
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -127,31 +127,44 @@ if (-not $GoExePath -or -not (Test-Path $GoExePath)) {
 Write-OK "$(& $GoExePath version)"
 
 # Stop running instance
-$running = Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue
+$running = Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue
 if ($running) {
-    Write-Step "Stopping running proxy-client.exe..."
+    Write-Step "Stopping running SafeSky.exe..."
     try { Invoke-RestMethod -Uri "http://localhost:8080/api/quit" -Method POST -TimeoutSec 3 | Out-Null } catch {}
     $waited = 0
     while ($waited -lt 5000) {
-        if (-not (Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue)) { break }
+        if (-not (Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue)) { break }
         Start-Sleep -Milliseconds 300; $waited += 300
     }
-    if (Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue) {
-        Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    if (Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue) {
+        Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
     }
-    if (Get-Process -Name "proxy-client" -ErrorAction SilentlyContinue) {
-        Write-Fail "Could not stop proxy-client.exe -- close it manually and retry"
+    if (Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue) {
+        Write-Fail "Could not stop SafeSky.exe -- close it manually and retry"
         Read-Host "Press Enter"; exit 1
     }
     Write-OK "Process stopped"
 }
 
-# Clean
+# Clean (preserve sing-box.exe — it's 19 MB and requires GitHub access to re-download)
 if ($Clean -and (Test-Path $DIST_DIR)) {
     Write-Step "Cleaning dist/..."
+    $singBoxBackup = $null
+    $singBoxSrc = "$DIST_DIR\sing-box.exe"
+    if ((Test-Path $singBoxSrc) -and (Get-Item $singBoxSrc).Length -gt 0) {
+        $singBoxBackup = [System.IO.Path]::GetTempFileName()
+        Copy-Item $singBoxSrc $singBoxBackup -Force
+        Write-Skip "sing-box.exe backed up (will be restored after clean)"
+    }
     Remove-Item -Recurse -Force $DIST_DIR
     Write-OK "dist/ removed"
+    if ($singBoxBackup) {
+        New-Item -ItemType Directory -Force -Path $DIST_DIR | Out-Null
+        Copy-Item $singBoxBackup "$DIST_DIR\sing-box.exe" -Force
+        Remove-Item $singBoxBackup -Force -ErrorAction SilentlyContinue
+        Write-OK "sing-box.exe restored from backup"
+    }
 }
 
 # Create dirs
@@ -171,13 +184,76 @@ if ($SkipTests) {
         Add-MpPreference -ExclusionPath $goTempDir   -ErrorAction SilentlyContinue
         Add-MpPreference -ExclusionPath $PSScriptRoot -ErrorAction SilentlyContinue
     } catch {}
-    $testOut = & $GoExePath test -race ./cmd/... ./internal/... -timeout 120s 2>&1
+    $testOut = & $GoExePath test ./cmd/... -timeout 120s 2>&1
+    $cmdExit = $LASTEXITCODE
+    $testOut += & $GoExePath test -race ./internal/... -timeout 120s 2>&1
+    $internalExit = $LASTEXITCODE
     $testOut | ForEach-Object { Write-Host "     $_" -ForegroundColor DarkGray }
-    if ($LASTEXITCODE -ne 0) {
+    if ($cmdExit -ne 0 -or $internalExit -ne 0) {
         Write-Fail "Tests failed -- fix before building"
         Read-Host "Press Enter"; exit 1
     }
     Write-OK "All tests passed"
+}
+
+# Embed icon + version info into .syso via goversioninfo
+Write-Step "Embedding icon and version info into .exe..."
+
+$goversioninfoExe = $null
+$goviCandidates = @(
+    "$env:USERPROFILE\go\bin\goversioninfo.exe",
+    "$env:GOPATH\bin\goversioninfo.exe",
+    "C:\Go\bin\goversioninfo.exe"
+)
+foreach ($c in $goviCandidates) {
+    if (Test-Path $c) { $goversioninfoExe = $c; break }
+}
+if (-not $goversioninfoExe) {
+    try { $goversioninfoExe = (Get-Command goversioninfo -ErrorAction Stop).Source } catch {}
+}
+
+if (-not $goversioninfoExe) {
+    Write-Skip "goversioninfo not found -- installing..."
+    $goviOut = & $GoExePath install "github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest" 2>&1
+    $goviInstallExit = $LASTEXITCODE
+    $goviOut | ForEach-Object { Write-Host "     $_" -ForegroundColor DarkGray }
+    if ($goviInstallExit -eq 0) {
+        foreach ($c in $goviCandidates) {
+            if (Test-Path $c) { $goversioninfoExe = $c; break }
+        }
+        if ($goversioninfoExe) {
+            Write-OK "goversioninfo installed: $goversioninfoExe"
+        } else {
+            Write-Warn "goversioninfo installed but exe not found -- check GOPATH/bin"
+        }
+    } else {
+        Write-Warn "goversioninfo install failed (exit $goviInstallExit)"
+    }
+} else {
+    Write-Skip "goversioninfo: $goversioninfoExe"
+}
+
+$viJson  = "$MAIN_PATH\versioninfo.json"
+$icoPath = "app_icon.ico"
+
+if ($goversioninfoExe -and (Test-Path $viJson) -and (Test-Path $icoPath)) {
+    Push-Location $MAIN_PATH
+    & $goversioninfoExe -icon "..\..\app_icon.ico" -o "rsrc_windows_amd64.syso" -goarch amd64
+    $goviExit = $LASTEXITCODE
+    Pop-Location
+    if ($goviExit -eq 0) {
+        $sysoKB = [math]::Round((Get-Item "$MAIN_PATH\rsrc_windows_amd64.syso").Length / 1KB, 1)
+        Write-OK "rsrc_windows_amd64.syso regenerated ($sysoKB KB) -- icon embedded"
+    } else {
+        Write-Warn "goversioninfo exited $goviExit -- .exe may show wrong icon"
+    }
+} elseif (-not $goversioninfoExe) {
+    Write-Warn "goversioninfo unavailable -- .exe icon not updated"
+    Write-Warn "  Run: go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest"
+} elseif (-not (Test-Path $icoPath)) {
+    Write-Warn "app_icon.ico not found in project root -- .exe icon not updated"
+} else {
+    Write-Warn "versioninfo.json not found in $MAIN_PATH -- .exe icon not updated"
 }
 
 # Compile
@@ -199,6 +275,27 @@ $buildArgs += $MAIN_PATH
 if ($LASTEXITCODE -ne 0) { Write-Fail "Compilation failed"; Read-Host "Press Enter"; exit 1 }
 $sizeMB = [math]::Round((Get-Item "$DIST_DIR\$BINARY").Length / 1MB, 2)
 Write-OK "$BINARY  ($sizeMB MB)"
+
+# Сбрасываем кэш иконок Explorer чтобы новая иконка .exe отображалась сразу в проводнике.
+# ie4uinit.exe -show — стандартный механизм Windows 10/11.
+Write-Step "Refreshing Explorer icon cache..."
+try {
+    $iconCachePath = Join-Path $env:LOCALAPPDATA "IconCache.db"
+    # SHChangeNotify через PowerShell — сигнализируем Explorer об изменении ассоциаций файлов
+    $typeDef = @"
+using System;
+using System.Runtime.InteropServices;
+public class ShellNotify {
+    [DllImport("shell32.dll")]
+    public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+}
+"@
+    Add-Type -TypeDefinition $typeDef -ErrorAction SilentlyContinue
+    [ShellNotify]::SHChangeNotify(0x08000000, 0x0000, [IntPtr]::Zero, [IntPtr]::Zero)
+    Write-OK "Icon cache refresh signal sent"
+} catch {
+    Write-Skip "Icon cache refresh skipped (not critical)"
+}
 
 # Geosite: always refresh from geosite/
 Write-Step "Copying geosite databases..."
@@ -258,7 +355,7 @@ if ($needSecret) {
     } else {
         @(
             "# ------------------------------------------------------------------",
-            "# proxy-client  --  VLESS connection key",
+            "# SafeSky  --  VLESS connection key",
             "# ------------------------------------------------------------------",
             "#",
             "# Paste your VLESS link below (lines starting with # are ignored).",
@@ -277,7 +374,7 @@ if ($needSecret) {
 $readmeDest = "$DIST_DIR\README.txt"
 @"
 +------------------------------------------------------------------+
-|              proxy-client  --  Quick Start Guide                 |
+|                 SafeSky  --  Quick Start Guide                   |
 +------------------------------------------------------------------+
 
   Requirements
@@ -300,7 +397,7 @@ $readmeDest = "$DIST_DIR\README.txt"
 
      Get your link from your server's control panel (e.g. Remnawave).
 
-  2. Run proxy-client.exe
+  2. Run SafeSky.exe
      Right-click -> Run as Administrator  (or just double-click --
      it will request elevation automatically).
 
@@ -310,7 +407,7 @@ $readmeDest = "$DIST_DIR\README.txt"
 
   Folder layout
   -------------
-  proxy-client.exe    main application
+  SafeSky.exe         main application
   sing-box.exe        proxy core  (auto-downloaded on first run)
   secret.key          your VLESS link  (keep it private!)
   README.txt          this file
@@ -336,7 +433,7 @@ $readmeDest = "$DIST_DIR\README.txt"
 
   Updating
   --------
-  Replace proxy-client.exe only.
+  Replace SafeSky.exe only.
   Do NOT replace data\ or secret.key -- your rules and key are there.
 
 
@@ -355,8 +452,8 @@ $readmeDest = "$DIST_DIR\README.txt"
     -> Wintun driver issue. The client fixes it automatically.
        Wait ~30 seconds and try again.
 
-  Log files (created next to proxy-client.exe):
-    proxy-client.log      main log
+  Log files (created next to SafeSky.exe):
+    safesky.log           main log
     anomaly-*.log         crash diagnostics
 
 +------------------------------------------------------------------+
@@ -398,10 +495,10 @@ else        { Write-Host "  [!!] secret.key    open and paste your VLESS link" -
 
 Write-Host ""
 if ($skOK) {
-    Write-Host "  Ready!  Run:  .\dist\proxy-client.exe" -ForegroundColor Green
+    Write-Host "  Ready!  Run:  .\dist\SafeSky.exe" -ForegroundColor Green
 } else {
     Write-Host "  Next: open dist\secret.key and paste your VLESS link." -ForegroundColor Yellow
-    Write-Host "  Then: .\dist\proxy-client.exe" -ForegroundColor Cyan
+    Write-Host "  Then: .\dist\SafeSky.exe" -ForegroundColor Cyan
     Write-Host "  Docs: dist\README.txt" -ForegroundColor DarkGray
 }
 Write-Host ""

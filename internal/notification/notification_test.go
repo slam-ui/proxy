@@ -97,7 +97,7 @@ func TestEscapePS_OnlyEscapesSingleQuotes(t *testing.T) {
 }
 
 func TestEscapePS_ConsecutiveQuotes(t *testing.T) {
-	input := "''''" // Four single quotes
+	input := "''''"        // Four single quotes
 	expected := "''''''''" // Eight single quotes (each ' becomes '')
 
 	result := escapePS(input)

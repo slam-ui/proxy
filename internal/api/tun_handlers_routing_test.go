@@ -83,6 +83,57 @@ func TestComputeRoutingDiff_DefaultActionChanged(t *testing.T) {
 	}
 }
 
+func TestSetupTunRoutes_LastAppliedIsIndependentSnapshot(t *testing.T) {
+	_, h, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	h.mu.Lock()
+	h.routing.Rules = append(h.routing.Rules, config.RoutingRule{
+		Value:  "app.exe",
+		Type:   config.RuleTypeProcess,
+		Action: config.ActionProxy,
+	})
+	snapshot := cloneRoutingConfig(h.routing)
+	lastAppliedLen := len(h.lastApplied.Rules)
+	diff := computeRoutingDiff(h.lastApplied, snapshot)
+	h.mu.Unlock()
+
+	if lastAppliedLen != 0 {
+		t.Fatalf("lastApplied mutated with current routing, len=%d", lastAppliedLen)
+	}
+	if !diff.ProcessRulesChanged {
+		t.Fatal("adding first process rule must require full restart")
+	}
+}
+
+func TestCloneRoutingConfig_DeepCopiesRulesAndDNS(t *testing.T) {
+	src := &config.RoutingConfig{
+		DefaultAction: config.ActionDirect,
+		BypassEnabled: true,
+		Rules: []config.RoutingRule{
+			{Value: "example.com", Type: config.RuleTypeDomain, Action: config.ActionProxy},
+		},
+		DNS: &config.DNSConfig{RemoteDNS: "https://1.1.1.1/dns-query", DirectDNS: "udp://8.8.8.8"},
+	}
+
+	got := cloneRoutingConfig(src)
+	src.Rules[0].Value = "mutated.example"
+	src.DNS.RemoteDNS = "https://9.9.9.9/dns-query"
+
+	if got == src {
+		t.Fatal("cloneRoutingConfig returned the original pointer")
+	}
+	if got.Rules[0].Value != "example.com" {
+		t.Fatalf("rules were not deep-copied: %+v", got.Rules)
+	}
+	if got.DNS == src.DNS || got.DNS.RemoteDNS != "https://1.1.1.1/dns-query" {
+		t.Fatalf("DNS was not deep-copied: got=%+v src=%+v", got.DNS, src.DNS)
+	}
+	if !got.BypassEnabled || got.DefaultAction != config.ActionDirect {
+		t.Fatalf("top-level fields not preserved: %+v", got)
+	}
+}
+
 // TestHandleApply_InvalidConfigReturnsBadRequest проверяет, что handleApply возвращает
 // ошибку при невозможности сгенерировать новый sing-box конфиг.
 func TestHandleApply_InvalidConfigReturnsBadRequest(t *testing.T) {

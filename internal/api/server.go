@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +8,6 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -51,13 +49,21 @@ func newTokenBucket(ratePerSec float64) *tokenBucket {
 func (tb *tokenBucket) allow() bool {
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
-	now := time.Now()
+
+	tb.refill(time.Now())
+	return tb.take()
+}
+
+func (tb *tokenBucket) refill(now time.Time) {
 	elapsed := now.Sub(tb.lastRefill).Seconds()
 	tb.tokens += elapsed * tb.refillRate
 	if tb.tokens > tb.maxTokens {
 		tb.tokens = tb.maxTokens
 	}
 	tb.lastRefill = now
+}
+
+func (tb *tokenBucket) take() bool {
 	if tb.tokens >= 1.0 {
 		tb.tokens--
 		return true
@@ -67,6 +73,7 @@ func (tb *tokenBucket) allow() bool {
 
 // DefaultProxyAddress адрес HTTP-прокси по умолчанию — алиас config.ProxyAddr.
 const DefaultProxyAddress = config.ProxyAddr
+const DefaultProxyOverride = "<local>;localhost;127.0.0.1;::1"
 
 // Config конфигурация API сервера
 type Config struct {
@@ -80,10 +87,6 @@ type Config struct {
 	QuitChan      chan struct{} // закрывается при вызове POST /api/quit
 	SilentPaths   []string      // дополнительные пути, которые не нужно логировать
 
-	// ManualTURNFn вызывается при POST /api/tun/turn для ручного переключения TURN туннеля.
-	// Устанавливается через SetManualTURNFn после запуска turnmanager.
-	// Может быть nil — тогда хендлер возвращает 503 (мониторинг ещё не стартовал).
-	ManualTURNFn       func(bool) error
 	SecretKeyUpdatedFn func()
 }
 
@@ -110,22 +113,19 @@ type Server struct {
 	silentCache map[string]bool
 	tunHandlers *TunHandlers
 
-	// turnMu защищает turnActive и turnManual.
-	// turnActive=true означает что трафик идёт через TURN туннель (DTLS masquerade).
-	// turnManual=true означает что TURN включён вручную пользователем (retryLoop не возвращает на direct).
-	turnMu     sync.RWMutex
-	turnActive bool
-	turnManual bool
-
 	proxyEnabledAtMu sync.RWMutex
 	proxyEnabledAt   time.Time
 
 	// B-2: Proxy Guard состояние
-	proxyGuardMu      sync.RWMutex
-	proxyGuardEnabled bool
+	proxyGuardMu       sync.RWMutex
+	proxyGuardEnabled  bool
+	proxyGuardInterval time.Duration // защищён proxyGuardMu
 
 	// B-10: автообновление geosite баз данных
-	geoUpdater *GeoAutoUpdater
+	// БАГ 7: geoUpdaterMu защищает geoUpdater от гонки данных между
+	// startBackground (SetGeoAutoUpdater) и HTTP-обработчиками (GetGeoAutoUpdater).
+	geoUpdaterMu sync.RWMutex
+	geoUpdater   *GeoAutoUpdater
 }
 
 // StatusResponse ответ для /api/status
@@ -147,38 +147,6 @@ type StatusResponse struct {
 		UptimeS int64  `json:"proxy_uptime_secs"`
 	} `json:"proxy"`
 	ConfigPath string `json:"config_path"`
-	// TurnActive=true когда трафик идёт через TURN туннель (маскировка под VK DTLS).
-	TurnActive bool `json:"turn_active"`
-	// TurnManual=true когда TURN включён вручную пользователем через UI.
-	// В этом режиме retryLoop не возвращает на direct автоматически.
-	TurnManual bool `json:"turn_manual"`
-}
-
-// SetTURNMode обновляет флаг активности TURN туннеля.
-// Вызывается из app.go при переключении режима.
-// Потокобезопасен.
-func (s *Server) SetTURNMode(active bool) {
-	s.turnMu.Lock()
-	s.turnActive = active
-	s.turnMu.Unlock()
-}
-
-// SetTURNManual обновляет флаг ручного управления TURN.
-// Вызывается из ManualTURNFn когда пользователь явно включает/выключает TURN через UI.
-// Потокобезопасен.
-func (s *Server) SetTURNManual(enabled bool) {
-	s.turnMu.Lock()
-	s.turnManual = enabled
-	s.turnMu.Unlock()
-}
-
-// SetManualTURNFn регистрирует функцию ручного переключения TURN туннеля.
-// Вызывается из app.go после запуска turnmanager.
-// Потокобезопасен.
-func (s *Server) SetManualTURNFn(fn func(bool) error) {
-	s.configMu.Lock()
-	s.config.ManualTURNFn = fn
-	s.configMu.Unlock()
 }
 
 // B-2: Proxy Guard getters/setters
@@ -194,13 +162,63 @@ func (s *Server) SetProxyGuardEnabled(enabled bool) {
 	s.proxyGuardMu.Unlock()
 }
 
-// B-10: SetGeoAutoUpdater регистрирует updater для управления через API настроек.
-func (s *Server) SetGeoAutoUpdater(g *GeoAutoUpdater) {
-	s.geoUpdater = g
+// SetProxyGuardInterval сохраняет интервал Proxy Guard — нужен для StartProxyGuard из HTTP-хендлера.
+// Устанавливается App при инициализации через finalizeStartup.
+func (s *Server) SetProxyGuardInterval(d time.Duration) {
+	s.proxyGuardMu.Lock()
+	s.proxyGuardInterval = d
+	s.proxyGuardMu.Unlock()
 }
 
-// B-10: GetGeoAutoUpdater возвращает текущий updater (может быть nil).
+// StartProxyGuard запускает guard-горутину proxy.Manager.
+func (s *Server) StartProxyGuard() error {
+	s.proxyGuardMu.Lock()
+	interval := s.proxyGuardInterval
+	s.proxyGuardMu.Unlock()
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	return s.config.ProxyManager.StartGuard(s.lifecycleCtx, interval)
+}
+
+// StopProxyGuard останавливает guard-горутину proxy.Manager.
+func (s *Server) StopProxyGuard() {
+	s.config.ProxyManager.StopGuard()
+}
+
+// B-10 / БАГ 7: SetGeoAutoUpdater регистрирует updater для управления через API настроек.
+// Защищён geoUpdaterMu — записывается из горутины startBackground.
+// Останавливает предыдущий updater если он ещё работает — предотвращает утечку горутин
+// при повторном вызове (TUN recovery → finalizeStartup → SetGeoAutoUpdater).
+func (s *Server) SetGeoAutoUpdater(g *GeoAutoUpdater) {
+	// BUG-5 FIX: подключаем TriggerApply как callback — sing-box перезагружает
+	// конфиг сразу после обновления geosite файлов, а не ждёт следующего ручного apply.
+	if g != nil {
+		g.SetOnUpdated(func() {
+			if s.tunHandlers != nil {
+				if err := s.tunHandlers.TriggerApply(); err != nil {
+					s.logger.Warn("GeoAutoUpdater: TriggerApply после обновления geosite: %v", err)
+				}
+			}
+		})
+	}
+
+	s.geoUpdaterMu.Lock()
+	old := s.geoUpdater
+	s.geoUpdater = g
+	s.geoUpdaterMu.Unlock()
+	// Stop вызывается вне мьютекса — он ждёт завершения горутины (blocking).
+	// Держать мьютекс во время Stop() создало бы дедлок с GetGeoAutoUpdater.
+	if old != nil && old != g && old.IsRunning() {
+		old.Stop()
+	}
+}
+
+// B-10 / БАГ 7: GetGeoAutoUpdater возвращает текущий updater (может быть nil).
+// Защищён geoUpdaterMu — читается из HTTP-обработчиков параллельно с SetGeoAutoUpdater.
 func (s *Server) GetGeoAutoUpdater() *GeoAutoUpdater {
+	s.geoUpdaterMu.RLock()
+	defer s.geoUpdaterMu.RUnlock()
 	return s.geoUpdater
 }
 
@@ -223,7 +241,7 @@ func NewServer(cfg Config, lifecycleCtx context.Context) *Server {
 		logger:       cfg.Logger,
 		router:       mux.NewRouter(),
 		lifecycleCtx: lifecycleCtx,
-		rateLimiter:  newTokenBucket(5), // 5 мутирующих запросов в секунду
+		rateLimiter:  newTokenBucket(defaultMutationRatePerSecond),
 	}
 	s.setupRoutes()
 	return s
@@ -252,6 +270,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
+	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
 	if s.config.SecretKeyPath != "" {
 		SetupServerRoutes(s, s.config.SecretKeyPath)
 	}
@@ -260,11 +279,16 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")
 	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST")
 	// B-8: Backup и restore endpoints
-	api.HandleFunc("/backup", handleBackup).Methods("GET", "OPTIONS")
-	api.HandleFunc("/backup/restore", handleBackupRestore).Methods("POST", "OPTIONS")
+	api.HandleFunc("/backup", s.handleBackup).Methods("GET", "OPTIONS")
+	api.HandleFunc("/backup/restore", s.handleBackupRestore).Methods("POST", "OPTIONS")
+
+	// Иконки процессов — извлекаем из .exe через Shell API
+	api.HandleFunc("/procicon", s.handleProcIcon).Methods("GET", "OPTIONS")
 
 	s.addSilentPath("/api/stats")
 	s.addSilentPath("/api/connections")
+	s.addSilentPath("/api/servers")  // FIX 31: подавляем шумные логи при опросе списка серверов
+	s.addSilentPath("/api/procicon") // иконки процессов — частые запросы, не нужно логировать
 }
 
 func (s *Server) FinalizeRoutes() {
@@ -294,7 +318,14 @@ func (s *Server) Start(ctx context.Context) error {
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return s.httpServer.Shutdown(shutdownCtx)
+		if err := s.httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(shutdownCtx.Err(), context.DeadlineExceeded) {
+				s.logger.Warn("API сервер не завершился graceful за 5s — закрываем активные соединения")
+				return s.httpServer.Close()
+			}
+			return err
+		}
+		return nil
 	}
 }
 
@@ -305,6 +336,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("Остановка API сервера...")
 	err := s.httpServer.Shutdown(ctx)
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			s.logger.Warn("API сервер не завершился graceful до таймаута — закрываем активные соединения")
+			if closeErr := s.httpServer.Close(); closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+				return fmt.Errorf("ошибка принудительной остановки API сервера: %w", closeErr)
+			}
+			return nil
+		}
 		return fmt.Errorf("ошибка при остановке API сервера: %w", err)
 	}
 	return nil
@@ -344,11 +382,13 @@ func (s *Server) SetTunAttempt(attempt, maxAttempt int) {
 
 func (s *Server) ClearRestarting() {
 	s.restartMu.Lock()
-	defer s.restartMu.Unlock()
 	s.restarting = false
 	s.restartReadyAt = time.Time{}
 	s.tunAttempt = 0
 	s.tunMaxAttempt = 0
+	s.restartMu.Unlock()
+
+	s.DrainQueuedApply()
 }
 
 // IsRestarting возвращает true если sing-box сейчас восстанавливается после краша.
@@ -357,6 +397,15 @@ func (s *Server) IsRestarting() bool {
 	s.restartMu.RLock()
 	defer s.restartMu.RUnlock()
 	return s.restarting
+}
+
+// DrainQueuedApply запускает отложенное применение правил, если оно было поставлено
+// в очередь во время первичного старта или TUN crash-recovery.
+func (s *Server) DrainQueuedApply() {
+	if s.tunHandlers == nil {
+		return
+	}
+	go s.tunHandlers.drainQueuedApply()
 }
 
 // TriggerRestart программно запускает рестарт sing-box с уже готовым конфигом на диске.
@@ -381,11 +430,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	response := StatusResponse{
 		ConfigPath: s.config.ConfigPath,
 	}
-
-	s.turnMu.RLock()
-	response.TurnActive = s.turnActive
-	response.TurnManual = s.turnManual
-	s.turnMu.RUnlock()
 
 	s.restartMu.RLock()
 	restarting := s.restarting
@@ -416,14 +460,16 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		response.XRay.Warming = false
 		response.XRay.ReadyAt = 0
 
-		// БАГ #3: получаем статус здоровья VLESS сервиса
-		errorCount, errorRatePct, _ := xrayMgr.GetHealthStatus()
+		// БАГ #3: получаем статус здоровья VLESS сервиса.
+		// BUG-NEW-6 FIX: errorRatePct теперь = (errorCount/thresholdCount)*100 —
+		// насыщенность буфера алертов, а не rate от connectionCount (который всегда был 0).
+		errorCount, errorRatePct, wouldAlert := xrayMgr.GetHealthStatus()
 		response.XRay.ErrorCount = errorCount
 		response.XRay.ErrorRatePct = errorRatePct
 
-		if errorRatePct > 70 {
+		if wouldAlert && errorRatePct > 150 {
 			response.XRay.HealthStatus = "unavailable"
-		} else if errorRatePct > 30 {
+		} else if wouldAlert {
 			response.XRay.HealthStatus = "degraded"
 		} else {
 			response.XRay.HealthStatus = "healthy"
@@ -441,110 +487,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, response)
 }
 
-func (s *Server) handleProxyEnable(w http.ResponseWriter, r *http.Request) {
-	s.proxyOpMu.Lock()
-	defer s.proxyOpMu.Unlock()
-
-	if s.config.ProxyManager.IsEnabled() {
-		s.respondError(w, http.StatusBadRequest, "прокси уже включен")
-		return
-	}
-	if err := s.config.ProxyManager.Enable(proxy.Config{
-		Address:  DefaultProxyAddress,
-		Override: "<local>",
-	}); err != nil {
-		s.logger.Error("Не удалось включить прокси: %v", err)
-		s.respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.proxyEnabledAtMu.Lock()
-	s.proxyEnabledAt = time.Now()
-	s.proxyEnabledAtMu.Unlock()
-
-	switchClashMode(r.Context(), s.logger, "rule")
-	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси успешно включен", Success: true})
-}
-
-func (s *Server) handleProxyDisable(w http.ResponseWriter, r *http.Request) {
-	s.proxyOpMu.Lock()
-	defer s.proxyOpMu.Unlock()
-
-	if !s.config.ProxyManager.IsEnabled() {
-		s.respondError(w, http.StatusBadRequest, "прокси уже отключен")
-		return
-	}
-	if err := s.config.ProxyManager.Disable(); err != nil {
-		s.logger.Error("Не удалось отключить прокси: %v", err)
-		s.respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.proxyEnabledAtMu.Lock()
-	s.proxyEnabledAt = time.Time{}
-	s.proxyEnabledAtMu.Unlock()
-
-	switchClashMode(r.Context(), s.logger, "direct")
-	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси успешно отключен", Success: true})
-}
-
-func (s *Server) handleProxyToggle(w http.ResponseWriter, r *http.Request) {
-	s.proxyOpMu.Lock()
-	defer s.proxyOpMu.Unlock()
-
-	if s.config.ProxyManager.IsEnabled() {
-		if err := s.config.ProxyManager.Disable(); err != nil {
-			s.respondError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		switchClashMode(r.Context(), s.logger, "direct")
-		s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси отключен", Success: true})
-		return
-	}
-	if err := s.config.ProxyManager.Enable(proxy.Config{
-		Address:  DefaultProxyAddress,
-		Override: "<local>",
-	}); err != nil {
-		s.respondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.proxyEnabledAtMu.Lock()
-	s.proxyEnabledAt = time.Now()
-	s.proxyEnabledAtMu.Unlock()
-	switchClashMode(r.Context(), s.logger, "rule")
-	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "Прокси включен", Success: true})
-}
-
-// switchClashMode переключает режим Clash API (rule/direct).
-// Использует таймаут 2s чтобы не блокировать хендлер при недоступном Clash API.
-func switchClashMode(ctx context.Context, log logger.Logger, mode string) {
-	body := []byte(`{"mode":"` + mode + `"}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, clashAPIURL+"/configs", bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		if log != nil {
-			log.Debug("Clash API недоступен при смене режима на %q: %v", mode, err)
-		}
-		return
-	}
-	resp.Body.Close()
-	if log != nil {
-		log.Info("TUN режим переключён: %s", mode)
-	}
-}
-
 // rateLimitMiddleware ограничивает частоту мутирующих запросов (POST/PUT/DELETE/PATCH).
 // Защищает от быстрых повторных нажатий в UI и параллельных перезапусков sing-box.
 // Лимит: 5 запросов в секунду глобально на все мутирующие эндпоинты.
 // Если rateLimiter == nil (создан вручную без NewServer) — ограничений нет.
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.rateLimiter != nil &&
-			(r.Method == http.MethodPost || r.Method == http.MethodPut ||
-				r.Method == http.MethodDelete || r.Method == http.MethodPatch) {
+		if s.rateLimiter != nil && isMutationMethod(r.Method) {
 			if !s.rateLimiter.allow() {
 				s.respondError(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
@@ -562,7 +511,7 @@ func (s *Server) handleQuit(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, MessageResponse{Message: "shutting down", Success: true})
 	if s.config.QuitChan != nil {
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(quitSignalDelay)
 			s.quitOnce.Do(func() { close(s.config.QuitChan) })
 		}()
 	}
@@ -581,14 +530,9 @@ func (s *Server) respondError(w http.ResponseWriter, status int, message string)
 }
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
-	allowed := map[string]bool{
-		"http://localhost:8080": true,
-		"http://127.0.0.1:8080": true,
-		"app://":                true,
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" || allowed[origin] {
+		if isAllowedCORSOrigin(origin) {
 			if origin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
@@ -614,10 +558,9 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 // handleImport и handleGeositeDownload имеют собственные лимиты — middleware даёт
 // дополнительный защитный слой.
 func (s *Server) maxBodyMiddleware(next http.Handler) http.Handler {
-	const maxBody = 2 << 20 // 2 MB
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+		if isRequestBodyLimitedMethod(r.Method) {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -633,41 +576,12 @@ func (s *Server) addSilentPath(path string) {
 // loggingMiddleware логирует HTTP запросы.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		s.silentMu.RLock()
-		cache := s.silentCache
-		s.silentMu.RUnlock()
-
-		if cache == nil {
-			s.silentMu.Lock()
-			if s.silentCache == nil {
-				// ФИКС: Добавляем /api/events/clear в список тихих путей.
-				// Без этого после очистки лога middleware записывает "POST /api/events/clear - 200"
-				// в свежеочищенный лог, что ломает тесты на проверку пустоты лога.
-				m := map[string]bool{
-					"/api/status":           true,
-					"/api/health":           true,
-					"/api/tun/apply/status": true,
-					"/api/events":           true,
-					"/api/events/clear":     true, // Добавлено!
-				}
-				for _, p := range s.config.SilentPaths {
-					m[p] = true
-				}
-				s.silentCache = m
-			}
-			cache = s.silentCache
-			s.silentMu.Unlock()
-		}
-
-		if cache[r.URL.Path] {
+		if s.getSilentPathCache()[r.URL.Path] {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		if strings.HasSuffix(r.URL.Path, ".js") ||
-			strings.HasSuffix(r.URL.Path, ".css") ||
-			strings.HasSuffix(r.URL.Path, ".ico") ||
-			strings.HasSuffix(r.URL.Path, ".html") {
+		if isStaticAssetPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -675,21 +589,37 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(rw, r)
-		s.logger.Info("%s %s - %d (%v)", r.Method, r.URL.Path, rw.statusCode, time.Since(start))
+		elapsed := time.Since(start)
+		// Логируем только медленные запросы (>200ms) подробно, остальные — компактно
+		path := r.URL.Path
+		if q := r.URL.RawQuery; q != "" {
+			path += "?" + q
+		}
+		if elapsed > slowRequestThreshold {
+			s.logger.Info("→ %s %s  %d  %v ⚠", r.Method, path, rw.statusCode, elapsed.Round(time.Millisecond))
+		} else {
+			s.logger.Info("→ %s %s  %d", r.Method, path, rw.statusCode)
+		}
 	})
 }
 
 func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		defer func() {
 			if err := recover(); err != nil {
 				s.logger.Error("Паника в обработчике: %v", err)
 				// A-5: логируем полный стек для диагностики реальных паник.
 				s.logger.Error("Stack:\n%s", debug.Stack())
-				s.respondError(w, http.StatusInternalServerError, "внутренняя ошибка сервера")
+				// Отправляем 500 только если заголовки ещё не были записаны.
+				// Повторный WriteHeader после уже начатого ответа вызывает
+				// "superfluous response.WriteHeader call" и портит ответ.
+				if !rw.wroteHeader {
+					s.respondError(w, http.StatusInternalServerError, "внутренняя ошибка сервера")
+				}
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(rw, r)
 	})
 }
 
@@ -723,10 +653,12 @@ func (s *Server) handleEventsClear(w http.ResponseWriter, _ *http.Request) {
 
 type responseWriter struct {
 	http.ResponseWriter
-	statusCode int
+	statusCode  int
+	wroteHeader bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.statusCode = code
+	rw.wroteHeader = true
 	rw.ResponseWriter.WriteHeader(code)
 }

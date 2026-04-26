@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -77,17 +78,22 @@ func buildDNSConfig(dnsCfg *DNSConfig) SBDNS {
 		dnsCfg = DefaultDNSConfig()
 	}
 
-	// Парсим remote DNS URL
-	remoteServer, remoteType := parseDNSURL(dnsCfg.RemoteDNS)
+	// Парсим remote DNS URL — разбиваем на host, path и type.
+	// BUG FIX: ранее parseDNSURL возвращал server="1.1.1.1/dns-query",
+	// sing-box percent-кодировал слеш → "https://1.1.1.1%2Fdns-query/dns-query" → FATAL.
+	remoteServer, remotePath, remoteType := parseDNSURL(dnsCfg.RemoteDNS)
 
 	// Парсим direct DNS URL
 	directServer, directPort, directType := parseDNSURLWithPort(dnsCfg.DirectDNS)
 
 	return SBDNS{
+		// ipv4_only: не возвращать AAAA записи — IPv6 недоступен на большинстве машин — подключение к IPv6-адресам
+		// завершается "The requested address is not valid in its context".
+		Strategy: "ipv4_only",
 		Servers: []SBDNSServer{
 			// Remote DNS идёт через прокси-туннель (detour: proxy-out).
 			// Это предотвращает DNS leak: DNS-запросы не видны провайдеру.
-			{Tag: "remote", Type: remoteType, Server: remoteServer, Detour: "proxy-out"},
+			{Tag: "remote", Type: remoteType, Server: remoteServer, Path: remotePath, Detour: "proxy-out"},
 			// Прямой DNS для локального трафика (http-in inbound) — без прокси.
 			{Tag: "direct-dns", Type: directType, Server: directServer, ServerPort: directPort},
 		},
@@ -98,20 +104,30 @@ func buildDNSConfig(dnsCfg *DNSConfig) SBDNS {
 	}
 }
 
-// parseDNSURL парсит DNS URL и возвращает (server, type).
+// parseDNSURL парсит DNS URL и возвращает (server, path, type).
 // Поддерживает: https://host/path, tls://host, quic://host
-func parseDNSURL(url string) (server, typ string) {
+//
+// BUG FIX: для HTTPS URL разделяет хост и путь.
+// "https://1.1.1.1/dns-query" → server="1.1.1.1", path="/dns-query", type="https"
+// sing-box хранит host и path раздельно, иначе слеш в server percent-кодируется
+// и получается невалидный URL "https://1.1.1.1%2Fdns-query/dns-query".
+func parseDNSURL(url string) (server, path, typ string) {
 	if strings.HasPrefix(url, "https://") {
-		return strings.TrimPrefix(url, "https://"), "https"
+		hostAndPath := strings.TrimPrefix(url, "https://")
+		host, rest, hasPath := strings.Cut(hostAndPath, "/")
+		if hasPath {
+			return host, "/" + rest, "https"
+		}
+		return host, "", "https"
 	}
 	if strings.HasPrefix(url, "tls://") {
-		return strings.TrimPrefix(url, "tls://"), "tls"
+		return strings.TrimPrefix(url, "tls://"), "", "tls"
 	}
 	if strings.HasPrefix(url, "quic://") {
-		return strings.TrimPrefix(url, "quic://"), "quic"
+		return strings.TrimPrefix(url, "quic://"), "", "quic"
 	}
-	// Fallback: предполагаем https
-	return url, "https"
+	// Fallback: предполагаем https без пути
+	return url, "", "https"
 }
 
 // parseDNSURLWithPort парсит DNS URL с портом и возвращает (server, port, type).
@@ -171,75 +187,7 @@ func parsePortString(s string) (int, error) {
 	return n, nil
 }
 
-// TURNOverride задаёт параметры для переключения outbound на TURN прокси.
-// Когда задан, VLESS outbound направляется на локальный vk-turn-proxy
-// вместо реального сервера. Маскировка: DTLS 1.2 выглядит как звонок VK.
-type TURNOverride struct {
-	// ProxyAddr — адрес локального TURN прокси, например "127.0.0.1:9000".
-	ProxyAddr string
-	// RealServerIP — реальный IP сервера (нужен для RouteExcludeAddress в TUN,
-	// чтобы трафик vk-turn-proxy к серверу не перехватывался TUN → routing loop).
-	RealServerIP string
-}
-
-// GenerateSingBoxConfigWithMode генерирует конфиг с опциональным TURN override.
-// При turn=nil поведение идентично GenerateSingBoxConfig.
-// При turn!=nil VLESS outbound перенаправляется на локальный TURN прокси.
-func GenerateSingBoxConfigWithMode(secretPath, outputPath string, routingCfg *RoutingConfig, turn *TURNOverride) error {
-	params, err := parseVLESSKey(secretPath)
-	if err != nil {
-		return fmt.Errorf("ошибка парсинга VLESS ключа: %w", err)
-	}
-	if err := validateVLESSParams(params); err != nil {
-		return fmt.Errorf("невалидные параметры: %w", err)
-	}
-	if routingCfg == nil {
-		routingCfg = DefaultRoutingConfig()
-	}
-
-	// В TURN режиме outbound идёт на локальный прокси, а не на сервер напрямую.
-	// TUN по-прежнему исключает реальный IP сервера из перехвата — иначе трафик
-	// vk-turn-proxy к серверу попадёт обратно в TUN → routing loop.
-	outbound := buildVLESSOutbound(params)
-	tunExcludeAddr := params.Address
-	if turn != nil {
-		host, portStr, splitErr := splitHostPort(turn.ProxyAddr)
-		if splitErr != nil {
-			return fmt.Errorf("некорректный TURN ProxyAddr %q: %w", turn.ProxyAddr, splitErr)
-		}
-		port, convErr := parsePortString(portStr)
-		if convErr != nil {
-			return fmt.Errorf("некорректный порт в TURN ProxyAddr %q: %w", turn.ProxyAddr, convErr)
-		}
-		// Перенаправляем только адрес/порт; TLS+Reality остаются — сервер их ожидает.
-		// vk-turn-proxy туннелирует через DTLS прозрачно, не трогая пакеты.
-		outbound.Server = host
-		outbound.ServerPort = port
-		if turn.RealServerIP != "" {
-			tunExcludeAddr = turn.RealServerIP
-		}
-	}
-
-	cfg := buildSingBoxConfig(params, outbound, tunExcludeAddr, routingCfg)
-
-	for _, rs := range cfg.Route.RuleSet {
-		if _, statErr := os.Stat(rs.Path); os.IsNotExist(statErr) {
-			return fmt.Errorf("файл geosite не найден: %s — скачайте его в приложении", rs.Path)
-		}
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации: %w", err)
-	}
-	if err := fileutil.WriteAtomic(outputPath, data, 0644); err != nil {
-		return fmt.Errorf("не удалось применить конфиг sing-box: %w", err)
-	}
-	return nil
-}
-
 // buildSingBoxConfig собирает SingBoxConfig из уже подготовленных компонентов.
-// Вызывается как из GenerateSingBoxConfig, так и из GenerateSingBoxConfigWithMode.
 func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr string, routingCfg *RoutingConfig) *SingBoxConfig {
 	return &SingBoxConfig{
 		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
@@ -281,6 +229,15 @@ func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr
 	}
 }
 
+// ipOrEmpty возвращает addr если это валидный IP, иначе "".
+// Используется при построении CIDR-списков: hostname не может быть CIDR-адресом.
+func ipOrEmpty(addr string) string {
+	if net.ParseIP(addr) != nil {
+		return addr
+	}
+	return ""
+}
+
 func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingConfig) error {
 	params, err := parseVLESSKey(secretPath)
 	if err != nil {
@@ -293,52 +250,54 @@ func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingCon
 		routingCfg = DefaultRoutingConfig()
 	}
 
-	cfg := &SingBoxConfig{
-		Log: SBLog{Level: "warn"}, // info floods the log with every DNS query
-		Experimental: SBExperimental{
-			ClashAPI: SBClashAPI{
-				ExternalController: ClashAPIAddr,
-				Secret:             "",
-			},
-			// CacheFile: персистентный DNS кэш между перезапусками.
-			// При рестарте sing-box не делает холодные DNS запросы —
-			// отвечает из кэша пока резолвит в фоне. Ускоряет первые
-			// соединения после перезапуска на 50-200мс.
-			CacheFile: &SBCacheFile{
-				Enabled: true,
-				Path:    DataDir + "/dns_cache.db",
-			},
-		},
-		DNS: buildDNSConfig(routingCfg.DNS),
-		Inbounds: []SBInbound{
-			{
-				Type:       "http",
-				Tag:        "http-in",
-				Listen:     "127.0.0.1",
-				ListenPort: ProxyPort,
-				// sniff_override_destination намеренно не указан: поле удалено в sing-box 1.13.
-				// Action "sniff" в route rules теперь всегда переопределяет destination.
-			},
-			buildTUN(params.Address),
-		},
-		Outbounds: []SBOutbound{
-			buildVLESSOutbound(params),
-			{Type: "direct", Tag: "direct"},
-			// "block" outbound нужен для случая DefaultAction == ActionBlock,
-			// а также для блокирующих правил route (action: "reject" — альтернатива,
-			// но явный outbound обязателен когда final = "block").
-			{Type: "block", Tag: "block"},
-		},
-		Route: buildRoute(routingCfg, params.Address),
-	}
+	outbound := buildVLESSOutbound(params)
+	// Если адрес сервера — hostname (не IP), передаём пустую строку в buildSingBoxConfig.
+	// buildTUN и buildRoute пропустят exclude-запись: hostname/32 — невалидный CIDR,
+	// sing-box падает с "parse cidr: hostname/32: invalid CIDR address".
+	tunExclude := ipOrEmpty(params.Address)
+	cfg := buildSingBoxConfig(params, outbound, tunExclude, routingCfg)
 
-	// Проверяем что все geosite .bin файлы существуют до записи конфига.
-	// buildRoute уже добавил их в RuleSet — проверяем существование здесь,
-	// пока ещё можем вернуть error (cfg формируется в памяти, файл ещё не записан).
+	// BUG-2 FIX: вместо fatal error при отсутствии/повреждении geosite файла —
+	// пропускаем его и убираем ссылающиеся правила. Один плохой файл не должен
+	// блокировать генерацию конфига и применение всех остальных правил.
+	skippedTags := map[string]bool{}
+	validRuleSets := cfg.Route.RuleSet[:0]
 	for _, rs := range cfg.Route.RuleSet {
-		if _, statErr := os.Stat(rs.Path); os.IsNotExist(statErr) {
-			return fmt.Errorf("файл geosite не найден: %s — скачайте его в приложении", rs.Path)
+		_, statErr := os.Stat(rs.Path)
+		if os.IsNotExist(statErr) {
+			// Файл не найден — пропускаем тег, продолжаем генерацию конфига.
+			skippedTags[rs.Tag] = true
+			continue
 		}
+		if statErr != nil || !IsSingBoxRuleSetFile(rs.Path) {
+			// Файл повреждён или не является binary SRS — пропускаем.
+			skippedTags[rs.Tag] = true
+			continue
+		}
+		validRuleSets = append(validRuleSets, rs)
+	}
+	cfg.Route.RuleSet = validRuleSets
+	// Убираем route rules ссылающиеся на пропущенные теги.
+	if len(skippedTags) > 0 {
+		validRouteRules := cfg.Route.Rules[:0]
+		for _, rule := range cfg.Route.Rules {
+			if len(rule.RuleSet) == 0 {
+				validRouteRules = append(validRouteRules, rule)
+				continue
+			}
+
+			filteredRuleSets := rule.RuleSet[:0]
+			for _, tag := range rule.RuleSet {
+				if !skippedTags[tag] {
+					filteredRuleSets = append(filteredRuleSets, tag)
+				}
+			}
+			if len(filteredRuleSets) > 0 {
+				rule.RuleSet = filteredRuleSets
+				validRouteRules = append(validRouteRules, rule)
+			}
+		}
+		cfg.Route.Rules = validRouteRules
 	}
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -367,18 +326,40 @@ func buildTUN(serverAddr string) SBInbound {
 		MTU:         1500,
 		AutoRoute:   true,
 		StrictRoute: true, // строгая маршрутизация: утечки трафика мимо TUN невозможны
-		// system stack вместо mixed: system использует нативный Windows TCP/IP стек.
-		// mixed = gVisor для UDP + system для TCP. system быстрее для большинства трафика
-		// так как нет overhead пользовательского TCP стека. Рекомендация sing-box docs.
-		Stack: "system",
-		// sniff_override_destination намеренно не указан: поле удалено в sing-box 1.13.
-		// Action "sniff" в route rules теперь всегда переопределяет destination.
-		// RouteExcludeAddress: только IP прокси-сервера.
+		// mixed stack: system для TCP (нативный Windows стек, максимальная скорость)
+		// + gVisor для UDP (корректное проксирование UDP через VLESS туннель).
+		//
+		// Почему не system:
+		//   С system stack UDP (включая QUIC/HTTP3) обрабатывается Windows сокетами и
+		//   может утекать мимо TUN даже при strict_route=true (Windows-специфичное поведение
+		//   с binding сокетов к физическому интерфейсу). Итог: QUIC-трафик идёт напрямую
+		//   с реального IP пользователя → Cloudflare видит российский IP → 403 Forbidden
+		//   для chatgpt.com, api.openai.com (GPT, Codex), github.com (Copilot в VS Code).
+		//
+		// С mixed stack: gVisor перехватывает ALL UDP пакеты на уровне TUN-интерфейса,
+		//   forwarding через VLESS → сервер → destination. QUIC (HTTP/3) к AI-сервисам
+		//   корректно проксируется, VS Code Copilot / Codex / ChatGPT работают без 403.
+		Stack: "mixed",
+		// RouteExcludeAddress: IP прокси-сервера + loopback.
 		// TUN подсеть (172.20.0.0/30) НЕ исключаем — иначе Windows DNS Client (svchost)
 		// не получает ответы на DNS запросы к TUN-адресу → бесконечные ретраи.
 		// Собственный трафик sing-box (включая его DNS) корректно выходит через
 		// физический интерфейс благодаря auto_detect_interface: true.
-		RouteExcludeAddress: []string{serverAddr + "/32"},
+		// Если serverAddr пустой (hostname, не IP) — exclude-запись не добавляем:
+		// hostname/32 — невалидный CIDR, sing-box упадёт с parse cidr error.
+		//
+		// 127.0.0.0/8 и ::1/128 исключаются на уровне ОС (не только route-правила):
+		// strict_route=true + WFP иногда перехватывает loopback трафик на Windows 11,
+		// что ломает OAuth callback для Claude Code, Codex и других CLI-инструментов
+		// (они стартуют HTTP-сервер на localhost:PORT для редиректа после авторизации).
+		// RouteExcludeAddress гарантирует что loopback никогда не попадёт в TUN pipe.
+		RouteExcludeAddress: func() []string {
+			exclude := []string{"127.0.0.0/8", "::1/128"}
+			if serverAddr != "" {
+				exclude = append(exclude, serverAddr+"/32")
+			}
+			return exclude
+		}(),
 	}
 }
 
@@ -396,21 +377,105 @@ var privateIPRanges = []string{
 	"fe80::/10",      // IPv6 link-local
 }
 
+// telegramCIDRRanges — официальные Telegram CIDR из
+// https://core.telegram.org/resources/cidr.txt. Telegram Desktop часто ходит
+// напрямую по IP, поэтому domain/geosite и process_name правил недостаточно.
+var telegramCIDRRanges = []string{
+	"91.105.192.0/23",
+	"91.108.4.0/22",
+	"91.108.8.0/22",
+	"91.108.12.0/22",
+	"91.108.16.0/22",
+	"91.108.20.0/22",
+	"91.108.56.0/22",
+	"149.154.160.0/20",
+	"185.76.151.0/24",
+	"2001:b28:f23c::/48",
+	"2001:b28:f23d::/48",
+	"2001:b28:f23f::/48",
+	"2001:67c:4e8::/48",
+	"2a0a:f280::/32",
+}
+
 func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
+	if routingCfg == nil {
+		routingCfg = DefaultRoutingConfig()
+	}
 	// BUG FIX #11: заменяем append(append(...)) на явный make+copy.
 	// append([]string{}, privateIPRanges...) корректен сам по себе, но цепочка
 	// append-ов хрупка — следующий append может создать алиасинг если ёмкость совпадёт.
 	// Явный make с точным размером исключает любое алиасирование.
-	directCIDR := make([]string, len(privateIPRanges)+1)
+	// Если serverAddr пустой (hostname) — не добавляем "/32": невалидный CIDR.
+	directCIDR := make([]string, len(privateIPRanges), len(privateIPRanges)+1)
 	copy(directCIDR, privateIPRanges)
-	directCIDR[len(privateIPRanges)] = serverAddr + "/32"
+	if serverAddr != "" {
+		directCIDR = append(directCIDR, serverAddr+"/32")
+	}
 	rules := []SBRouteRule{
+		// Sniff: извлекаем domain из TLS SNI до применения routing rules.
+		// Необходим для корректного domain/geosite matching через TUN.
+		{Action: "sniff"},
 		{Protocol: "dns", Action: "hijack-dns"},
-		// Локальные адреса и IP прокси-сервера всегда напрямую.
+		// Локальные адреса и IP прокси-сервера всегда напрямую — ПЕРВЫМ приоритетом.
 		// serverAddr исключён явно: TUN с auto_route перехватывает весь трафик включая
 		// собственные соединения sing-box к серверу → routing loop без этого правила.
+		// ПОРЯДОК ВАЖЕН: это правило должно быть раньше любых proxy-out правил,
+		// чтобы приватные IP (192.168.x.x, 10.x.x.x, 127.x.x.x) не попали в прокси.
 		{IPCIDR: directCIDR, Outbound: "direct"},
+		// Telegram часто обращается к DC по IP, а не по домену. Это правило должно
+		// быть до blanket IPv6 reject, иначе IPv6 Telegram DC будут отброшены.
+		{IPCIDR: telegramCIDRRanges, Outbound: "proxy-out"},
+		// IPv6 глобальный unicast: DNS strategy=ipv4_only предотвращает новые AAAA lookup,
+		// но приложения с hardcoded IPv6 адресами (Telegram DC: 2001:b28:f23d::/48 и др.)
+		// всё равно пытаются подключиться напрямую к IPv6 адресам.
+		// На машинах без IPv6 это приводит к flood ошибок в логах:
+		//   "The requested address is not valid in its context" каждые несколько секунд.
+		// Отклоняем все IPv6 глобальные unicast соединения принудительно:
+		//   - Приложения (Telegram, Firefox, Chrome) переключатся на IPv4
+		//   - IPv4 трафик нормально проходит через правила ниже
+		// Исключения уже обработаны правилом directCIDR выше:
+		//   ::1/128 (loopback), fc00::/7 (ULA), fe80::/10 (link-local) → direct
+		// ::/0 матчит всё оставшееся IPv6 (включая 2000::/3 global unicast).
+		{IPCIDR: []string{"::/0"}, Action: "reject"},
 	}
+
+	if routingCfg.BypassEnabled {
+		return SBRoute{
+			Rules:                 rules,
+			Final:                 "proxy-out",
+			AutoDetectInterface:   true,
+			DefaultDomainResolver: "direct-dns",
+		}
+	}
+
+	rules = append(rules,
+		// QUIC (UDP/443) для AI-сервисов: явно пропускаем через прокси ДО blanket reject.
+		// VS Code Codex, GitHub Copilot, ChatGPT используют HTTP/3 (QUIC) для API-вызовов.
+		// С mixed stack + gVisor gVisor перехватывает UDP и форвардит через VLESS туннель.
+		// DomainSuffix матчится по SNI (sniff выше извлекает его из QUIC Initial packet).
+		// Приватные IP уже обработаны выше — сюда доходит только публичный трафик AI-сервисов.
+		SBRouteRule{
+			Network: "udp",
+			Port:    []uint16{443},
+			DomainSuffix: []string{
+				"openai.com",         // ChatGPT, Codex API, Whisper
+				"chatgpt.com",        // ChatGPT web
+				"oaistatic.com",      // OpenAI static assets
+				"oaiusercontent.com", // OpenAI user content
+				"github.com",         // GitHub Copilot (VS Code extension)
+				"githubcopilot.com",  // GitHub Copilot API
+				"copilot.github.com", // GitHub Copilot
+				"anthropic.com",      // Claude API
+				"claude.ai",          // Claude web
+			},
+			Outbound: "proxy-out",
+		},
+		// Blanket-reject остального QUIC (UDP/443): браузеры переключаются на TCP/443.
+		// Без этого браузер кэширует "Alt-Svc: h3" и пытается использовать QUIC для всех сайтов,
+		// что с некоторыми серверами даёт некорректную маршрутизацию.
+		// AI-сервисы выше уже обработаны — сюда попадают только прочие домены.
+		SBRouteRule{Network: "udp", Port: []uint16{443}, Action: "reject"},
+	)
 
 	var proxyProcs, directProcs, blockProcs []string
 	var proxyDom, directDom, blockDom []string

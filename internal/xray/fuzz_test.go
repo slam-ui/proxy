@@ -40,7 +40,7 @@ func FuzzIsTunConflict(f *testing.F) {
 	f.Add("\x00\xff\xfe\x01binary data")
 	f.Add(strings.Repeat("configure tun interface\n", 1000))
 	// Частичные совпадения
-	f.Add("cannot create a file") // нижний регистр
+	f.Add("cannot create a file")    // нижний регистр
 	f.Add("CONFIGURE TUN INTERFACE") // верхний регистр
 	f.Add("xonfigure tun interface") // опечатка
 	// Unicode

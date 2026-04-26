@@ -6,6 +6,14 @@ const TunInterfaceName = "tun0"
 // Располагается рядом с .exe, изолирует рабочие файлы от системных.
 const DataDir = "data"
 
+// DNSCacheFile — путь к файлу кэша DNS sing-box.
+// Используется для удаления при ошибке "initialize cache-file: timeout".
+const DNSCacheFile = DataDir + "/dns_cache.db"
+
+// MinValidBinarySize — минимальный допустимый размер sing-box.exe.
+// Файлы меньше 1 MB считаются повреждёнными или усечёнными.
+const MinValidBinarySize = 1 * 1024 * 1024 // 1 MB
+
 type SingBoxConfig struct {
 	Log          SBLog          `json:"log"`
 	DNS          SBDNS          `json:"dns"`
@@ -23,6 +31,10 @@ type SBDNS struct {
 	Servers []SBDNSServer `json:"servers"`
 	Rules   []SBDNSRule   `json:"rules,omitempty"`
 	Final   string        `json:"final,omitempty"`
+	// Strategy: ipv4_only — Запрещает DNS возвращать AAAA-записи.
+	// Без этого sing-box пытается подключиться к IPv6-адресам напрямую,
+	// что на машинах без IPv6 даёт "The requested address is not valid in its context".
+	Strategy string `json:"strategy,omitempty"`
 }
 
 type SBDNSServer struct {
@@ -30,7 +42,12 @@ type SBDNSServer struct {
 	Type       string `json:"type"`
 	Server     string `json:"server,omitempty"`
 	ServerPort int    `json:"server_port,omitempty"`
-	Detour     string `json:"detour,omitempty"` // маршрутизировать DNS через указанный outbound
+	// Path — путь для DoH запросов, например "/dns-query".
+	// Требуется для HTTPS DNS: server содержит только хост ("1.1.1.1"),
+	// path — отдельное поле, иначе sing-box percent-кодирует слеш в server
+	// и строит невалидный URL "https://1.1.1.1%2Fdns-query/dns-query".
+	Path   string `json:"path,omitempty"`
+	Detour string `json:"detour,omitempty"` // маршрутизировать DNS через указанный outbound
 }
 
 type SBDNSRule struct {
@@ -53,9 +70,8 @@ type SBInbound struct {
 	// Критично: без этого sing-box перехватывает собственные соединения к прокси-серверу
 	// → routing loop (тысячи соединений по 500-600 байт на один IP).
 	RouteExcludeAddress []string `json:"route_exclude_address,omitempty"`
-	// sniff_override_destination намеренно отсутствует: поле было legacy inbound field,
-	// deprecated в 1.11, удалено в 1.13. В 1.13 action "sniff" всегда переопределяет
-	// destination автоматически — отдельное поле не требуется.
+	// Sniff и SniffOverrideDestination удалены: legacy inbound fields, deprecated в 1.11,
+	// removed в 1.13. Sniffing настраивается через route rule {Action: "sniff"}.
 }
 
 // SBMultiplex конфигурация мультиплексирования соединений.
@@ -145,6 +161,8 @@ type SBRoute struct {
 
 type SBRouteRule struct {
 	Protocol     string   `json:"protocol,omitempty"`
+	Network      string   `json:"network,omitempty"` // "tcp" | "udp"
+	Port         []uint16 `json:"port,omitempty"`    // порты для матчинга
 	ProcessName  []string `json:"process_name,omitempty"`
 	Domain       []string `json:"domain,omitempty"`
 	DomainSuffix []string `json:"domain_suffix,omitempty"`

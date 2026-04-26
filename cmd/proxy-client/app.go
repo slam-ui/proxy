@@ -11,15 +11,18 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"proxyclient/internal/anomalylog"
@@ -29,13 +32,10 @@ import (
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/logger"
-	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/tray"
-	"proxyclient/internal/turnmanager"
-	"proxyclient/internal/turnproxy"
 	"proxyclient/internal/window"
 	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
@@ -43,8 +43,9 @@ import (
 
 // AppConfig содержит все настраиваемые параметры приложения.
 type AppConfig struct {
-	KillSwitch        bool // блокировать трафик при падении туннеля
-	ProxyGuardEnabled bool // B-2: включить Proxy Guard для восстановления системного прокси
+	KillSwitch         bool // блокировать трафик при падении туннеля
+	ProxyGuardEnabled  bool // B-2: включить Proxy Guard для восстановления системного прокси
+	StartProxyOnLaunch bool // включать прокси сразу после запуска клиента
 	// B-10: автообновление geosite баз данных
 	GeoAutoUpdateEnabled      bool
 	GeoAutoUpdateIntervalDays int
@@ -54,14 +55,11 @@ type AppConfig struct {
 	ConfigPath                string
 	RuntimeFile               string
 	DataDir                   string
+	SettingsFile              string
 	AppRulesFile              string
 	APIAddress                string
 	WebUIURL                  string
-	// TURNRelayPort — UDP порт серверного vk-turn-relay (default: 3478).
-	// Переопределяется флагом -turn-port при запуске.
-	// Порт 443 UDP — альтернатива если 3478 заблокирован провайдером.
-	TURNRelayPort      int
-	ProxyGuardInterval time.Duration // B-2: интервал проверки Proxy Guard (default 5s)
+	ProxyGuardInterval        time.Duration // B-2: интервал проверки Proxy Guard (default 5s)
 }
 
 // DefaultAppConfig возвращает production конфигурацию.
@@ -69,6 +67,7 @@ func DefaultAppConfig() AppConfig {
 	return AppConfig{
 		KillSwitch:                false,
 		ProxyGuardEnabled:         true, // B-2: default включить
+		StartProxyOnLaunch:        true,
 		GeoAutoUpdateEnabled:      true, // B-10: автообновление geosite по умолчанию
 		GeoAutoUpdateIntervalDays: 7,    // B-10: обновлять раз в 7 дней
 		WarmUpHosts: []string{
@@ -81,10 +80,10 @@ func DefaultAppConfig() AppConfig {
 		ConfigPath:         "config.singbox.json",
 		RuntimeFile:        "config.runtime.json",
 		DataDir:            config.DataDir,
+		SettingsFile:       config.AppSettingsFile,
 		AppRulesFile:       config.DataDir + "/app_rules.json",
 		APIAddress:         config.APIAddress,
 		WebUIURL:           "http://localhost:8080",
-		TURNRelayPort:      3478,
 		ProxyGuardInterval: 5 * time.Second, // B-2: проверка каждые 5 секунд
 	}
 }
@@ -107,9 +106,18 @@ type App struct {
 	cachedServerIP   string
 	cachedForFile    string
 	cachedSecretHash [32]byte
-	// turnProxy — локальный TURN прокси (nil когда неактивен).
-	// Запускается в applyTURNMode(ModeTURN), останавливается в applyTURNMode(ModeDirect).
-	turnProxy *turnproxy.Proxy
+	engineCrashMu    sync.Mutex
+	engineCrashCount int
+	engineCrashAt    time.Time
+
+	// proxyConfig хранит конфиг прокси для finalizeStartup.
+	// Устанавливается startBackground до WaitForSingBoxReady.
+	proxyConfig proxy.Config
+
+	// startupOnce гарантирует что finalizeStartup выполняется ровно один раз
+	// — либо из startBackground при успешном старте, либо из handleCrash
+	// при успешном TUN recovery. Без Once возможен double-enable прокси.
+	startupOnce sync.Once
 }
 
 // NewApp создаёт App и базовые инфраструктурные компоненты (логгер, eventlog, anomaly detector).
@@ -125,7 +133,13 @@ func NewApp(cfg AppConfig, output io.Writer) *App {
 	if exe, err := os.Executable(); err == nil {
 		exeDir = filepath.Dir(exe)
 	}
-	anomalyDetector := anomalylog.New(evLog, exeDir)
+	logsDir := filepath.Join(exeDir, "logs")
+	_ = os.MkdirAll(logsDir, 0755)
+
+	// Cleanup old .dns_cache.db.old files from previous crashes
+	_ = os.Remove(config.DNSCacheFile + ".old")
+
+	anomalyDetector := anomalylog.New(evLog, logsDir)
 
 	proxyLogger := eventlog.NewLogger(appLogger, evLog, "proxy")
 	proxyManager := proxy.NewManager(proxyLogger)
@@ -148,14 +162,14 @@ func NewApp(cfg AppConfig, output io.Writer) *App {
 
 // buildXRayCfg собирает xray.Config с BeforeRestart и OnCrash.
 func (a *App) buildXRayCfg() xray.Config {
-	xrayLogger := eventlog.NewLogger(a.appLogger, a.evLog, "xray")
+	xrayLogger := eventlog.NewLogger(a.appLogger, a.evLog, "engine")
 	return xray.Config{
 		ExecutablePath: a.cfg.SingBoxPath,
 		ConfigPath:     a.cfg.ConfigPath,
 		SecretKeyPath:  a.cfg.SecretFile,
 		Args:           []string{"run", "--disable-color"},
 		Logger:         xrayLogger,
-		SingBoxWriter:  eventlog.NewLineWriter(a.evLog, "sing-box", eventlog.LevelInfo),
+		SingBoxWriter:  xray.NewFilterWriter(eventlog.NewLineWriter(a.evLog, "sing-box", eventlog.LevelInfo)),
 		FileWriter:     xray.NewFilterWriter(a.output),
 		// BeforeRestart — wintun cleanup для обычного перезапуска (apply rules, ручной restart).
 		//
@@ -171,14 +185,23 @@ func (a *App) buildXRayCfg() xray.Config {
 			// СР-3: проверяем CleanShutdownFile ДО RecordStop, который его удаляет.
 			// Если sing-box остановился чисто — пропускаем RemoveStaleTunAdapter (~3-5с).
 			_, cleanErr := os.Stat(wintun.CleanShutdownFile)
-			wintun.RecordStop()
 			if cleanErr != nil {
-				wintun.RemoveStaleTunAdapter(log)
+				wintun.RecordStop()
+				// Передаём ctx — RemoveStaleTunAdapterCtx прерывается если приложение закрывается
+				// во время sleep, не зависая на 2+ секунды после отмены lifecycle context.
+				wintun.RemoveStaleTunAdapterCtx(ctx, log)
 			} else {
 				log.Info("wintun: чистое завершение — пропускаем RemoveStaleTunAdapter в BeforeRestart")
 			}
 			wintun.PollUntilFree(ctx, log, config.TunInterfaceName)
 			return nil
+		},
+		// OnSlowTun: sing-box логирует WARN[0010] "open interface take too much time to finish!"
+		// за ~5 секунд до FATAL[0015]. Превентивно увеличиваем adaptive gap — при следующем
+		// PollUntilFree gap будет корректным сразу, без ещё одного краша.
+		OnSlowTun: func() {
+			wintun.IncreaseAdaptiveGap(a.mainLogger)
+			a.mainLogger.Warn("wintun: медленный TUN-интерфейс обнаружён — gap увеличен превентивно")
 		},
 		// ОПТИМИЗАЦИЯ: при чистом graceful stop записываем маркер.
 		// Следующий PollUntilFree (при apply rules или рестарте) пропустит
@@ -197,7 +220,7 @@ func (a *App) buildXRayCfg() xray.Config {
 func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 	if xray.IsTooManyRestarts(crashErr) {
 		a.mainLogger.Error("[Error] Core exits too frequently — авторестарт отключён")
-		notification.Send("Proxy — ошибка", "Частые сбои sing-box. Откройте приложение.")
+		notification.Send("SafeSky — ошибка", "Частые сбои sing-box. Откройте приложение.")
 		_ = a.proxyManager.Disable()
 		tray.SetEnabled(false)
 		return
@@ -216,15 +239,121 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 		return
 	}
 
+	if xray.IsAccessViolation(crashErr) && a.allowEngineAVRetry() {
+		a.mainLogger.Warn("sing-box вернул 0xc0000005 — возможно, бинарник ещё проверяется Windows Defender; повторный запуск через 5s")
+		select {
+		case <-time.After(5 * time.Second):
+		case <-a.lifecycleCtx.Done():
+			return
+		}
+		if a.apiServer.GetXRayManager() != currentMgr {
+			a.mainLogger.Info("sing-box менеджер заменён во время ожидания AV retry — прерываем")
+			return
+		}
+		if err := currentMgr.Start(); err != nil {
+			a.mainLogger.Error("Не удалось повторно запустить sing-box после 0xc0000005: %v", err)
+		} else {
+			a.mainLogger.Info("Повторный запуск sing-box после 0xc0000005 выполнен")
+			return
+		}
+	}
+
 	lastOut := currentMgr.LastOutput()
 	isTunConflict := xray.IsTunConflict(lastOut)
 
+	// FIX 3: обработка "initialize cache-file: timeout" — удаляем зависший dns_cache.db и перезапускаем.
+	//
+	// BUG FIX: предыдущая реализация пыталась os.Remove → os.Rename, но оба вызова
+	// проваливались когда другой (zombie) sing-box процесс держал файл. Результат:
+	// бесконечный цикл краш → cache timeout → не удалось удалить → рестарт → cache timeout.
+	//
+	// Новый алгоритм:
+	//  1. taskkill /F /IM sing-box.exe — убиваем ВСЕ sing-box, включая orphaned процессы
+	//  2. Пауза 500ms — даём Windows освободить file handles
+	//  3. os.Remove с retry (3 попытки × 1s) — файл теперь гарантированно не заблокирован
+	//  4. StartAfterManualCleanup — чистый старт с пустым кэшем
+	isCacheTimeout := xray.IsCacheFileTimeout(lastOut)
+	if isCacheTimeout {
+		a.mainLogger.Warn("sing-box: cache-file timeout — убиваем все sing-box и удаляем dns_cache.db")
+
+		// Шаг 1: убиваем ВСЕ процессы sing-box чтобы освободить lock на dns_cache.db.
+		// taskkill /F /IM — по имени образа, убивает все экземпляры включая orphaned.
+		killCmd := exec.CommandContext(a.lifecycleCtx, "taskkill", "/F", "/IM", "sing-box.exe")
+		killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		if killOut, killErr := killCmd.CombinedOutput(); killErr != nil {
+			// Ошибка ожидаема если нет запущенных sing-box (уже все умерли)
+			a.mainLogger.Info("taskkill sing-box: %v (%s)", killErr, strings.TrimSpace(string(killOut)))
+		} else {
+			a.mainLogger.Info("taskkill sing-box: все процессы убиты")
+		}
+
+		// Шаг 2: даём Windows время освободить file handles после убийства процессов
+		time.Sleep(500 * time.Millisecond)
+
+		// Шаг 3: удаляем dns_cache.db с retry
+		const cacheRetries = 3
+		for i := 1; i <= cacheRetries; i++ {
+			if err := os.Remove(config.DNSCacheFile); err == nil || os.IsNotExist(err) {
+				a.mainLogger.Info("dns_cache.db удалён успешно")
+				break
+			} else if i < cacheRetries {
+				a.mainLogger.Warn("dns_cache.db всё ещё заблокирован (попытка %d/%d): %v", i, cacheRetries, err)
+				time.Sleep(1 * time.Second)
+			} else {
+				// Последняя попытка — пробуем rename как fallback
+				a.mainLogger.Warn("dns_cache.db: не удалось удалить за %d попыток, пробуем rename", cacheRetries)
+				tmpPath := config.DNSCacheFile + ".old"
+				_ = os.Remove(tmpPath)
+				if renErr := os.Rename(config.DNSCacheFile, tmpPath); renErr != nil {
+					a.mainLogger.Error("dns_cache.db: не удалось ни удалить ни переименовать: %v", renErr)
+				}
+			}
+		}
+
+		// Шаг 4: очистка wintun kernel-объекта ПЕРЕД перезапуском.
+		//
+		// BUG FIX: taskkill убивает sing-box принудительно — wintun не освобождает
+		// TUN adapter через WintunCloseAdapter. Kernel-объект \\Device\\WINTUN-{GUID}
+		// остаётся жить. StartAfterManualCleanup (без BeforeRestart/PollUntilFree) →
+		// новый sing-box пытается создать адаптер → FATAL "Cannot create a file when
+		// that file already exists".
+		//
+		// Решение: RecordStop + RemoveStaleTunAdapterCtx + PollUntilFree ПЕРЕД стартом.
+		// Аналогично TUN-conflict пути, но без увеличения adaptive gap
+		// (cache-timeout ≠ slow TUN — gap трогать не нужно).
+		a.mainLogger.Info("sing-box: cache-timeout recovery — очистка wintun перед перезапуском...")
+		wintun.RecordStop()
+		wintun.RemoveStaleTunAdapterCtx(a.lifecycleCtx, a.mainLogger)
+		a.apiServer.SetRestarting(wintun.EstimateReadyAt())
+		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+
+		// Шаг 5: перезапуск sing-box с чистым кэшем (cleanup выполнен выше вручную).
+		if a.apiServer.GetXRayManager() != currentMgr {
+			a.mainLogger.Warn("sing-box менеджер заменён во время cache-timeout recovery — прерываем")
+			a.apiServer.ClearRestarting()
+			return
+		}
+		if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
+			a.apiServer.ClearRestarting()
+			a.mainLogger.Error("Не удалось перезапустить sing-box после cache-file timeout: %v", startErr)
+			_ = a.proxyManager.Disable()
+			tray.SetEnabled(false)
+			return
+		}
+		a.apiServer.ClearRestarting()
+		return
+	}
+
 	if isTunConflict {
 		wintun.RecordStop()
-		// Kill Switch: блокируем трафик на время перезапуска TUN
+		tray.SetWarming(true)
+		// Kill Switch: блокируем трафик на время перезапуска TUN.
+		// defer гарантирует снятие правил при любом return из функции:
+		// успех, все попытки провалены, менеджер заменён, контекст отменён.
 		if a.cfg.KillSwitch {
 			serverIP := a.extractServerIP(a.cfg.SecretFile)
 			killswitch.Enable(serverIP, a.mainLogger)
+			defer killswitch.Disable(a.mainLogger)
 		}
 
 		// Retry loop: пытаемся поднять TUN несколько раз с увеличивающимся gap.
@@ -237,17 +366,23 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 				a.apiServer.ClearRestarting()
 				return
 			}
-			// Увеличиваем gap один раз при первой попытке (и каждой последующей).
-			// На первой попытке — только если краш случился быстро (<30s),
-			// иначе gap уже достаточен. При повторах — всегда увеличиваем.
-			if attempt > 1 || currentMgr.Uptime() < 30*time.Second {
+			// БАГ 6: обновляем timestamp стоп-файла перед каждой попыткой.
+			// EstimateReadyAt() вычисляет ETA от mtime стоп-файла — при повторных попытках
+			// старый timestamp даёт неверный ETA (может быть в далёком прошлом).
+			wintun.RecordStop()
+			// Увеличиваем gap: при первой попытке — только если краш быстрый (<30s),
+			// при быстром краше gap уже корректен и увеличивать преждевременно.
+			// При повторных попытках — всегда: предыдущая попытка не помогла.
+			if attempt == 1 && currentMgr.Uptime() >= 30*time.Second {
+				// Долгоживущий процесс упал не из-за TUN таймаута — gap не трогаем.
+			} else {
 				wintun.IncreaseAdaptiveGap(a.mainLogger)
 			}
 
 			a.mainLogger.Warn("TUN попытка %d/%d — ждём освобождения kernel-объекта...", attempt, maxTunAttempts)
-			notification.Send("Proxy", fmt.Sprintf("Перезапуск TUN... (%d/%d)", attempt, maxTunAttempts))
+			notification.Send("SafeSky", fmt.Sprintf("Перезапуск TUN... (%d/%d)", attempt, maxTunAttempts))
 
-			wintun.RemoveStaleTunAdapter(a.mainLogger)
+			wintun.RemoveStaleTunAdapterCtx(a.lifecycleCtx, a.mainLogger)
 			a.apiServer.SetRestarting(wintun.EstimateReadyAt())
 			a.apiServer.SetTunAttempt(attempt, maxTunAttempts)
 			wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
@@ -257,16 +392,20 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 			// (например startBackground) пока шёл PollUntilFree.
 			// Запуск на устаревшем менеджере породил бы второй sing-box процесс.
 			if a.apiServer.GetXRayManager() != currentMgr {
-				a.mainLogger.Warn("XRay менеджер заменён во время TUN retry — прерываем")
+				a.mainLogger.Warn("sing-box менеджер заменён во время TUN retry — прерываем")
 				a.apiServer.ClearRestarting()
 				return
 			}
+			// Превентивное удаление dns_cache.db: wintun crash recovery делает taskkill —
+			// dns_cache.db может остаться заблокированным, новый старт упадёт с cache timeout.
+			_ = os.Remove(config.DNSCacheFile)
 			if startErr := currentMgr.StartAfterManualCleanup(); startErr != nil {
 				a.mainLogger.Error("TUN попытка %d/%d — не удалось запустить: %v", attempt, maxTunAttempts, startErr)
 				if attempt == maxTunAttempts {
 					a.apiServer.ClearRestarting()
-					notification.Send("Proxy — ошибка", fmt.Sprintf("Не удалось поднять TUN после %d попыток", maxTunAttempts))
+					notification.Send("SafeSky — ошибка", fmt.Sprintf("Не удалось поднять TUN после %d попыток", maxTunAttempts))
 					_ = a.proxyManager.Disable()
+					tray.SetWarming(false)
 					tray.SetEnabled(false)
 					return
 				}
@@ -277,18 +416,22 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 
 			// Успех: sing-box запущен — ждём подтверждения что TUN поднялся
 			a.apiServer.ClearRestarting()
-			killswitch.Disable(a.mainLogger)
+			// killswitch.Disable вызывается через defer выше — не дублируем
 			wintun.ResetAdaptiveGap()
 			a.mainLogger.Info("sing-box успешно перезапущен (PID: %d, попытка %d/%d)",
 				currentMgr.GetPID(), attempt, maxTunAttempts)
-			notification.Send("Proxy", fmt.Sprintf("Перезапущен ✓ (попытка %d/%d)", attempt, maxTunAttempts))
+			notification.Send("SafeSky", fmt.Sprintf("Перезапущен ✓ (попытка %d/%d)", attempt, maxTunAttempts))
+			// BUG FIX: при первом запуске startBackground мог выйти без включения прокси
+			// (WaitForSingBoxReady тайм-аут истёк до завершения TUN recovery).
+			// startupOnce гарантирует что включаем прокси ровно один раз.
+			a.startupOnce.Do(a.finalizeStartup)
 			return
 		}
 		return
 	}
 
 	a.mainLogger.Error("sing-box упал неожиданно (%v) — отключаем системный прокси", crashErr)
-	notification.Send("Proxy — ошибка", "sing-box упал. Проверьте лог и перезапустите.")
+	notification.Send("SafeSky — ошибка", "sing-box упал. Проверьте лог и перезапустите.")
 	// BUG FIX #NEW-4: убран блок killswitch.Enable для non-TUN краша.
 	// При не-TUN краше перезапуска sing-box не будет — прокси отключается навсегда
 	// до ручного рестарта. Включать Kill Switch (блокировать весь трафик) и сразу же
@@ -306,19 +449,129 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 	killswitch.Disable(a.mainLogger)
 }
 
+func (a *App) allowEngineAVRetry() bool {
+	a.engineCrashMu.Lock()
+	defer a.engineCrashMu.Unlock()
+
+	now := time.Now()
+	if a.engineCrashAt.IsZero() || now.Sub(a.engineCrashAt) > 3*time.Minute {
+		a.engineCrashAt = now
+		a.engineCrashCount = 0
+	}
+	if a.engineCrashCount >= 5 {
+		return false
+	}
+	a.engineCrashCount++
+	return true
+}
+
+// finalizeStartup выполняет post-startup логику: включение прокси, Proxy Guard,
+// GeoAutoUpdater, tray и pre-warm соединения.
+// Вызывается строго через startupOnce.Do — ровно один раз, либо из startBackground
+// при успешном старте, либо из handleCrash при успешном TUN recovery.
+func (a *App) finalizeStartup() {
+	// BUG FIX: если приложение уже завершается (пользователь вышел через трей во время
+	// TUN recovery), не включаем прокси и не показываем уведомление "Прокси готов".
+	// Без этой проверки startupOnce.Do вызывается, lifecycleCancel() уже отработал,
+	// но notification.Send ещё в очереди горутин — пользователь видит "Прокси готов ✓"
+	// уже после закрытия приложения, а системный прокси остаётся включённым.
+	if a.lifecycleCtx.Err() != nil {
+		a.mainLogger.Info("finalizeStartup: контекст отменён — пропускаем включение прокси и уведомление")
+		return
+	}
+
+	tray.SetWarming(false)
+	killswitch.Disable(a.mainLogger)
+	wintun.ResetAdaptiveGap()
+
+	proxyEnabled := false
+	if a.cfg.StartProxyOnLaunch {
+		if err := a.proxyManager.Enable(a.proxyConfig); err != nil {
+			a.mainLogger.Warn("Не удалось включить системный прокси: %v", err)
+		} else {
+			proxyEnabled = true
+			setClashMode(a.lifecycleCtx, a.mainLogger, "rule")
+		}
+	} else {
+		if err := a.proxyManager.Disable(); err != nil {
+			a.mainLogger.Warn("Не удалось оставить прокси выключенным при старте: %v", err)
+		}
+		setClashMode(a.lifecycleCtx, a.mainLogger, "direct")
+		a.mainLogger.Info("Автовключение прокси отключено — ожидаем нажатия кнопки включения")
+	}
+
+	// B-2: Proxy Guard
+	a.apiServer.SetProxyGuardInterval(a.cfg.ProxyGuardInterval)
+	if a.cfg.ProxyGuardEnabled {
+		if err := a.proxyManager.StartGuard(a.lifecycleCtx, a.cfg.ProxyGuardInterval); err != nil {
+			a.mainLogger.Warn("Не удалось запустить Proxy Guard: %v", err)
+		} else {
+			a.apiServer.SetProxyGuardEnabled(true)
+			a.mainLogger.Info("Proxy Guard запущен (интервал: %v)", a.cfg.ProxyGuardInterval)
+		}
+	}
+
+	tray.SetEnabled(proxyEnabled)
+	go a.refreshTrayServers(a.cfg.APIAddress)
+	if proxyEnabled {
+		notification.Send("SafeSky", "Прокси готов ✓")
+	} else {
+		notification.Send("SafeSky", "Прокси готов к ручному включению")
+	}
+
+	// B-10: GeoAutoUpdater
+	if a.cfg.GeoAutoUpdateEnabled {
+		interval := time.Duration(a.cfg.GeoAutoUpdateIntervalDays) * 24 * time.Hour
+		geoUpdater := api.NewGeoAutoUpdater(a.mainLogger, interval)
+		a.apiServer.SetGeoAutoUpdater(geoUpdater)
+		geoUpdater.Start(a.lifecycleCtx)
+		a.mainLogger.Info("B-10: GeoAutoUpdater запущен (интервал: %d дней)", a.cfg.GeoAutoUpdateIntervalDays)
+	}
+
+	a.mainLogger.Info("Фоновая инициализация завершена")
+	a.apiServer.DrainQueuedApply()
+	if proxyEnabled {
+		go preWarmProxyConnection(a.lifecycleCtx, config.ProxyAddr, a.cfg.WarmUpHosts, a.mainLogger)
+	}
+}
+
 // startBackground запускает фоновую инициализацию.
 // Wintun cleanup стартует НЕМЕДЛЕННО — параллельно с подъёмом API-сервера.
 // Sing-box запускается когда выполнены ОБА условия: apiReady И wintunReady.
 func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, apiReady <-chan struct{}) {
 	// Wintun cleanup — запускаем сразу, не ждём API.
-	// chan error: nil = успех, non-nil = engine download провалился → горутина 2 не стартует sing-box.
-	wintunReady := make(chan error, 1)
+	// err != nil = engine download провалился → горутина 2 не стартует sing-box.
+	type startupPrepResult struct {
+		err        error
+		dirtyStart bool
+	}
+	wintunReady := make(chan startupPrepResult, 1)
+	type cfgResult struct {
+		err error
+	}
+	cfgReady := make(chan cfgResult, 1)
+
+	// Конфиг не зависит от API и Wintun, поэтому готовим его параллельно.
+	go func() {
+		a.waitForSecretKey()
+		if a.lifecycleCtx.Err() != nil {
+			cfgReady <- cfgResult{err: a.lifecycleCtx.Err()}
+			return
+		}
+		routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
+		if err != nil {
+			a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
+			routingCfg = config.DefaultRoutingConfig()
+		}
+		cfgReady <- cfgResult{err: config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)}
+	}()
+
 	go func() {
 		// Auto-Engine: скачиваем sing-box.exe если отсутствует.
 		// Проверяем до wintun — нет смысла чистить wintun если движка нет.
 		if engine.NeedsDownload(a.cfg.SingBoxPath) {
 			a.mainLogger.Info("sing-box.exe не найден — автоматическая загрузка...")
-			notification.Send("Proxy", "Загружаем sing-box.exe...")
+			notification.Send("SafeSky", "Загружаем sing-box.exe...")
 
 			// Повторяем загрузку до 3 раз: первая попытка может вернуть повреждённый
 			// бинарник (0xc0000005 — AV сканирует файл, sing-box.exe удаляется автоматически),
@@ -328,7 +581,7 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			for attempt := 1; attempt <= maxDownloadAttempts; attempt++ {
 				if attempt > 1 {
 					a.mainLogger.Warn("engine: повторная загрузка (попытка %d/%d)...", attempt, maxDownloadAttempts)
-					notification.Send("Proxy", fmt.Sprintf("Повторная загрузка sing-box... (%d/%d)", attempt, maxDownloadAttempts))
+					notification.Send("SafeSky", fmt.Sprintf("Повторная загрузка sing-box... (%d/%d)", attempt, maxDownloadAttempts))
 					select {
 					case <-time.After(2 * time.Second):
 					case <-a.lifecycleCtx.Done():
@@ -354,13 +607,18 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 				a.mainLogger.Error("engine: попытка %d/%d не удалась: %v", attempt, maxDownloadAttempts, lastDownloadErr)
 			}
 			if lastDownloadErr != nil {
+				// При отмене контекста (пользователь закрыл приложение) — не показываем ошибку.
+				if errors.Is(lastDownloadErr, context.Canceled) || errors.Is(lastDownloadErr, context.DeadlineExceeded) {
+					wintunReady <- startupPrepResult{err: lastDownloadErr}
+					return
+				}
 				a.mainLogger.Error("Не удалось загрузить sing-box.exe: %v", lastDownloadErr)
-				notification.Send("Proxy — ошибка", "Не удалось загрузить sing-box. Откройте приложение.")
-				wintunReady <- lastDownloadErr
+				notification.Send("SafeSky — ошибка", "Не удалось загрузить sing-box. Проверьте интернет и перезапустите.")
+				wintunReady <- startupPrepResult{err: lastDownloadErr}
 				return
 			}
 			a.mainLogger.Info("sing-box.exe успешно загружен ✓")
-			notification.Send("Proxy", "sing-box.exe загружен ✓")
+			notification.Send("SafeSky", "sing-box.exe загружен ✓")
 		}
 
 		a.mainLogger.Info("Фоновая инициализация: wintun cleanup...")
@@ -370,25 +628,42 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Info("Удалён осиротевший .pending конфиг от предыдущего запуска")
 		}
 
+		// БАГ 9: удаляем устаревший wintun_stopped_at если он старше 24ч.
+		// После перезагрузки Windows или длительного простоя наносекундная метка
+		// из прошлого сеанса вычисляет нереалистично большой gap (дни, не секунды).
+		// PollUntilFree в этом случае должен использовать dirty-путь, а не gap от старой метки.
+		if fi, err := os.Stat(wintun.StopFile); err == nil {
+			if time.Since(fi.ModTime()) > 24*time.Hour {
+				a.mainLogger.Info("wintun: удаляем устаревший wintun_stopped_at (mtime=%s)", fi.ModTime().Format(time.RFC3339))
+				_ = os.Remove(wintun.StopFile)
+			}
+		}
+
 		// ОПТИМИЗАЦИЯ: при чистом завершении (CleanShutdownFile) пропускаем
 		// RemoveStaleTunAdapter (taskkill + sc stop + pnputil + reg delete) — ~3-5с.
 		// PollUntilFree сразу вернётся (путь 0: gap=0, settle=0).
 		// При грязном старте (краш, kill -9) — полная очистка как раньше.
 		_, cleanShutdown := os.Stat(wintun.CleanShutdownFile)
+		dirtyStart := cleanShutdown != nil
 		if cleanShutdown != nil {
-			// CleanShutdownFile нет → грязный старт — нужна полная очистка
-			// ForceDeleteAdapter вызывается внутри RemoveStaleTunAdapter ДО sc stop wintun.
-			// После sc stop wintun.dll не может связаться с драйвером → WintunOpenAdapter
-			// возвращает NULL не потому что адаптер свободен, а потому что драйвер выгружен.
-			// Повторный вызов ForceDeleteAdapter здесь давал ложный true → FastDeleteFile →
-			// PollUntilFree использовал 3с settle вместо 60с gap → sing-box стартовал пока
-			// stale kernel-объект ещё жив → FATAL "Cannot create a file when that file already exists".
-			wintun.RemoveStaleTunAdapter(a.mainLogger)
+			if _, stopErr := os.Stat(wintun.StopFile); os.IsNotExist(stopErr) &&
+				!wintun.StartupCleanupNeeded(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName) {
+				dirtyStart = false
+			} else {
+				// CleanShutdownFile нет → грязный старт — нужна полная очистка
+				// ForceDeleteAdapter вызывается внутри RemoveStaleTunAdapter ДО sc stop wintun.
+				// После sc stop wintun.dll не может связаться с драйвером → WintunOpenAdapter
+				// возвращает NULL не потому что адаптер свободен, а потому что драйвер выгружен.
+				// Повторный вызов ForceDeleteAdapter здесь давал ложный true → FastDeleteFile →
+				// PollUntilFree использовал 3с settle вместо 60с gap → sing-box стартовал пока
+				// stale kernel-объект ещё жив → FATAL "Cannot create a file when that file already exists".
+				wintun.RemoveStaleTunAdapterCtx(a.lifecycleCtx, a.mainLogger)
+			}
 		} else {
 			a.mainLogger.Info("wintun: чистое завершение — пропускаем RemoveStaleTunAdapter")
 		}
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
-		wintunReady <- nil
+		wintunReady <- startupPrepResult{dirtyStart: dirtyStart}
 	}()
 
 	go func() {
@@ -397,35 +672,19 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		// часть gap уже может быть отработана.
 		<-apiReady
 		tray.SetEnabled(false)
+		tray.SetWarming(true)
 
-		// Ждём вставки VLESS ключа перед генерацией конфига.
-		// Иначе на первом запуске с пустым secret.key конфиг может сгенерироваться
-		// раньше, чем пользователь успеет вставить ключ во UI, и инициализация завершится.
-		a.waitForSecretKey()
-
-		type cfgResult struct {
-			err error
-		}
-		cfgReady := make(chan cfgResult, 1)
-		go func() {
-			routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
-			if err != nil {
-				a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
-				routingCfg = config.DefaultRoutingConfig()
-			}
-			cfgErr := config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)
-			cfgReady <- cfgResult{err: cfgErr}
-		}()
+		// Сохраняем proxyConfig чтобы handleCrash мог использовать его при TUN recovery.
+		a.proxyConfig = proxyConfig
 
 		// Ждём завершения обоих: wintun/engine И генерации конфига.
 		// Если engine download упал — engineErr != nil, не запускаем sing-box.
-		engineErr := <-wintunReady
-		cfgRes := <-cfgReady
-
-		if engineErr != nil {
-			a.mainLogger.Error("Прерываем запуск sing-box: engine не готов (%v)", engineErr)
+		prep := <-wintunReady
+		if prep.err != nil {
+			a.mainLogger.Error("Прерываем запуск sing-box: engine не готов (%v)", prep.err)
 			return
 		}
+		cfgRes := <-cfgReady
 
 		a.mainLogger.Info("Запуск sing-box...")
 		if cfgRes.err != nil {
@@ -434,72 +693,63 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			}
 		}
 
-		// Дополнительная очистка TUN адаптера перед запуском sing-box
-		if wintun.ForceDeleteAdapter(config.TunInterfaceName) {
-			a.mainLogger.Info("wintun: дополнительная очистка адаптера перед запуском sing-box")
+		// DNS cache сохраняем на чистом старте: это ускоряет первые DNS-ответы после запуска.
+		// Удаляем только после грязного завершения/cleanup, когда файл мог остаться заблокированным.
+		if prep.dirtyStart {
+			if removeErr := os.Remove(config.DNSCacheFile); removeErr == nil {
+				a.mainLogger.Info("dns_cache.db удалён после грязного старта")
+			}
 		}
 
 		xrayManager, err := xray.NewManager(xrayCfg, a.lifecycleCtx)
 		if err != nil {
 			a.mainLogger.Error("Не удалось запустить sing-box: %v", err)
-			notification.Send("Proxy — ошибка", "Не удалось запустить sing-box. Проверьте лог.")
+			notification.Send("SafeSky — ошибка", "Не удалось запустить sing-box. Проверьте лог.")
 			return
 		}
 		a.mainLogger.Info("Sing-box запущен (PID: %d)", xrayManager.GetPID())
 		a.apiServer.SetXRayManager(xrayManager)
 
-		a.mainLogger.Info("Ожидание готовности sing-box на %s...", config.ProxyAddr)
-		if err := netutil.WaitForPort(a.lifecycleCtx, config.ProxyAddr, 15*time.Second); err != nil {
+		// BUG FIX #5: заменяем WaitForPort (TCP-пробинг 127.0.0.1:10807, 15s) на
+		// WaitForSingBoxReady (HTTP-поллинг Clash API :9090, 60s).
+		// WaitForPort не гарантировал готовность TUN — порт 10807 мог открыться раньше
+		// чем wintun завершил инициализацию интерфейса ("open interface take too much time").
+		// WaitForSingBoxReady опрашивает тот же endpoint что и doApply — единая точка проверки.
+		a.mainLogger.Info("Ожидание готовности sing-box (Clash API)...")
+		if err := api.WaitForSingBoxReady(a.lifecycleCtx, a.mainLogger); err != nil {
 			// Если sing-box уже мёртв (например: FATAL[0000] из-за невалидного конфига),
 			// включать прокси бессмысленно — на порту никто не слушает.
 			// Включаем только если процесс ещё жив (медленный старт, антивирус и т.п.).
 			if !xrayManager.IsRunning() {
+				// BUG FIX: если doApply заменил менеджер (TriggerApplyFull / смена сервера),
+				// наш xrayManager M1 был остановлен намеренно. Это нормально — не ошибка.
+				// doApply создал новый менеджер M2 и управляет им самостоятельно.
+				// Не логируем ERROR, не отправляем уведомление.
+				if a.apiServer.GetXRayManager() != xrayManager {
+					a.mainLogger.Info("sing-box завершился — управление передано doApply (менеджер заменён)")
+					// finalizeStartup вызовет doApply при успехе или handleCrash при TUN recovery.
+					return
+				}
+				// BUG FIX: если apiServer.IsRestarting() — handleCrash выполняет TUN recovery.
+				// Не логируем ERROR и не отправляем уведомление об ошибке: handleCrash
+				// сам перезапустит sing-box и вызовет finalizeStartup при успехе.
+				// Раньше пользователь видел пугающее "sing-box не запустился" в логах-аномалиях
+				// хотя TUN recovery успешно завершался через 30-120с.
+				if a.apiServer.IsRestarting() {
+					a.mainLogger.Info("sing-box завершился — TUN recovery в процессе (handleCrash)")
+					return
+				}
 				a.mainLogger.Error("sing-box завершился с ошибкой конфига или не запустился — прокси не включаем")
-				notification.Send("Proxy — ошибка", "sing-box не запустился. Проверьте лог.")
+				notification.Send("SafeSky — ошибка", "sing-box не запустился. Проверьте лог.")
+				// НЕ вызываем finalizeStartup — handleCrash вызовет её при успешном TUN recovery.
 				return
 			}
-			a.mainLogger.Warn("sing-box не ответил за 15с: %v — включаем прокси всё равно", err)
+			a.mainLogger.Warn("sing-box не ответил за 60с: %v — включаем прокси всё равно", err)
 		} else {
 			a.mainLogger.Info("sing-box готов")
 		}
+		a.startupOnce.Do(a.finalizeStartup)
 
-		killswitch.Disable(a.mainLogger)
-		wintun.ResetAdaptiveGap()
-		if err := a.proxyManager.Enable(proxyConfig); err != nil {
-			a.mainLogger.Warn("Не удалось включить системный прокси: %v", err)
-		}
-
-		// B-2: Запускаем Proxy Guard — восстановление прокси если он был отключен извне
-		if a.cfg.ProxyGuardEnabled {
-			if err := a.proxyManager.StartGuard(a.lifecycleCtx, a.cfg.ProxyGuardInterval); err != nil {
-				a.mainLogger.Warn("Не удалось запустить Proxy Guard: %v", err)
-			} else {
-				a.apiServer.SetProxyGuardEnabled(true)
-				a.mainLogger.Info("Proxy Guard запущен (интервал: %v)", a.cfg.ProxyGuardInterval)
-			}
-		}
-
-		tray.SetEnabled(true)
-		notification.Send("Proxy", "Прокси готов ✓")
-
-		// B-10: запускаем GeoAutoUpdater — проверяет устаревшие geosite файлы
-		if a.cfg.GeoAutoUpdateEnabled {
-			interval := time.Duration(a.cfg.GeoAutoUpdateIntervalDays) * 24 * time.Hour
-			geoUpdater := api.NewGeoAutoUpdater(a.mainLogger, interval)
-			a.apiServer.SetGeoAutoUpdater(geoUpdater)
-			geoUpdater.Start(a.lifecycleCtx)
-			a.mainLogger.Info("B-10: GeoAutoUpdater запущен (интервал: %d дней)", a.cfg.GeoAutoUpdateIntervalDays)
-		}
-
-		a.mainLogger.Info("Фоновая инициализация завершена")
-
-		go preWarmProxyConnection(a.lifecycleCtx, config.ProxyAddr, a.cfg.WarmUpHosts, a.mainLogger)
-
-		// Запускаем watchdog + TURN fallback после того как sing-box готов.
-		// extractServerIP возвращает "" если ключ не распознан — мониторинг пропускаем.
-		if serverIP := a.extractServerIP(a.cfg.SecretFile); serverIP != "" {
-			go a.startConnectionMonitor(serverIP)
-		}
 	}()
 }
 
@@ -509,7 +759,7 @@ func (a *App) handleConfigError(err error) bool {
 	secretData, readErr := os.ReadFile(a.cfg.SecretFile)
 	if readErr != nil || len(secretData) == 0 {
 		a.mainLogger.Error("файл %s не найден или пуст — вставьте вашу VLESS-ссылку", a.cfg.SecretFile)
-		notification.Send("Proxy — ошибка", "Вставьте VLESS-ссылку в secret.key")
+		notification.Send("SafeSky — ошибка", "Вставьте VLESS-ссылку в secret.key")
 		return false
 	}
 	allComments := true
@@ -522,7 +772,7 @@ func (a *App) handleConfigError(err error) bool {
 	}
 	if allComments {
 		a.mainLogger.Error("файл %s содержит только комментарии — вставьте вашу VLESS-ссылку", a.cfg.SecretFile)
-		notification.Send("Proxy — ошибка", "Вставьте VLESS-ссылку в secret.key")
+		notification.Send("SafeSky — ошибка", "Вставьте VLESS-ссылку в secret.key")
 		return false
 	}
 	a.mainLogger.Warn("Не удалось сгенерировать sing-box конфиг: %v", err)
@@ -549,14 +799,26 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 			if err := xrayMgr.Stop(); err != nil {
 				a.mainLogger.Error("Ошибка при остановке sing-box: %v", err)
 			}
-			wintun.RecordCleanShutdown()
+			// BUG FIX: RecordCleanShutdown() перенесён в OnGracefulStop callback.
+			// Раньше RecordCleanShutdown() вызывался здесь ВСЕГДА — даже если sing-box
+			// был убит принудительно (Kill) или находился в crash-recovery состоянии.
+			// Результат: CleanShutdownFile создавался при грязном завершении →
+			// следующий старт пропускал RemoveStaleTunAdapterCtx → stale wintun kernel
+			// объект оставался → FATAL "Cannot create a file when that file already exists".
+			//
+			// Правильно: CleanShutdownFile пишется ТОЛЬКО OnGracefulStop (CTRL+BREAK
+			// graceful path), что гарантирует sing-box корректно закрыл WintunCloseAdapter.
+			// При Kill или краше файл НЕ создаётся → следующий старт выполнит полную очистку.
 		}
 	}
 	if processMonitor != nil {
 		processMonitor.Stop()
 	}
 
-	wintun.RecordStop()
+	// BUG FIX #18: RecordStop() удаляет CleanShutdownFile — не вызываем его
+	// при штатном завершении, потому что RecordCleanShutdown() записан
+	// через OnGracefulStop при CTRL+BREAK graceful stop.
+	// Следующий старт увидит CleanShutdownFile → PollUntilFree вернётся мгновенно.
 	wintun.ResetAdaptiveGap()
 	a.mainLogger.Info("Очистка TUN адаптера при выходе...")
 	wintun.Shutdown(a.mainLogger)
@@ -690,129 +952,25 @@ func resolveServerIP(ctx context.Context, secretFile string) string {
 	return addrs[0]
 }
 
-// startConnectionMonitor регистрирует ручное управление TURN из UI.
-// Авто-переключение (watchdog → TURN) отключено: сервер использует нестандартный
-// порт и DPI-блокировки нет — автоматика не нужна.
-// Ручная кнопка в UI по-прежнему работает.
-func (a *App) startConnectionMonitor(serverIP string) {
-	turnMgr := turnmanager.New(turnmanager.Config{
-		Logger: a.mainLogger,
-		OnSwitch: func(mode turnmanager.Mode) error {
-			if current := a.extractServerIP(a.cfg.SecretFile); current != "" {
-				return a.applyTURNMode(mode, current)
-			}
-			return a.applyTURNMode(mode, serverIP)
-		},
-	})
-
-	// Ручное управление TURN из UI (кнопка «Обход белых списков»).
-	a.apiServer.SetManualTURNFn(func(enabled bool) error {
-		if enabled {
-			turnMgr.SwitchToTURNManual()
-		} else {
-			turnMgr.SwitchToDirect()
-		}
-		a.apiServer.SetTURNManual(enabled)
-		return nil
-	})
-
-	// Watchdog не запускаем — авто-переключение на TURN отключено.
-	// Блокируем горутину до завершения приложения.
-	<-a.lifecycleCtx.Done()
-	turnMgr.Shutdown()
-}
-
-// applyTURNMode переключает sing-box между прямым соединением и TURN туннелем.
-//
-// Порядок операций при переключении на TURN:
-//  1. Останавливаем старый turnproxy если есть (BUG FIX: port conflict).
-//  2. Запускаем новый turnproxy на 127.0.0.1:9000.
-//  3. Генерируем конфиг sing-box с TURNOverride (VLESS outbound → 127.0.0.1:9000).
-//  4. Перезапускаем sing-box — трафик идёт через turnproxy → relay → бэкенд.
-//
-// При возврате на direct:
-//  1. Восстанавливаем конфиг sing-box (без TURNOverride).
-//  2. Перезапускаем sing-box.
-//  3. Останавливаем turnproxy (он больше не нужен).
-func (a *App) applyTURNMode(mode turnmanager.Mode, serverIP string) error {
-	a.mainLogger.Info("applyTURNMode: переключение в режим %s", mode)
-
-	if mode == turnmanager.ModeTURN {
-		// BUG FIX: останавливаем старый turnproxy перед запуском нового.
-		// Без этого при повторном включении TURN (после быстрого direct→TURN→direct→TURN)
-		// порт 9000 уже занят предыдущим экземпляром → "bind: Only one usage of each
-		// socket address". Это приводило к тому что TURN не включался при второй попытке.
-		if a.turnProxy != nil {
-			a.mainLogger.Info("applyTURNMode: останавливаем предыдущий turnproxy перед запуском нового")
-			a.turnProxy.Stop()
-			a.turnProxy = nil
-		}
-
-		// Шаг 1: запускаем turnproxy ДО перезапуска sing-box.
-		// Relay адрес: тот же IP сервера, настраиваемый порт (default 3478 UDP).
-		// Порт 443 UDP — альтернатива если 3478 заблокирован провайдером.
-		port := a.cfg.TURNRelayPort
-		if port == 0 {
-			port = 3478
-		}
-		relayAddr := fmt.Sprintf("%s:%d", serverIP, port)
-		tp := turnproxy.New(turnproxy.Config{
-			RelayAddr: relayAddr,
-			Logger:    a.mainLogger,
-		})
-		if err := tp.Start(a.lifecycleCtx); err != nil {
-			return fmt.Errorf("turnproxy start: %w", err)
-		}
-		a.turnProxy = tp
-		a.mainLogger.Info("applyTURNMode: turnproxy запущен → relay %s", relayAddr)
-	}
-
-	var turnOvr *config.TURNOverride
-	if mode == turnmanager.ModeTURN {
-		turnOvr = &config.TURNOverride{
-			ProxyAddr:    turnmanager.TURNProxyAddr,
-			RealServerIP: serverIP,
-		}
-	}
-
-	routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
+func setClashMode(ctx context.Context, log logger.Logger, mode string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, config.ClashAPIBase+"/configs",
+		strings.NewReader(`{"mode":"`+mode+`"}`))
 	if err != nil {
-		a.mainLogger.Warn("applyTURNMode: не удалось загрузить routing config: %v — используем дефолтный", err)
-		routingCfg = config.DefaultRoutingConfig()
+		return
 	}
-
-	if err := config.GenerateSingBoxConfigWithMode(
-		a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg, turnOvr,
-	); err != nil {
-		// Откатываем turnproxy если конфиг не сгенерировался.
-		if a.turnProxy != nil {
-			a.turnProxy.Stop()
-			a.turnProxy = nil
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		if log != nil {
+			log.Debug("Clash API недоступен при смене режима на %q: %v", mode, err)
 		}
-		return fmt.Errorf("генерация конфига: %w", err)
+		return
 	}
-
-	// Перезапускаем sing-box с новым конфигом.
-	if err := a.apiServer.TriggerRestart(a.cfg.ConfigPath); err != nil {
-		if mode == turnmanager.ModeTURN && a.turnProxy != nil {
-			a.turnProxy.Stop()
-			a.turnProxy = nil
-		}
-		return err
+	_ = resp.Body.Close()
+	if log != nil {
+		log.Info("TUN режим переключён: %s", mode)
 	}
-
-	// Шаг 3 при возврате на direct: останавливаем turnproxy ПОСЛЕ того как
-	// sing-box уже переключён и больше не шлёт трафик на :9000.
-	if mode == turnmanager.ModeDirect && a.turnProxy != nil {
-		a.turnProxy.Stop()
-		a.turnProxy = nil
-		a.mainLogger.Info("applyTURNMode: turnproxy остановлен")
-	}
-
-	// Уведомляем API сервер о смене режима — фронтенд отобразит индикатор.
-	a.apiServer.SetTURNMode(mode == turnmanager.ModeTURN)
-
-	return nil
 }
 
 // preWarmProxyConnection устанавливает соединение через HTTP прокси сразу после старта.

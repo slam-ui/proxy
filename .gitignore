@@ -52,6 +52,9 @@ FILE_AUDIT_REPORT.md
 
 # Runtime markers
 cmd/proxy-client/wintun_stopped_at
+cmd/proxy-client/clean_shutdown
+cmd/proxy-client/dns_cache.db
+cmd/proxy-client/*.version
 
 # Generated geosite files (re-downloaded on startup)
 geosite-*.bin
@@ -74,6 +77,9 @@ test-output/
 # Cache
 .cache/
 .local/
+
+# Local Codex workspace notes
+.codex-project-context.md
 
 # Windows
 *.lnk

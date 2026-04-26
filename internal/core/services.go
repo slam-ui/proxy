@@ -23,7 +23,6 @@ type Services struct {
 	Routing      RoutingService
 	Log          LogService
 	Notification NotificationService
-	TURN         TURNService
 }
 
 // Validate проверяет что обязательные сервисы инициализированы.

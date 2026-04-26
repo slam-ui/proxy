@@ -736,11 +736,11 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 
 	workDir := filepath.Dir(singboxPath)
 
-	// Убеждаемся что proxy-client не запущен — он перехватит наш kill
+	// Убеждаемся что SafeSky не запущен — он перехватит наш kill
 	if out, _ := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
-		"Get-Process -Name proxy-client -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
+		"Get-Process -Name SafeSky -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
 	).Output(); len(strings.TrimSpace(string(out))) > 0 {
-		t.Fatal("proxy-client.exe запущен — закрой его перед E2E тестом")
+		t.Fatal("SafeSky.exe запущен — закрой его перед E2E тестом")
 	}
 
 	// Чистим возможные зависшие экземпляры

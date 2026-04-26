@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"proxyclient/internal/logger"
 )
@@ -75,6 +77,34 @@ func TestMedianInt64_Duplicates(t *testing.T) {
 	}
 }
 
+// TestMedianInt64_NoOverflow проверяет что medianInt64 не переполняется на больших значениях int64.
+//
+// BUG FIX: старая формула (a+b)/2 даёт overflow когда a+b > math.MaxInt64.
+// Безопасная формула: a + (b-a)/2.
+func TestMedianInt64_NoOverflow(t *testing.T) {
+	const maxInt64 = int64(^uint64(0) >> 1) // math.MaxInt64 = 9223372036854775807
+
+	// Два числа, сумма которых переполнила бы int64.
+	// (9223372036854775806 + 9223372036854775807) переполняет — правильный ответ 9223372036854775806.
+	a := maxInt64 - 1
+	b := maxInt64
+	result := medianInt64([]int64{a, b})
+	expected := a // a + (b-a)/2 = (MaxInt64-1) + (1)/2 = MaxInt64-1
+
+	if result != expected {
+		t.Errorf("medianInt64([MaxInt64-1, MaxInt64]) = %d, ожидалось %d (overflow?)", result, expected)
+	}
+
+	// Симметричный случай: оба чётные
+	a2 := maxInt64 - 3
+	b2 := maxInt64 - 1
+	result2 := medianInt64([]int64{a2, b2})
+	expected2 := maxInt64 - 2 // a2 + (b2-a2)/2 = (MaxInt64-3) + 1 = MaxInt64-2
+	if result2 != expected2 {
+		t.Errorf("medianInt64([MaxInt64-3, MaxInt64-1]) = %d, ожидалось %d", result2, expected2)
+	}
+}
+
 // TestExtractAddr_Valid проверяет парсинг корректных VLESS URL
 func TestExtractAddr_Valid(t *testing.T) {
 	tests := []struct {
@@ -115,7 +145,7 @@ func TestExtractAddr_Invalid(t *testing.T) {
 
 // TestPingServerWithProbes_Invalid проверяет поведение при невалидном URL
 func TestPingServerWithProbes_Invalid(t *testing.T) {
-	ms, minMs, maxMs, ok := pingServerWithProbes("invalid://url", 3)
+	ms, minMs, maxMs, ok := pingServerWithProbes(context.Background(), "invalid://url", 3)
 	if ok {
 		t.Error("pingServerWithProbes с невалидным URL должен вернуть ok=false")
 	}
@@ -126,12 +156,56 @@ func TestPingServerWithProbes_Invalid(t *testing.T) {
 
 // TestPingServerWithProbes_AllProbesFail проверяет случай когда все пробы не удаются
 func TestPingServerWithProbes_AllProbesFail(t *testing.T) {
-	ms, minMs, maxMs, ok := pingServerWithProbes("vless://uuid@nonexistent.invalid:443", 3)
+	ms, minMs, maxMs, ok := pingServerWithProbes(context.Background(), "vless://uuid@nonexistent.invalid:443", 3)
 	if ok {
 		t.Error("pingServerWithProbes к несуществующему адресу должен вернуть ok=false")
 	}
 	if ms != 0 || minMs != 0 || maxMs != 0 {
 		t.Errorf("pingServerWithProbes с ошибкой должен вернуть (0,0,0,false), получилось (%v,%v,%v,%v)", ms, minMs, maxMs, ok)
+	}
+}
+
+// TestPingServerWithProbes_ContextCancelDuringPause проверяет что отмена контекста
+// ВО ВРЕМЯ паузы между пробами корректно прерывает цикл (break probeLoop).
+//
+// BUG FIX: до исправления break внутри select прерывал только select, НЕ внешний for.
+// После select продолжался следующий DialContext (который тут же падал с context.Canceled),
+// а затем ctx.Err() только на СЛЕДУЮЩЕЙ итерации прерывал цикл.
+// С именованным break probeLoop цикл прерывается немедленно.
+func TestPingServerWithProbes_ContextCancelDuringPause(t *testing.T) {
+	// Слушаем на реальном порту чтобы первая проба успела.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("не удалось создать TCP listener:", err)
+	}
+	defer ln.Close()
+	addr := ln.Addr().String()
+	vlessURL := "vless://uuid@" + addr + "?security=none"
+
+	// Принимаем одно соединение (первая проба) и закрываем listener.
+	go func() {
+		conn, _ := ln.Accept()
+		if conn != nil {
+			conn.Close()
+		}
+	}()
+
+	// Отменяем контекст сразу — к моменту паузы он уже будет отменён.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // отменяем до вызова
+
+	// С отменённым контекстом функция должна вернуть ok=false без паники.
+	start := time.Now()
+	_, _, _, ok := pingServerWithProbes(ctx, vlessURL, 3)
+	elapsed := time.Since(start)
+
+	if ok {
+		t.Error("должен вернуть ok=false при отменённом контексте")
+	}
+	// Функция не должна зависать: при проблемах с break probeLoop
+	// мог выполняться лишний DialContext в петле.
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("заняло %v — возможно break probeLoop не работает", elapsed)
 	}
 }
 

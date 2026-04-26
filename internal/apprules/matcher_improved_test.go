@@ -79,7 +79,7 @@ func TestMatcher_Match_EmptyPatternAndValue(t *testing.T) {
 		value   string
 		want    bool
 	}{
-		{"", "", true},          // пустой паттерн матчит пустое значение
+		{"", "", true},            // пустой паттерн матчит пустое значение
 		{"", "chrome.exe", false}, // пустой паттерн НЕ матчит непустое
 		{"chrome.exe", "", false}, // непустой паттерн НЕ матчит пустое
 	}
@@ -262,10 +262,10 @@ func TestMatcher_Match_BracketPattern_NoPanic(t *testing.T) {
 	}()
 
 	cases := []string{
-		"[abc].exe",        // валидный character class
-		"[.exe",            // невалидный — незакрытая скобка
-		"app[0-9].exe",     // валидный диапазон
-		"app[0-9.exe",      // невалидный
+		"[abc].exe",    // валидный character class
+		"[.exe",        // невалидный — незакрытая скобка
+		"app[0-9].exe", // валидный диапазон
+		"app[0-9.exe",  // невалидный
 	}
 
 	for _, pattern := range cases {

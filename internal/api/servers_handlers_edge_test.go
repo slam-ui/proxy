@@ -16,12 +16,12 @@ import (
 
 // TestPingServerWithProbes_ZeroProbes проверяет что probes=0 не вызывает панику.
 func TestPingServerWithProbes_ZeroProbes(t *testing.T) {
-	_, _, _, _ = pingServerWithProbes("vless://uuid@8.8.8.8:443", 0)
+	_, _, _, _ = pingServerWithProbes(context.Background(), "vless://uuid@8.8.8.8:443", 0)
 }
 
 // TestPingServerWithProbes_NegativeProbes проверяет что probes<0 не вызывает панику.
 func TestPingServerWithProbes_NegativeProbes(t *testing.T) {
-	_, _, _, _ = pingServerWithProbes("vless://uuid@8.8.8.8:443", -1)
+	_, _, _, _ = pingServerWithProbes(context.Background(), "vless://uuid@8.8.8.8:443", -1)
 }
 
 // ── Импорт из буфера обмена (B-6) ─────────────────────────────────────────────

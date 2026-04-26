@@ -11,20 +11,22 @@
 package killswitch
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"proxyclient/internal/logger"
 )
 
 const (
-	ruleNameBlock  = "ProxyClient-KillSwitch-Block"
-	ruleNameAllow  = "ProxyClient-KillSwitch-Allow"
+	ruleNameBlock   = "ProxyClient-KillSwitch-Block"
+	ruleNameAllow   = "ProxyClient-KillSwitch-Allow"
 	ruleNameBlockV6 = "ProxyClient-KillSwitch-Block-IPv6"
-	ksStateFile    = "killswitch_active"
+	ksStateFile     = "killswitch_active"
 )
 
 var (
@@ -146,12 +148,18 @@ func deleteRules() bool {
 }
 
 // runNetsh запускает netsh скрытно. Возвращает true при успехе.
+// BUG FIX: используем CommandContext с таймаутом 10 секунд и WaitDelay 1 секунду.
+// Без таймаута netsh может заблокировать на WaitForSingleObject(INFINITE) если
+// процесс не реагирует (нет прав администратора или системная проблема).
 func runNetsh(args ...string) bool {
-	cmd := exec.Command("netsh", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "netsh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
 		HideWindow:    true,
 	}
+	cmd.WaitDelay = 1 * time.Second
 	out, err := cmd.CombinedOutput()
 	// "No rules match" при delete — это нормально
 	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no rules match") {

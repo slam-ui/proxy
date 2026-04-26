@@ -1,10 +1,12 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -43,6 +45,8 @@ func (p *stubProxy) IsEnabled() bool                                            
 func (p *stubProxy) GetConfig() proxy.Config                                      { return proxy.Config{} }
 func (p *stubProxy) StartGuard(ctx context.Context, interval time.Duration) error { return nil } // B-2
 func (p *stubProxy) StopGuard()                                                   {}             // B-2
+func (p *stubProxy) PauseGuard(d time.Duration)                                   {}             // БАГ 14
+func (p *stubProxy) ResumeGuard()                                                 {}             // БАГ 14
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -70,6 +74,7 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 	// xray.Config нужен TunHandlers только для doApply; в unit-тестах правил не вызываем.
 	h := srv.SetupTunRoutes(xray.Config{})
 	// Регистрируем все feature-роуты чтобы тесты покрывали реальный набор эндпоинтов
+	SetupProfileRoutes(srv)
 	SetupSettingsRoutes(srv)
 	srv.FinalizeRoutes()
 
@@ -493,6 +498,52 @@ func TestProfiles_SaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestProfiles_ApplyReplacesTunRules(t *testing.T) {
+	srv, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	// Текущие правила отличаются от профиля.
+	postJSON(t, srv.router, "/api/tun/rules", AddRuleRequest{Value: "old.example", Action: config.ActionDirect})
+
+	payload := map[string]interface{}{
+		"name": "Work",
+		"routing": config.RoutingConfig{
+			DefaultAction: config.ActionDirect,
+			BypassEnabled: true,
+			Rules: []config.RoutingRule{
+				{Value: "PROFILE.EXAMPLE", Type: config.RuleTypeDomain, Action: config.ActionProxy},
+			},
+		},
+	}
+	w := postJSON(t, srv.router, "/api/profiles", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/profiles = %d, body: %s", w.Code, w.Body)
+	}
+
+	w = postJSON(t, srv.router, "/api/profiles/Work/apply", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/profiles/Work/apply = %d, body: %s", w.Code, w.Body)
+	}
+
+	w = getJSON(t, srv.router, "/api/tun/rules")
+	var resp RulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules: %v", err)
+	}
+	if resp.DefaultAction != config.ActionDirect {
+		t.Errorf("DefaultAction = %q, want direct", resp.DefaultAction)
+	}
+	if !resp.BypassEnabled {
+		t.Error("BypassEnabled должен применяться из профиля")
+	}
+	if len(resp.Rules) != 1 || resp.Rules[0].Value != "profile.example" {
+		t.Fatalf("rules после apply = %+v, want one normalized profile.example rule", resp.Rules)
+	}
+	if resp.Rules[0].Action != config.ActionProxy {
+		t.Errorf("rule action = %q, want proxy", resp.Rules[0].Action)
+	}
+}
+
 func TestProfiles_List(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
@@ -913,62 +964,91 @@ func TestRateLimit_GetRequestsNotLimited(t *testing.T) {
 	}
 }
 
-// ─── SetTURNMode / turn_active в /api/status ────────────────────────────────
+// ── БАГ 6: handleBackup returns valid ZIP ─────────────────────────────────────
 
-func TestSetTURNMode_StatusReflectsTURNActive(t *testing.T) {
-	srv := NewServer(Config{
-		XRayManager:  &stubXray{running: true},
-		ProxyManager: &stubProxy{enabled: true},
-		Logger:       &logger.NoOpLogger{},
-	}, context.Background())
-	srv.FinalizeRoutes()
-
-	// По умолчанию TURN неактивен.
-	w := getJSON(t, srv.router, "/api/status")
-	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.TurnActive {
-		t.Error("TurnActive должен быть false по умолчанию")
+// TestHandleBackup_ValidZIP проверяет что handleBackup возвращает валидный ZIP без двойного Close.
+func TestHandleBackup_ValidZIP(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
 	}
+	defer os.Chdir(old)
 
-	// Активируем TURN.
-	srv.SetTURNMode(true)
-	w = getJSON(t, srv.router, "/api/status")
-	resp = StatusResponse{}
-	json.NewDecoder(w.Body).Decode(&resp)
-	if !resp.TurnActive {
-		t.Error("TurnActive должен быть true после SetTURNMode(true)")
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/backup", nil)
+	w := httptest.NewRecorder()
+	srv.handleBackup(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200", w.Code)
 	}
-
-	// Возвращаем direct.
-	srv.SetTURNMode(false)
-	w = getJSON(t, srv.router, "/api/status")
-	resp = StatusResponse{}
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.TurnActive {
-		t.Error("TurnActive должен стать false после SetTURNMode(false)")
+	body := w.Body.Bytes()
+	if len(body) == 0 {
+		t.Fatal("пустое тело ответа")
+	}
+	// Проверяем что архив валидный — zip.NewReader не должен вернуть ошибку.
+	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatalf("невалидный ZIP: %v", err)
+	}
+	// Должен содержать backup_meta.json
+	found := false
+	for _, f := range zr.File {
+		if f.Name == "backup_meta.json" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("backup_meta.json не найден в архиве")
 	}
 }
 
-func TestSetTURNMode_Concurrent_NoRace(t *testing.T) {
-	srv := NewServer(Config{
-		XRayManager:  &stubXray{running: true},
-		ProxyManager: &stubProxy{},
-		Logger:       &logger.NoOpLogger{},
-	}, context.Background())
-	srv.FinalizeRoutes()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(2)
-		go func(v bool) {
-			defer wg.Done()
-			srv.SetTURNMode(v)
-		}(i%2 == 0)
-		go func() {
-			defer wg.Done()
-			getJSON(t, srv.router, "/api/status")
-		}()
+// TestHandleBackupRestore_TooLargeFile — БАГ 1.
+// Проверяет что файл > 5MB через multipart/form-data отклоняется с 413,
+// даже когда Content-Length не задан (MaxBytesReader должен поймать).
+func TestHandleBackupRestore_TooLargeFile(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
 	}
-	wg.Wait()
+	defer os.Chdir(old)
+
+	// Пишем 6 MB мусора напрямую в multipart — incompressible, тело реально > 5MB.
+	// (6MB нулей сжались бы в ~5KB ZIP, обходя проверку размера.)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreateFormFile("file", "backup.zip")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	// Наполняем 6MB не-нулевыми байтами чтобы исключить сжатие на уровне транспорта.
+	garbage := make([]byte, 6*1024*1024)
+	for i := range garbage {
+		garbage[i] = byte(i & 0xFF)
+	}
+	if _, err := part.Write(garbage); err != nil {
+		t.Fatalf("Write garbage: %v", err)
+	}
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/backup/restore", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	// Сбрасываем ContentLength в -1 — проверяем путь через MaxBytesReader,
+	// а не ранний выход по Content-Length заголовку.
+	req.ContentLength = -1
+
+	srv2, cleanup2 := newProxySrv(t)
+	defer cleanup2()
+
+	rw := httptest.NewRecorder()
+	srv2.handleBackupRestore(rw, req)
+
+	if rw.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("ожидался 413, получен %d (body: %s)", rw.Code, rw.Body.String())
+	}
 }

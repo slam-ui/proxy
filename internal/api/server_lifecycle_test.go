@@ -122,6 +122,8 @@ func (m *mockProxyManager) IsEnabled() bool                                     
 func (m *mockProxyManager) GetConfig() proxy.Config                                      { return proxy.Config{Address: m.address} }
 func (m *mockProxyManager) StartGuard(ctx context.Context, interval time.Duration) error { return nil }
 func (m *mockProxyManager) StopGuard()                                                   {}
+func (m *mockProxyManager) PauseGuard(d time.Duration)                                   {} // БАГ 14
+func (m *mockProxyManager) ResumeGuard()                                                 {} // БАГ 14
 
 type mockXRayManager struct {
 	running bool

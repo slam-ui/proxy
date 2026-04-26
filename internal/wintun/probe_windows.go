@@ -3,6 +3,7 @@
 package wintun
 
 import (
+	"context"
 	"sync"
 	"syscall"
 	"time"
@@ -45,7 +46,7 @@ var (
 // Возвращает true если WintunDeleteAdapter выполнился успешно — в этом случае
 // kernel-объект освобождён синхронно и PollUntilFree может пропустить длинный gap.
 // Возвращает false если DLL не найдена, адаптер не существовал, или Delete вернул ошибку.
-func ForceDeleteAdapter(ifName string) bool {
+func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 	if err := modwintun.Load(); err != nil {
 		return false // wintun.dll не найдена
 	}
@@ -65,7 +66,10 @@ func ForceDeleteAdapter(ifName string) bool {
 		// Решение: попробуем открыть адаптер ещё раз после небольшой задержки.
 		// Если по-прежнему NULL — адаптер действительно не существует.
 		// Если во второй раз получили хэндл — драйвер заработал, но адаптер не был удалён.
-		time.Sleep(100 * time.Millisecond)
+		// SleepCtx прерывается при отмене контекста — не блокируем shutdown.
+		if !SleepCtx(ctx, 100*time.Millisecond) {
+			return false
+		}
 		r0, _, _ = procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
 		if r0 == 0 {
 			// По-прежнему не открывается → адаптер точно не существует
@@ -87,7 +91,10 @@ func ForceDeleteAdapter(ifName string) bool {
 	}
 
 	// Финальная верификация: убедимся что адаптер действительно больше не существует
-	time.Sleep(100 * time.Millisecond)
+	// SleepCtx прерывается при отмене контекста — не блокируем shutdown.
+	if !SleepCtx(ctx, 100*time.Millisecond) {
+		return false
+	}
 	r2, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
 	if r2 != 0 {
 		// Адаптер всё ещё существует после "удаления" — не удалось
