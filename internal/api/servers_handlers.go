@@ -115,13 +115,6 @@ func (h *ServersHandlers) activeServerIDFromList(list []ServerEntry) string {
 	return ""
 }
 
-// activeServerID возвращает ID активного сервера (совпадение URL с secret.key).
-// Deprecated: используй activeServerIDFromList если список уже загружен.
-func (h *ServersHandlers) activeServerID() string {
-	list, _ := loadServers()
-	return h.activeServerIDFromList(list)
-}
-
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 // GET /api/servers
@@ -742,15 +735,6 @@ probeLoop:
 	}
 
 	return med, minMs, maxMs, true
-}
-
-// pingServer измеряет чистый TCP RTT до сервера из VLESS URL (одна проба).
-// Мы НЕ делаем TLS handshake — он добавляет 200-400ms к Reality/VLESS серверам
-// и не отражает реальную сетевую задержку.
-// Deprecated: используй pingServerWithProbes вместо этого.
-func pingServer(vlessURL string) (int64, bool) {
-	ms, _, _, ok := pingServerWithProbes(context.Background(), vlessURL, 1)
-	return ms, ok
 }
 
 // extractAddr вытаскивает host:port из VLESS URL

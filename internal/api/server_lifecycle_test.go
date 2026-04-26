@@ -10,8 +10,6 @@ import (
 
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
-
-	"github.com/gorilla/mux"
 )
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────
@@ -140,14 +138,3 @@ func (m *mockXRayManager) Wait() error                           { return m.err 
 func (m *mockXRayManager) LastOutput() string                    { return "" }
 func (m *mockXRayManager) Uptime() time.Duration                 { return 0 }
 func (m *mockXRayManager) GetHealthStatus() (int, float64, bool) { return 0, 0, false }
-
-// newMinimalServer создаёт Server без ProxyManager для тестов lifecycle.
-func newMinimalServer(t *testing.T) *Server {
-	t.Helper()
-	return &Server{
-		logger:       logger.New(logger.LevelInfo),
-		router:       mux.NewRouter(),
-		lifecycleCtx: context.Background(),
-		config:       Config{Logger: logger.New(logger.LevelInfo)},
-	}
-}

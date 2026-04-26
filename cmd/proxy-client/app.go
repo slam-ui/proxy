@@ -865,18 +865,6 @@ func (a *App) waitForSecretKey() {
 	}
 }
 
-// extractServerIP читает IP прокси-сервера из secret.key для Kill Switch allowlist.
-// При ошибке возвращает пустую строку — Kill Switch всё равно активируется, но только loopback.
-// DNS lookup выполняется синхронно только при наличии IP — для hostname используется
-// горутина с таймаутом чтобы не блокировать crash handler на десятки секунд.
-func (a *App) resetServerIPCache() {
-	a.cachedServerIPMu.Lock()
-	defer a.cachedServerIPMu.Unlock()
-	a.cachedServerIP = ""
-	a.cachedForFile = ""
-	a.cachedSecretHash = [32]byte{}
-}
-
 func (a *App) extractServerIP(secretFile string) string {
 	a.cachedServerIPMu.Lock()
 	defer a.cachedServerIPMu.Unlock()

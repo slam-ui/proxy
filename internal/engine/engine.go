@@ -51,10 +51,6 @@ const pinnedVersion = "v1.13.7"
 // Запрашиваем конкретный тег вместо latest — предсказуемое поведение при выходе новых версий.
 var githubAPI = "https://api.github.com/repos/SagerNet/sing-box/releases/tags/" + pinnedVersion
 
-// githubReleasesPage — fallback когда API заблокирован/rate-limited.
-// Указывает на конкретный тег, а не latest — URL конструируется напрямую без HTTP-редиректа.
-var githubReleasesPage = "https://github.com/SagerNet/sing-box/releases/tag/" + pinnedVersion
-
 // noProxyTransport не использует системный прокси Windows.
 // Загрузка sing-box происходит ДО его запуска: порт 10807 ещё не слушает,
 // поэтому http.DefaultTransport (читает системный прокси 127.0.0.1:10807) даёт
