@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,41 @@ func TestBuildRoute_DefaultBlock(t *testing.T) {
 	route := buildRoute(cfg, "1.2.3.4")
 	if route.Final != "block" {
 		t.Errorf("Final = %q, want block", route.Final)
+	}
+}
+
+func TestBuildRoute_TelegramCIDRBeforeIPv6Reject(t *testing.T) {
+	cfg := &RoutingConfig{DefaultAction: ActionDirect, Rules: []RoutingRule{}}
+	route := buildRoute(cfg, "1.2.3.4")
+
+	telegramIdx := -1
+	rejectIdx := -1
+	for i, rule := range route.Rules {
+		if rule.Outbound == "proxy-out" {
+			for _, cidr := range rule.IPCIDR {
+				if cidr == "149.154.160.0/20" || cidr == "2001:b28:f23d::/48" {
+					telegramIdx = i
+					break
+				}
+			}
+		}
+		if rule.Action == "reject" {
+			for _, cidr := range rule.IPCIDR {
+				if cidr == "::/0" {
+					rejectIdx = i
+					break
+				}
+			}
+		}
+	}
+	if telegramIdx < 0 {
+		t.Fatal("Telegram CIDR proxy rule not found")
+	}
+	if rejectIdx < 0 {
+		t.Fatal("IPv6 reject rule not found")
+	}
+	if telegramIdx > rejectIdx {
+		t.Fatalf("Telegram CIDR rule index=%d must be before IPv6 reject index=%d", telegramIdx, rejectIdx)
 	}
 }
 
@@ -129,9 +165,12 @@ func TestBuildRoute_EmptyRules_NoRuleSetGenerated(t *testing.T) {
 	}
 }
 
-// ─── GenerateSingBoxConfig: ошибка при отсутствии geosite файла ───────────
+// ─── GenerateSingBoxConfig: отсутствующий geosite файл молча пропускается ───
 
-func TestGenerateSingBoxConfig_MissingGeositeFile_ReturnsError(t *testing.T) {
+// TestGenerateSingBoxConfig_MissingGeositeFile_SkippedSilently проверяет BUG-2 FIX:
+// отсутствующий geosite .bin файл не вызывает ошибку генерации конфига — правило
+// молча пропускается, остальные правила применяются корректно.
+func TestGenerateSingBoxConfig_MissingGeositeFile_SkippedSilently(t *testing.T) {
 	dir := t.TempDir()
 
 	// Создаём валидный secret.key
@@ -156,11 +195,90 @@ func TestGenerateSingBoxConfig_MissingGeositeFile_ReturnsError(t *testing.T) {
 	defer os.Chdir(old)
 
 	err := GenerateSingBoxConfig(secretPath, outputPath, cfg)
-	if err == nil {
-		t.Fatal("ожидали ошибку — geosite-youtube.bin не существует")
+	if err != nil {
+		t.Fatalf("не ожидали ошибку при отсутствующем geosite файле, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "geosite") {
-		t.Errorf("ошибка должна упоминать geosite, got: %v", err)
+	// Конфиг должен быть создан без правила на отсутствующий geosite
+	data, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		t.Fatalf("конфиг не создан: %v", readErr)
+	}
+	if strings.Contains(string(data), "geosite-youtube") {
+		t.Error("конфиг содержит ссылку на отсутствующий geosite-youtube — правило должно быть пропущено")
+	}
+}
+
+func TestGenerateSingBoxConfig_PartialMissingGeositeKeepsValidRuleSets(t *testing.T) {
+	dir := t.TempDir()
+
+	secretPath := filepath.Join(dir, "secret.key")
+	os.WriteFile(secretPath, []byte(
+		"vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=testkey&sid=abc",
+	), 0644)
+
+	old, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(old)
+
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join("data", "geosite-youtube.bin"), validTestSRS(159), 0644); err != nil {
+		t.Fatalf("WriteFile geosite-youtube: %v", err)
+	}
+
+	outputPath := filepath.Join(dir, "out.json")
+	cfg := &RoutingConfig{
+		DefaultAction: ActionDirect,
+		Rules: []RoutingRule{
+			{Value: "geosite:youtube", Type: RuleTypeGeosite, Action: ActionProxy},
+			{Value: "geosite:instagram", Type: RuleTypeGeosite, Action: ActionProxy},
+		},
+	}
+
+	if err := GenerateSingBoxConfig(secretPath, outputPath, cfg); err != nil {
+		t.Fatalf("GenerateSingBoxConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("ReadFile out.json: %v", err)
+	}
+	var out SingBoxConfig
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal out.json: %v", err)
+	}
+
+	hasYoutubeSet := false
+	hasInstagramSet := false
+	for _, rs := range out.Route.RuleSet {
+		if rs.Tag == "geosite-youtube" {
+			hasYoutubeSet = true
+		}
+		if rs.Tag == "geosite-instagram" {
+			hasInstagramSet = true
+		}
+	}
+	if !hasYoutubeSet {
+		t.Fatal("валидный rule_set geosite-youtube должен остаться в конфиге")
+	}
+	if hasInstagramSet {
+		t.Fatal("отсутствующий rule_set geosite-instagram должен быть удалён")
+	}
+
+	hasYoutubeRule := false
+	for _, rule := range out.Route.Rules {
+		for _, tag := range rule.RuleSet {
+			if tag == "geosite-youtube" && rule.Outbound == "proxy-out" {
+				hasYoutubeRule = true
+			}
+			if tag == "geosite-instagram" {
+				t.Fatal("route rule не должен ссылаться на отсутствующий geosite-instagram")
+			}
+		}
+	}
+	if !hasYoutubeRule {
+		t.Fatal("route rule с geosite-youtube должен сохраниться")
 	}
 }
 
@@ -338,20 +456,32 @@ func TestBuildRoute_PrivateIPBypass_BeforeUserRules(t *testing.T) {
 	}
 	route := buildRoute(cfg, "1.2.3.4")
 
-	// First non-DNS rule should be the private IP bypass
-	firstReal := -1
+	// Find the LAN direct bypass rule (Outbound==direct with private CIDRs)
+	lanBypassIdx := -1
 	for i, r := range route.Rules {
-		if r.Protocol != "dns" {
-			firstReal = i
+		if r.Outbound == "direct" && len(r.IPCIDR) > 0 {
+			lanBypassIdx = i
 			break
 		}
 	}
-	if firstReal < 0 {
-		t.Fatal("no non-DNS rules found")
+	if lanBypassIdx < 0 {
+		t.Fatal("LAN direct bypass rule not found")
 	}
-	r := route.Rules[firstReal]
-	if r.Outbound != "direct" || len(r.IPCIDR) == 0 {
-		t.Errorf("first rule after DNS should be LAN direct bypass, got outbound=%q IPCIDR=%v",
-			r.Outbound, r.IPCIDR)
+
+	// Find the first user proxy rule (youtube.com should be proxy-out)
+	userRuleIdx := -1
+	for i, r := range route.Rules {
+		if r.Outbound == "proxy-out" {
+			userRuleIdx = i
+			break
+		}
+	}
+	if userRuleIdx < 0 {
+		t.Fatal("user proxy rule not found")
+	}
+
+	if lanBypassIdx >= userRuleIdx {
+		t.Errorf("LAN bypass rule (index %d) must come before user proxy rule (index %d)",
+			lanBypassIdx, userRuleIdx)
 	}
 }

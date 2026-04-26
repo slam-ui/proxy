@@ -57,10 +57,12 @@ type Detector struct {
 	// BUG FIX #4: anomalyCount считает аномалии внутри каждого файла независимо.
 	// Ранее использовался len(writtenFiles) — количество файлов, а не аномалий —
 	// поэтому второй файл открывался с #2, но второй блок в первом файле тоже #2.
-	anomalyCount map[string]int  // filename → количество записанных аномалий
+	anomalyCount map[string]int // filename → количество записанных аномалий
 
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	running  bool
+	wg       sync.WaitGroup
 }
 
 // New создаёт детектор.
@@ -106,10 +108,27 @@ func (d *Detector) rotateOldFiles(maxAge time.Duration) {
 }
 
 // Start запускает фоновую горутину детектора.
+// Повторный вызов без Stop ничего не делает.
 func (d *Detector) Start() {
+	d.mu.Lock()
+	if d.running {
+		d.mu.Unlock()
+		return
+	}
+	// Создаём новый канал и Once при каждом Start — позволяет перезапуск после Stop.
+	d.stopCh = make(chan struct{})
+	d.stopOnce = sync.Once{}
+	d.running = true
+	d.mu.Unlock()
+
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
+		defer func() {
+			d.mu.Lock()
+			d.running = false
+			d.mu.Unlock()
+		}()
 		ticker := time.NewTicker(d.pollInterval)
 		defer ticker.Stop()
 		for {
@@ -124,8 +143,9 @@ func (d *Detector) Start() {
 }
 
 // Stop останавливает детектор и ждёт завершения горутины.
+// Безопасен при повторном вызове.
 func (d *Detector) Stop() {
-	close(d.stopCh)
+	d.stopOnce.Do(func() { close(d.stopCh) })
 	d.wg.Wait()
 }
 
@@ -176,7 +196,9 @@ func (d *Detector) check() {
 			// Отслеживаем burst: 3+ warn за 60 секунд
 			d.warnTimes = append(d.warnTimes, e.Timestamp)
 			cutoff := now.Add(-60 * time.Second)
-			fresh := d.warnTimes[:0]
+			// BUG FIX: новый срез вместо d.warnTimes[:0] — иначе in-place фильтрация
+			// перезаписывает элементы которые ещё читаются в range → некорректный подсчёт.
+			var fresh []time.Time
 			for _, t := range d.warnTimes {
 				if t.After(cutoff) {
 					fresh = append(fresh, t)

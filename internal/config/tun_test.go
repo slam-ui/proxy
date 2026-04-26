@@ -16,7 +16,7 @@ func TestDetectRuleType(t *testing.T) {
 	}{
 		// Процессы
 		{"chrome.exe", RuleTypeProcess},
-		{"FIREFOX.EXE", RuleTypeProcess},  // регистр не важен
+		{"FIREFOX.EXE", RuleTypeProcess}, // регистр не важен
 		{"My App.exe", RuleTypeProcess},
 
 		// Geosite

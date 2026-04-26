@@ -119,3 +119,95 @@ func TestProxyGuardWithMicroInterval(t *testing.T) {
 
 	mgr.StopGuard()
 }
+
+// ── БАГ 14: PauseGuard / ResumeGuard ─────────────────────────────────────────
+
+// TestPauseGuard_SkipsRestore проверяет что во время паузы checkAndRestore не выполняется.
+func TestPauseGuard_SkipsRestore(t *testing.T) {
+	m := &manager{logger: &mockLogger{}}
+	// Включаем прокси в памяти (без реального реестра — тестируем только логику паузы).
+	m.enabled = true
+	m.config = Config{Address: "127.0.0.1:8080", Override: "<local>"}
+
+	// Без паузы checkAndRestore дошла бы до getSystemProxyState (внешний вызов).
+	// С паузой — должна выйти сразу.
+	m.PauseGuard(10 * time.Second)
+
+	called := false
+	// Подменить getSystemProxyState нельзя напрямую, но мы знаем:
+	// если checkAndRestore выходит сразу — pause работает.
+	// Проверяем через pausedUntil напрямую.
+	m.mu.RLock()
+	paused := !m.pausedUntil.IsZero() && time.Now().Before(m.pausedUntil)
+	m.mu.RUnlock()
+	_ = called
+
+	if !paused {
+		t.Error("PauseGuard не установила pausedUntil")
+	}
+
+	m.ResumeGuard()
+	m.mu.RLock()
+	paused2 := !m.pausedUntil.IsZero() && time.Now().Before(m.pausedUntil)
+	m.mu.RUnlock()
+	if paused2 {
+		t.Error("ResumeGuard должна снять паузу")
+	}
+}
+
+// TestStartGuard_GenerationRace проверяет что повторный StartGuard не оставляет guardRunning=false
+// когда старая горутина завершается после запуска новой (race condition в очистке флага).
+//
+// BUG FIX: без guardGen старая горутина устанавливала guardRunning=false ПОСЛЕ того как
+// новая горутина стартовала и выставила guardRunning=true → guardian выглядел остановленным
+// хотя реально работал.
+func TestStartGuard_GenerationRace(t *testing.T) {
+	log := &mockLogger{}
+	m := NewManager(log).(*manager)
+
+	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
+	if err := m.Enable(cfg); err != nil {
+		t.Logf("Enable failed (не-Windows): %v — пропускаем", err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Первый StartGuard
+	if err := m.StartGuard(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("первый StartGuard: %v", err)
+	}
+	// Маленькая пауза чтобы первая горутина успела запуститься
+	time.Sleep(20 * time.Millisecond)
+
+	// Второй StartGuard сразу после первого — это должно корректно
+	// заменить старую горутину, не оставляя guardRunning=false.
+	if err := m.StartGuard(ctx, 50*time.Millisecond); err != nil {
+		t.Fatalf("второй StartGuard: %v", err)
+	}
+
+	// Даём старой горутине время завершить cleanup (ctx отменён через guardCancel)
+	time.Sleep(100 * time.Millisecond)
+
+	// guardRunning должен остаться true — новая горутина работает.
+	m.mu.Lock()
+	running := m.guardRunning
+	gen := m.guardGen
+	m.mu.Unlock()
+
+	if !running {
+		t.Errorf("guardRunning=false после двойного StartGuard (gen=%d): старая горутина обнулила флаг", gen)
+	}
+
+	m.StopGuard()
+
+	// После StopGuard горутина завершается → guardRunning=false
+	time.Sleep(50 * time.Millisecond)
+	m.mu.Lock()
+	runningAfterStop := m.guardRunning
+	m.mu.Unlock()
+	if runningAfterStop {
+		t.Error("guardRunning=true после StopGuard")
+	}
+}

@@ -180,7 +180,7 @@ func TestValidateConfig_TabInAddress_CurrentBehavior(t *testing.T) {
 		note    string
 		wantErr bool
 	}{
-		{"\t127.0.0.1:8080", "ведущий таб", false},   // TrimSpace пустоту поймает, но таб сохранится в config
+		{"\t127.0.0.1:8080", "ведущий таб", false},      // TrimSpace пустоту поймает, но таб сохранится в config
 		{"127.0.0.1:8080\n", "трейлинг newline", false}, // аналогично
 		{"127.0.0.1 :8080", "пробел перед двоеточием", false},
 	}

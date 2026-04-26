@@ -234,15 +234,15 @@ func FuzzHandleImport(f *testing.F) {
 func FuzzDeleteRuleValue(f *testing.F) {
 	f.Add("google.com")
 	f.Add("telegram.exe")
-	f.Add("192.168.1.0/24")       // CIDR — основной баг
+	f.Add("192.168.1.0/24") // CIDR — основной баг
 	f.Add("10.0.0.0/8")
-	f.Add("2001:db8::/32")        // IPv6 CIDR
+	f.Add("2001:db8::/32") // IPv6 CIDR
 	f.Add("::/0")
 	f.Add("geosite:youtube")
 	f.Add("")
-	f.Add("../../../etc/passwd")  // path traversal
+	f.Add("../../../etc/passwd")                // path traversal
 	f.Add(strings.Repeat("a/b/", 50) + "c.com") // глубокий путь
-	f.Add("a b c")                // пробелы
+	f.Add("a b c")                              // пробелы
 	f.Add("日本語.com")
 	f.Add("\x00null")
 	f.Add("https://evil.com/path/to/resource") // URL-подобный
@@ -350,9 +350,9 @@ func FuzzCORSOrigin(f *testing.F) {
 	f.Add("null", "GET")
 
 	allowedOrigins := map[string]bool{
-		"http://localhost:8080":  true,
+		"http://localhost:8080": true,
 		"http://127.0.0.1:8080": true,
-		"app://":                 true,
+		"app://":                true,
 	}
 
 	f.Fuzz(func(t *testing.T, origin, method string) {
@@ -477,4 +477,3 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-

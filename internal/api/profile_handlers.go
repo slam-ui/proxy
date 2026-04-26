@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,9 +24,9 @@ var reValidName = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,64}$`) // letters, digi
 
 // Profile сохранённый набор правил маршрутизации с именем
 type Profile struct {
-	Name      string              `json:"name"`
-	CreatedAt time.Time           `json:"created_at"`
-	UpdatedAt time.Time           `json:"updated_at"`
+	Name      string               `json:"name"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
 	Routing   config.RoutingConfig `json:"routing"`
 }
 
@@ -40,8 +41,8 @@ type profileMeta struct {
 
 // ProfileHandlers обработчики для профилей правил
 type ProfileHandlers struct {
-	server    *Server
-	mu        sync.RWMutex
+	server *Server
+	mu     sync.RWMutex
 	// OPT #6: кэш метаданных профилей — инвалидируется только при изменении mtime файла.
 	// Ранее handleList читал и парсил полный JSON каждого профиля при каждом запросе UI.
 	// Теперь: ReadDir + Stat (дёшево), парсинг JSON только когда файл реально изменился.
@@ -57,12 +58,15 @@ func SetupProfileRoutes(s *Server) {
 
 	s.router.HandleFunc("/api/profiles", h.handleList).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles", h.handleSave).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/profiles/{name}/apply", h.handleApply).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleLoad).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleDelete).Methods("DELETE", "OPTIONS")
 }
 
 // handleList GET /api/profiles — список всех сохранённых профилей
 func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
+	// FIX Bug4: используем Lock, а не RLock — функция пишет в h.metaCache.
+	// Несколько горутин с RLock одновременно писали в одну map → data race (panic/corruption).
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -205,6 +209,46 @@ func (h *ProfileHandlers) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.server.respondJSON(w, http.StatusOK, p)
+}
+
+// handleApply POST /api/profiles/{name}/apply — применяет профиль к текущему routing.
+func (h *ProfileHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	if !reValidName.MatchString(name) {
+		h.server.respondError(w, http.StatusBadRequest, "недопустимое имя профиля")
+		return
+	}
+	if h.server.tunHandlers == nil {
+		h.server.respondError(w, http.StatusServiceUnavailable, "TUN routing не инициализирован")
+		return
+	}
+
+	h.mu.RLock()
+	p, err := loadProfile(sanitizeFilename(name) + ".json")
+	h.mu.RUnlock()
+	if err != nil {
+		h.server.respondError(w, http.StatusNotFound, "профиль не найден")
+		return
+	}
+
+	count, applyErr, err := h.server.tunHandlers.replaceRoutingAndApply(p.Routing)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errSaveRoutingConfig) {
+			status = http.StatusInternalServerError
+			h.server.logger.Error("handleApplyProfile: не удалось сохранить routing config: %v", err)
+		}
+		h.server.respondError(w, status, err.Error())
+		return
+	}
+	if applyErr != "" {
+		h.server.logger.Warn("handleApplyProfile: TriggerApply: %v", applyErr)
+	}
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"message":     fmt.Sprintf("профиль %q применён", p.Name),
+		"count":       count,
+		"apply_error": applyErr,
+	})
 }
 
 // handleDelete DELETE /api/profiles/{name} — удаляет профиль

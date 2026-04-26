@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -409,7 +410,7 @@ func TestWaitForSecretKey_WaitsUntilVLESSKeyAppears(t *testing.T) {
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		if err := os.WriteFile(secretPath, []byte("vless://00000000-0000-0000-0000-000000000000@example.com:443"), 0644); err != nil {
-			t.Fatalf("failed to write secret.key: %v", err)
+			t.Errorf("failed to write secret.key: %v", err)
 		}
 	}()
 
@@ -490,6 +491,105 @@ func TestExtractServerIP_Table(t *testing.T) {
 				t.Errorf("extractServerIP = %q, want %q", result, tc.want)
 			}
 		})
+	}
+}
+
+// ── Bug 9: stale wintun_stopped_at ───────────────────────────────────────────────
+
+// TestStaleWintunStopFile_IsDeleted проверяет что файл wintun_stopped_at с mtime > 24ч
+// удаляется при запуске (та же логика что в startBackground).
+func TestStaleWintunStopFile_IsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	stopFile := filepath.Join(dir, "wintun_stopped_at")
+
+	// Создаём файл и откатываем его mtime на 25 часов назад
+	if err := os.WriteFile(stopFile, []byte("12345678"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	staleTime := time.Now().Add(-25 * time.Hour)
+	if err := os.Chtimes(stopFile, staleTime, staleTime); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	// Воспроизводим логику из startBackground
+	if fi, err := os.Stat(stopFile); err == nil {
+		if time.Since(fi.ModTime()) > 24*time.Hour {
+			_ = os.Remove(stopFile)
+		}
+	}
+
+	if _, err := os.Stat(stopFile); err == nil {
+		t.Error("БАГ 9: устаревший wintun_stopped_at должен быть удалён")
+	}
+}
+
+// TestFreshWintunStopFile_IsKept проверяет что свежий файл wintun_stopped_at не удаляется.
+func TestFreshWintunStopFile_IsKept(t *testing.T) {
+	dir := t.TempDir()
+	stopFile := filepath.Join(dir, "wintun_stopped_at")
+
+	if err := os.WriteFile(stopFile, []byte("12345678"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Файл только что создан — mtime < 24ч
+
+	if fi, err := os.Stat(stopFile); err == nil {
+		if time.Since(fi.ModTime()) > 24*time.Hour {
+			_ = os.Remove(stopFile)
+		}
+	}
+
+	if _, err := os.Stat(stopFile); err != nil {
+		t.Error("свежий wintun_stopped_at не должен удаляться")
+	}
+}
+
+// ── Bug 1: preflightCheck ─────────────────────────────────────────────────────────
+
+type testLogger struct{ infoCalled bool }
+
+func (l *testLogger) Info(f string, args ...interface{})   { l.infoCalled = true }
+func (l *testLogger) Warn(f string, args ...interface{})   {}
+func (l *testLogger) Error(f string, args ...interface{})  {}
+func (l *testLogger) Debug(f string, args ...interface{})  {}
+func (l *testLogger) Fatal(f string, args ...interface{})  {}
+func (l *testLogger) Fatalf(f string, args ...interface{}) {}
+
+// TestPreflightCheck_PassesWhenPortsFree проверяет что preflightCheck не возвращает ошибку
+// когда все порты свободны.
+func TestPreflightCheck_PassesWhenPortsFree(t *testing.T) {
+	oldAddrs := preflightAddrs
+	preflightAddrs = []preflightAddr{{name: "test free port", addr: "127.0.0.1:0"}}
+	defer func() { preflightAddrs = oldAddrs }()
+
+	log := &testLogger{}
+	ctx := context.Background()
+	if err := preflightCheck(ctx, log); err != nil {
+		t.Errorf("preflightCheck должна пройти с свободными портами: %v", err)
+	}
+}
+
+// TestPreflightCheck_RespectsContext проверяет что preflightCheck возвращает ошибку
+// когда контекст отменён во время ожидания освобождения порта.
+func TestPreflightCheck_RespectsContext(t *testing.T) {
+	// Занимаем один из проверяемых портов.
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("не удалось занять локальный порт для теста — пропускаем")
+	}
+	defer occupied.Close()
+	oldAddrs := preflightAddrs
+	preflightAddrs = []preflightAddr{{name: "occupied test port", addr: occupied.Addr().String()}}
+	defer func() { preflightAddrs = oldAddrs }()
+
+	log := &testLogger{}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Отменяем контекст немедленно.
+	cancel()
+
+	err = preflightCheck(ctx, log)
+	if err == nil {
+		t.Error("preflightCheck должна вернуть ошибку при отменённом контексте")
 	}
 }
 

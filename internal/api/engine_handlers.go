@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
 	"proxyclient/internal/engine"
 )
@@ -96,23 +97,59 @@ func (s *Server) handleEngineDownload(w http.ResponseWriter, r *http.Request) {
 	// EnsureEngine выполняет HTTP-запрос с таймаутом 120с. Без lifecycle context
 	// при Shutdown приложения горутина продолжала работать до 2 минут, блокируя
 	// завершение процесса. lifecycleCtx отменяется при вызове Shutdown() и прерывает
-	// HTTP-соединение немедленно — аналогично singbox-launcher который передаёт ctx в download.
+	// HTTP-соединение немедленно.
 	downloadCtx := s.lifecycleCtx
 	progress := make(chan engine.Progress, 20)
 	go func() {
+		var drainWg sync.WaitGroup
+		drainWg.Add(1)
+
 		defer func() {
+			// Сначала закрываем канал — drain-горутина завершит обработку буфера.
+			close(progress)
+			// Ждём drain-горутину прежде чем сбросить running=false.
+			// Без этого новый запрос может стартовать до того как старый drain
+			// перестанет писать в globalEngine.progress — race на прогресс.
+			drainWg.Wait()
 			globalEngine.mu.Lock()
 			globalEngine.running = false
 			globalEngine.mu.Unlock()
-			close(progress)
 		}()
+
 		go func() {
+			defer drainWg.Done()
 			for p := range progress {
 				globalEngine.mu.Lock()
 				globalEngine.progress = p
 				globalEngine.mu.Unlock()
 			}
 		}()
+
+		// BUG FIX: Windows блокирует замену запущенного .exe файла ("Access is denied").
+		// Останавливаем sing-box перед обновлением и перезапускаем после — независимо
+		// от результата (defer гарантирует перезапуск даже при ошибке EnsureEngine).
+		mgr := s.GetXRayManager()
+		wasRunning := mgr != nil && mgr.IsRunning()
+		if wasRunning {
+			_ = mgr.Stop()
+			// Даём Windows время освободить file lock после завершения процесса.
+			time.Sleep(500 * time.Millisecond)
+		}
+		if wasRunning {
+			defer func() {
+				// Если doApply заменил менеджер во время загрузки — не трогаем живой процесс.
+				// mgr.Start() вызвал бы BeforeRestart (wintun cleanup) пока новый менеджер работает
+				// → разрушает TUN → TUN конфликт при следующем рестарте + неотслеживаемый PID.
+				if s.GetXRayManager() != mgr {
+					s.logger.Info("handleEngineDownload: менеджер заменён doApply во время загрузки — пропускаем рестарт устаревшего")
+					return
+				}
+				if err := mgr.Start(); err != nil {
+					s.logger.Error("handleEngineDownload: не удалось перезапустить sing-box: %v", err)
+				}
+			}()
+		}
+
 		_ = engine.EnsureEngine(downloadCtx, execPath, progress)
 	}()
 

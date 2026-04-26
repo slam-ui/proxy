@@ -8,6 +8,72 @@ import (
 	"testing"
 )
 
+// ── parseDNSURL: DoH URL разбивается на host и path ──────────────────────
+
+// BUG FIX: sing-box ожидает server="1.1.1.1" и path="/dns-query" раздельно.
+// Раньше server="1.1.1.1/dns-query" → percent-кодирование слеша → невалидный URL.
+func TestParseDNSURL_DoH_SplitsHostAndPath(t *testing.T) {
+	cases := []struct {
+		in         string
+		wantServer string
+		wantPath   string
+		wantType   string
+	}{
+		{"https://1.1.1.1/dns-query", "1.1.1.1", "/dns-query", "https"},
+		{"https://cloudflare-dns.com/dns-query", "cloudflare-dns.com", "/dns-query", "https"},
+		{"https://dns.google/dns-query", "dns.google", "/dns-query", "https"},
+		{"https://dns.google", "dns.google", "", "https"},
+		{"tls://1.1.1.1", "1.1.1.1", "", "tls"},
+		{"quic://dns.adguard.com", "dns.adguard.com", "", "quic"},
+		{"1.1.1.1", "1.1.1.1", "", "https"}, // fallback
+	}
+	for _, tc := range cases {
+		server, path, typ := parseDNSURL(tc.in)
+		if server != tc.wantServer {
+			t.Errorf("parseDNSURL(%q) server = %q, want %q", tc.in, server, tc.wantServer)
+		}
+		if path != tc.wantPath {
+			t.Errorf("parseDNSURL(%q) path = %q, want %q", tc.in, path, tc.wantPath)
+		}
+		if typ != tc.wantType {
+			t.Errorf("parseDNSURL(%q) type = %q, want %q", tc.in, typ, tc.wantType)
+		}
+	}
+}
+
+// BUG FIX: buildDNSConfig должен выставлять Path отдельно от Server.
+// Проверяем что сгенерированная конфигурация содержит server="1.1.1.1" и path="/dns-query".
+func TestBuildDNSConfig_DoH_PathSetSeparately(t *testing.T) {
+	cfg := &DNSConfig{
+		RemoteDNS: "https://1.1.1.1/dns-query",
+		DirectDNS: "udp://8.8.8.8:53",
+	}
+	dns := buildDNSConfig(cfg)
+
+	if len(dns.Servers) == 0 {
+		t.Fatal("buildDNSConfig вернул пустой список серверов")
+	}
+	var remote SBDNSServer
+	for _, s := range dns.Servers {
+		if s.Tag == "remote" {
+			remote = s
+			break
+		}
+	}
+	if remote.Tag == "" {
+		t.Fatal("сервер remote не найден в конфигурации DNS")
+	}
+	if remote.Server != "1.1.1.1" {
+		t.Errorf("remote.Server = %q, want %q (путь не должен быть в server)", remote.Server, "1.1.1.1")
+	}
+	if remote.Path != "/dns-query" {
+		t.Errorf("remote.Path = %q, want %q", remote.Path, "/dns-query")
+	}
+	if remote.Type != "https" {
+		t.Errorf("remote.Type = %q, want %q", remote.Type, "https")
+	}
+}
+
 // ── buildRoute: domain-suffix правила ─────────────────────────────────────
 
 // BUG-РИСК: правило с доменом начинающимся на "." должно попасть в
@@ -181,9 +247,20 @@ func TestBuildRoute_DNSHijack_IsFirstRule(t *testing.T) {
 	if len(route.Rules) == 0 {
 		t.Fatal("правила маршрутизации пусты")
 	}
-	first := route.Rules[0]
+	// Skip leading sniff rules — dns-hijack must be the first routing rule
+	firstNonSniff := -1
+	for i, r := range route.Rules {
+		if r.Action != "sniff" {
+			firstNonSniff = i
+			break
+		}
+	}
+	if firstNonSniff < 0 {
+		t.Fatal("нет правил кроме sniff")
+	}
+	first := route.Rules[firstNonSniff]
 	if first.Protocol != "dns" {
-		t.Errorf("первое правило должно быть dns-hijack, got Protocol=%q Outbound=%q",
+		t.Errorf("первое правило после sniff должно быть dns-hijack, got Protocol=%q Outbound=%q",
 			first.Protocol, first.Outbound)
 	}
 }
@@ -206,6 +283,46 @@ func TestBuildRoute_Final_ReflectsDefaultAction(t *testing.T) {
 			t.Errorf("DefaultAction=%q → Final=%q, want %q", tc.action, route.Final, tc.want)
 		}
 	}
+}
+
+func TestBuildRoute_BypassEnabled_ForcesProxyFinalAndIgnoresUserRules(t *testing.T) {
+	cfg := &RoutingConfig{
+		DefaultAction: ActionDirect,
+		BypassEnabled: true,
+		Rules: []RoutingRule{
+			{Value: "blocked.example", Type: RuleTypeDomain, Action: ActionBlock},
+			{Value: "app.exe", Type: RuleTypeProcess, Action: ActionDirect},
+			{Value: "geosite:youtube", Type: RuleTypeGeosite, Action: ActionDirect},
+		},
+	}
+
+	route := buildRoute(cfg, "1.2.3.4")
+	if route.Final != "proxy-out" {
+		t.Fatalf("Final = %q, want proxy-out", route.Final)
+	}
+	if route.FindProcess {
+		t.Fatal("bypass mode should not enable process matching from ignored user rules")
+	}
+	if len(route.RuleSet) != 0 {
+		t.Fatalf("bypass mode should not include user geosite rule sets, got %+v", route.RuleSet)
+	}
+	for _, rule := range route.Rules {
+		if containsString(rule.Domain, "blocked.example") ||
+			containsString(rule.DomainSuffix, "blocked.example") ||
+			containsString(rule.ProcessName, "app.exe") ||
+			containsString(rule.RuleSet, "geosite-youtube") {
+			t.Fatalf("bypass mode leaked user rule into route: %+v", rule)
+		}
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 // ── NormalizeRuleValue: специфические случаи ─────────────────────────────

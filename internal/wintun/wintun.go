@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"proxyclient/internal/fileutil"
 	"proxyclient/internal/logger"
 	"regexp"
 	"strconv"
@@ -61,7 +62,8 @@ func RecordStop(path ...string) {
 		stopPath = path[0]
 	}
 	data := []byte(strconv.FormatInt(time.Now().UnixNano(), 10))
-	_ = os.WriteFile(stopPath, data, 0644)
+	// БАГ 11: атомарная запись через rename — предотвращает 0-байтный файл при kill -9.
+	_ = fileutil.WriteAtomic(stopPath, data, 0644)
 	_ = os.Remove(CleanShutdownFile)
 }
 
@@ -70,7 +72,13 @@ func RecordCleanShutdown(path ...string) {
 	if len(path) > 0 && path[0] != "" {
 		cleanPath = path[0]
 	}
-	_ = os.WriteFile(cleanPath, []byte("1"), 0644)
+	// BUG-8 FIX: атомарная запись (как RecordStop) — предотвращает 0-байтный файл при kill.
+	_ = fileutil.WriteAtomic(cleanPath, []byte("1"), 0644)
+	// BUG-8 FIX: удаляем StopFile симметрично RecordStop (который удаляет CleanShutdownFile).
+	// Без этого оба файла существуют после чистого завершения:
+	// PollUntilFree удаляет CleanShutdownFile, оставляя старый StopFile →
+	// EstimateReadyAt использует старый timestamp при следующем вызове.
+	_ = os.Remove(StopFile)
 }
 
 // ── Адаптивный gap ────────────────────────────────────────────────────────────
@@ -140,7 +148,10 @@ func IncreaseAdaptiveGap(args ...interface{}) time.Duration {
 	if next > minGapMax {
 		next = minGapMax
 	}
-	_ = os.WriteFile(file, []byte(strconv.FormatInt(int64(next), 10)), 0644)
+	// BUG-NEW-2 FIX: атомарная запись — предотвращает 0-байтный файл при power loss.
+	// Повреждённый файл читался как ns=0 → ReadAdaptiveGap возвращал minGapBase=15s
+	// вместо увеличенного gap → sing-box стартовал раньше времени.
+	_ = fileutil.WriteAtomic(file, []byte(strconv.FormatInt(int64(next), 10)), 0644)
 	if log != nil {
 		log.Info("wintun: адаптивный gap увеличен до %v", next.Round(time.Second))
 	}
@@ -229,7 +240,8 @@ func EstimateReadyAtWithFiles(stopFile, cleanFile, gapFilePath string) time.Time
 	}
 
 	ns, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
-	if err != nil {
+	// БАГ 11: ns==0 означает повреждённый файл (пустая строка или неатомарная запись).
+	if err != nil || ns == 0 {
 		return time.Now()
 	}
 
@@ -261,12 +273,34 @@ func EstimateReadyAtWithFiles(stopFile, cleanFile, gapFilePath string) time.Time
 // ── Polling Логика ────────────────────────────────────────────────────────────
 
 func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
-	// BUG FIX: раньше при отсутствии стоп-файла функция делала немедленный return.
-	// Если предыдущая сессия завершилась аварийно (kill, BSOD, power loss) —
-	// стоп-файл не записывается, но wintun kernel-объект всё ещё удерживается
-	// Windows GC. sing-box падает через 15с с «Cannot create a file when that
-	// file already exists». Теперь: даже без стоп-файла проверяем kernel-объект
-	// напрямую и ждём его освобождения если он занят.
+	if _, err := os.Stat(CleanShutdownFile); err == nil {
+		_ = os.Remove(CleanShutdownFile)
+		if log != nil {
+			log.Info("wintun: clean shutdown обнаружен — пропускаем ожидание GC Windows")
+		}
+		return
+	}
+
+	// КРИТИЧЕСКИЙ ФИКС: запускаем wintun драйвер ПЕРВЫМ — ДО ЛЮБЫХ проверок.
+	//
+	// Root cause крашей 2026-04-20 — 2026-04-24 ("Cannot create a file when that
+	// file already exists"):
+	//   1. wintun.Shutdown() вызывает "sc stop wintun" → драйвер ОСТАНОВЛЕН
+	//   2. При следующем запуске StopFile отсутствует (или CleanShutdownFile есть)
+	//   3. fast-path: kernelObjectFree → WintunOpenAdapter → NULL (драйвер не отвечает)
+	//      → ложно возвращает true ("адаптер свободен")
+	//   4. PollUntilFree делает return не доходя до confirm loop
+	//   5. sing-box стартует → загружает драйвер → находит stale PnP запись → FATAL
+	//
+	// Ранее ensureWintunDriverRunning стояло только ПЕРЕД confirm loop.
+	// Но fast-path ветки (no StopFile, CleanShutdownFile, FastDeleteFile) делали
+	// return РАНЬШЕ и никогда до него не доходили.
+	//
+	// Решение: запускаем драйвер в самом начале — все последующие kernelObjectFree
+	// вызовы становятся достоверными. С запущенным драйвером NULL = "адаптер реально
+	// не существует в PnP", а не "драйвер не отвечает".
+	ensureWintunDriverRunning(ctx, log)
+
 	noStopFile := false
 	if _, err := os.Stat(StopFile); os.IsNotExist(err) {
 		// Стоп-файла нет, но kernel-объект может быть жив после аварийного завершения.
@@ -302,18 +336,27 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 			// провалимся в gap-ожидание ниже (в случае неудачи ForceDeleteAdapter).
 			_ = os.Remove(CleanShutdownFile)
 			log.Info("wintun: clean shutdown обнаружен, форсированное удаление адаптера")
-			if ForceDeleteAdapter(ifName) {
+			if ForceDeleteAdapter(ctx, ifName) {
 				// PnP-эжекция прошла успешно: device node удалён корректно,
 				// Windows GC не нужен. Используем fastDeleteSettle (3с) вместо gap.
 				log.Info("wintun: адаптер удалён через PnP, ждём settle %v", fastDeleteSettle)
 				SleepCtx(ctx, fastDeleteSettle)
-			} else {
-				// ForceDeleteAdapter вернул false (DLL не найдена или адаптер уже свободен).
-				// CleanShutdown гарантирует что sing-box вызвал WintunCloseAdapter перед выходом
-				// → kernel-объект уже освобождён → можно стартовать немедленно без gap.
-				log.Info("wintun: ForceDeleteAdapter не доступен, но CleanShutdown гарантирует освобождение адаптера")
+				return
 			}
-			return
+			// BUG-3 FIX: ForceDeleteAdapter вернул false.
+			// false означает "DLL не найдена" ИЛИ "адаптер уже свободен" —
+			// нельзя слепо делать return, kernel-объект может быть жив.
+			// Быстрая проверка: если свободен — стартуем немедленно.
+			checkCtx, checkCancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			alreadyFree := kernelObjectFree(ifName) && !InterfaceExistsCtx(checkCtx, ifName)
+			checkCancel()
+			if alreadyFree {
+				log.Info("wintun: ForceDeleteAdapter недоступен, но kernel-object подтверждённо свободен — стартуем")
+				return
+			}
+			// Kernel-object жив — DLL недоступна, gap неизвестен.
+			// Падаем в confirmInterval loop ниже: ждём реального освобождения.
+			log.Warn("wintun: ForceDeleteAdapter недоступен, kernel-object ещё жив — ожидаем освобождения")
 		}
 	}
 
@@ -334,6 +377,10 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 			}
 		}
 	}
+
+	// ensureWintunDriverRunning уже вызван в начале PollUntilFree — здесь не дублируем.
+	// Если драйвер был остановлен в процессе ожидания (unlikely) — kernelObjectFree
+	// вернёт true (fail-open) и confirm loop завершится за следующие 3 итерации.
 
 	const confirmInterval = 500 * time.Millisecond
 	const confirmRequired = 3
@@ -371,6 +418,35 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 	}
 }
 
+// StartupCleanupNeeded быстро проверяет, нужна ли тяжёлая очистка Wintun при старте.
+// Если нет stop-маркера и адаптер/PNP-node не видны, RemoveStaleTunAdapterCtx можно
+// пропустить и сразу перейти к PollUntilFree fast-path.
+func StartupCleanupNeeded(ctx context.Context, log logger.Logger, ifName string) bool {
+	ensureWintunDriverRunning(ctx, log)
+
+	kernelBusy := !kernelObjectFree(ifName)
+
+	ifaceCtx, ifaceCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	interfaceExists := InterfaceExistsCtx(ifaceCtx, ifName)
+	ifaceCancel()
+
+	pnpCtx, pnpCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	pnpExists := NetAdapterExistsCtx(pnpCtx, ifName)
+	pnpCancel()
+
+	if kernelBusy || interfaceExists || pnpExists {
+		if log != nil {
+			log.Info("wintun: startup cleanup нужен (kernel_busy=%v, interface=%v, pnp=%v)",
+				kernelBusy, interfaceExists, pnpExists)
+		}
+		return true
+	}
+	if log != nil {
+		log.Info("wintun: startup cleanup пропущен — следов старого адаптера нет")
+	}
+	return false
+}
+
 // PollUntilFreeWithFiles — восстановлен для тестов (строго 3 аргумента).
 func PollUntilFreeWithFiles(ctx context.Context, stopFile, cleanFile, gapFilePath string) error {
 	if _, err := os.Stat(stopFile); os.IsNotExist(err) {
@@ -383,8 +459,15 @@ func PollUntilFreeWithFiles(ctx context.Context, stopFile, cleanFile, gapFilePat
 
 	gap := ReadAdaptiveGap(gapFilePath)
 	data, _ := os.ReadFile(stopFile)
-	ns, _ := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
-	stopTime := time.Unix(0, ns)
+	ns, parseErr := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	// БАГ 11: повреждённый файл (0 байт после неатомарной записи) → ns=0, parseErr!=nil.
+	// Используем time.Now() как fallback — считаем что остановка была только что.
+	var stopTime time.Time
+	if parseErr != nil || ns == 0 {
+		stopTime = time.Now()
+	} else {
+		stopTime = time.Unix(0, ns)
+	}
 
 	if time.Since(stopTime) <= coldStartThreshold {
 		remaining := gap - time.Since(stopTime)
@@ -470,6 +553,10 @@ func NetAdapterExistsCtx(ctx context.Context, ifName string) bool {
 	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
 		`(Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+ifName+`*' -or $_.FriendlyName -like '*wintun*' } | Measure-Object).Count -gt 0`)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	// BUG FIX: добавляем WaitDelay как в InterfaceExistsCtx. PowerShell запускает дочерние
+	// процессы которые держат pipe-хэндлы открытыми после kill. Без WaitDelay CombinedOutput()
+	// блокируется ожидая EOF от pipe даже после отмены ctx — горутина зависает навсегда.
+	cmd.WaitDelay = 50 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == "True"
 }
@@ -499,14 +586,59 @@ func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
 	// Исправление: даём Windows 2с освободить хэндлы убитого процесса, затем
 	// вызываем ForceDeleteAdapter пока драйвер ещё работает — WintunDeleteAdapter
 	// корректно удаляет device node через CM_Request_Device_Eject. sc stop — после.
-	time.Sleep(2 * time.Second)
-	if ForceDeleteAdapter(tunInterfaceName) {
+	//
+	// BUG FIX #6: используем SleepCtx вместо time.Sleep — если lifecycleCtx отменён
+	// (пользователь закрывает приложение во время retry) shutdown не зависает на 2+ секунды.
+	if !SleepCtx(ctx, 2*time.Second) {
+		return // контекст отменён — прерываем cleanup
+	}
+	if ForceDeleteAdapter(ctx, tunInterfaceName) {
 		_ = os.WriteFile(FastDeleteFile, []byte("1"), 0644)
 	}
 	run("sc", "stop", "wintun")
-	// Дать время драйверу выгрузиться и пересканировать hardware
-	time.Sleep(2 * time.Second)
+	// Дать время драйверу выгрузиться и пересканировать hardware.
+	// SleepCtx прерывается если ctx отменён — не блокируем shutdown.
+	if !SleepCtx(ctx, 2*time.Second) {
+		return
+	}
 	run("pnputil", "/scan-for-hardware-changes")
+
+	// Дополнительная очистка зависшего PnP device node через netsh и PowerShell.
+	//
+	// Проблема: после taskkill sing-box.exe wintun.sys выгружает адаптер, но регистрация
+	// device node в PnP базе Windows может остаться. WintunOpenAdapter возвращает NULL
+	// (kernel-объект свободен), но WintunCreateAdapter падает с ERROR_ALREADY_EXISTS
+	// (stale PnP запись). pnputil /scan-for-hardware-changes не всегда убирает запись.
+	//
+	// Решение: явно удаляем сетевой интерфейс через netsh и через PowerShell Remove-PnpDevice.
+	// Обе команды безопасны если интерфейс уже удалён (no-op, ошибки игнорируются).
+	run("netsh", "interface", "ip", "delete", "interface", tunInterfaceName)
+	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		`Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+tunInterfaceName+`*' -or $_.FriendlyName -like '*wintun*' } | ForEach-Object { pnputil /remove-device $_.InstanceId 2>$null }`)
+
+	// BUG FIX: Post-cleanup verification — перезапускаем wintun драйвер и проверяем
+	// что адаптер действительно удалён.
+	//
+	// Проблема: после sc stop wintun драйвер выгружен → WintunOpenAdapter возвращает NULL
+	// не потому что адаптер свободен, а потому что драйвер не может ответить на запрос.
+	// PollUntilFree видит NULL → считает адаптер свободным → sing-box стартует →
+	// загружает драйвер → находит stale PnP запись → FATAL "Cannot create a file".
+	//
+	// Решение: перезапускаем драйвер после всей очистки. Если ForceDeleteAdapter находит
+	// stale адаптер — удаляет его. Если адаптер уже чист — нет-оп.
+	// Затем останавливаем драйвер снова чтобы PollUntilFree мог корректно отработать.
+	if !SleepCtx(ctx, 500*time.Millisecond) {
+		return
+	}
+	run("sc", "start", "wintun")
+	if !SleepCtx(ctx, 1*time.Second) {
+		return
+	}
+	if ForceDeleteAdapter(ctx, tunInterfaceName) {
+		_ = os.WriteFile(FastDeleteFile, []byte("1"), 0644)
+		log.Info("wintun: post-cleanup ForceDeleteAdapter нашёл и удалил stale адаптер")
+	}
+	run("sc", "stop", "wintun")
 }
 
 // repairStaleDriver удаляет регистрацию wintun сервиса только если он завис
@@ -543,6 +675,48 @@ func repairStaleDriver(ctx context.Context, log logger.Logger) {
 			break // сервис исчез из SCM
 		}
 	}
+}
+
+// ensureWintunDriverRunning пробует запустить wintun сервис (sc start wintun).
+// Нужно перед confirm loop в PollUntilFree — без запущенного драйвера
+// WintunOpenAdapter возвращает NULL (не может связаться с драйвером),
+// что kernelObjectFree ошибочно интерпретирует как "адаптер свободен".
+//
+// Не блокирует при ошибке: если сервис не установлен, sing-box установит его сам.
+// Ожидает до 2с для перехода в RUNNING.
+func ensureWintunDriverRunning(ctx context.Context, log logger.Logger) {
+	// Проверяем текущее состояние
+	checkCmd := exec.CommandContext(ctx, "sc", "query", "wintun")
+	checkCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	out, err := checkCmd.CombinedOutput()
+	if err != nil {
+		// Сервис не зарегистрирован — sing-box установит при старте
+		return
+	}
+	if strings.Contains(string(out), "RUNNING") {
+		return // уже работает
+	}
+
+	// Запускаем
+	startCmd := exec.CommandContext(ctx, "sc", "start", "wintun")
+	startCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	_ = startCmd.Run()
+
+	// Ждём до 2с для перехода в RUNNING
+	for i := 0; i < 4; i++ {
+		if !SleepCtx(ctx, 500*time.Millisecond) {
+			return
+		}
+		qCmd := exec.CommandContext(ctx, "sc", "query", "wintun")
+		qCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		qOut, qErr := qCmd.CombinedOutput()
+		if qErr == nil && strings.Contains(string(qOut), "RUNNING") {
+			log.Info("wintun: драйвер запущен для корректного зондирования kernel-объекта")
+			return
+		}
+	}
+	// Не удалось запустить — продолжаем с time-based ожиданием
+	log.Warn("wintun: не удалось запустить драйвер для зондирования — используем time-based ожидание")
 }
 
 func Shutdown(log logger.Logger) {

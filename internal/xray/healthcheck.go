@@ -18,16 +18,17 @@ type ConnectionError struct {
 // and determines if the VLESS service is degraded or unavailable.
 //
 // БАГ #3: sing-box может быть недоступен на 9+ минут.
-// HealthChecker детектирует этот случай: если >X% соединений за последние N секунд
-// упали с таймаутом или другими ошибками → отправить notification.
+// HealthChecker детектирует этот случай: если >= thresholdCount ошибок за windowDuration
+// → отправить notification. Счётчик connectionCount удалён: TrackConnectionAttempt()
+// никогда не вызывался из production-кода, поэтому rate-based алерт всегда давал 0%.
+// BUG-NEW-6 FIX: переключились на count-based alerting — не нужен denominator.
 type HealthChecker struct {
-	mu              sync.Mutex
-	errors          []ConnectionError
-	windowDuration  time.Duration // sliding window for error rate (default 30s)
-	thresholdPct    float64       // % of failed connections to trigger alert (default 50%)
-	lastAlertTime   time.Time
-	alertCooldown   time.Duration // don't alert more than once per X seconds
-	connectionCount int           // total attempts in current window (for rate calculation)
+	mu             sync.Mutex
+	errors         []ConnectionError
+	windowDuration time.Duration // sliding window (default 30s)
+	thresholdCount int           // число ошибок в окне для триггера алерта (default 5)
+	lastAlertTime  time.Time
+	alertCooldown  time.Duration // не алертим чаще чем раз в X секунд
 }
 
 // ErrorPattern represents a pattern to extract connection errors from sing-box logs
@@ -45,12 +46,12 @@ var connectionErrorPatterns = []struct {
 }
 
 // NewHealthChecker creates a new health checker with default configuration.
-// Default: 30-second window, 50% error threshold, 60-second cooldown between alerts.
+// Default: 30-second window, 5-error count threshold, 60-second cooldown between alerts.
 func NewHealthChecker() *HealthChecker {
 	return &HealthChecker{
 		errors:         make([]ConnectionError, 0, 1000),
 		windowDuration: 30 * time.Second,
-		thresholdPct:   50.0, // alert if >50% connections failed
+		thresholdCount: 5, // alert if >= 5 errors in the window
 		alertCooldown:  60 * time.Second,
 	}
 }
@@ -70,54 +71,53 @@ func (hc *HealthChecker) RecordError(timestamp time.Time, errorType, outbound, m
 	})
 
 	// Prune old errors outside window
+	// BUG FIX: когда ВСЕ ошибки старше cutoff, validIdx оставался 0 и условие
+	// validIdx > 0 не выполнялось — старые ошибки не удалялись (утечка памяти
+	// и ложные алерты). Используем found-флаг чтобы различать два случая:
+	// found=false означает "все старые" → очищаем весь слайс.
 	cutoff := time.Now().Add(-hc.windowDuration)
+	found := false
 	validIdx := 0
 	for i, err := range hc.errors {
 		if err.Timestamp.After(cutoff) {
 			validIdx = i
+			found = true
 			break
 		}
 	}
-	if validIdx > 0 {
+	if !found {
+		hc.errors = hc.errors[:0] // все ошибки устарели — очищаем
+	} else if validIdx > 0 {
 		hc.errors = hc.errors[validIdx:]
 	}
 
-	// Count total attempts (sample: for every error, assume ~3-5 total attempts)
-	// This is a heuristic since we don't see every connection attempt, only errors.
-	hc.connectionCount = len(hc.errors) * 4 // rough estimate
+	// BUG-NEW-6 FIX: count-based alerting — не нужен denominator connectionCount.
+	// Проверяем порог и обновляем lastAlertTime внутри shouldAlert.
 
 	// Check threshold
 	return hc.shouldAlert()
 }
 
-// TrackConnectionAttempt increments the connection counter (called for each processed connection).
-func (hc *HealthChecker) TrackConnectionAttempt() {
-	hc.mu.Lock()
-	defer hc.mu.Unlock()
-	hc.connectionCount++
-}
-
-// shouldAlert returns true if error rate exceeds threshold and cooldown has passed.
+// shouldAlert returns true if error count in window reaches threshold and cooldown has passed.
+// Caller must hold hc.mu.
 func (hc *HealthChecker) shouldAlert() bool {
-	if hc.connectionCount == 0 {
+	if len(hc.errors) < hc.thresholdCount {
 		return false
 	}
 
-	errorRate := (float64(len(hc.errors)) / float64(hc.connectionCount)) * 100
 	now := time.Now()
-
-	// Check if alert should be triggered
-	shouldTrigger := errorRate > hc.thresholdPct &&
-		now.Sub(hc.lastAlertTime) > hc.alertCooldown
-
+	shouldTrigger := now.Sub(hc.lastAlertTime) > hc.alertCooldown
 	if shouldTrigger {
 		hc.lastAlertTime = now
 	}
-
 	return shouldTrigger
 }
 
-// GetStatus returns current error rate and alert state.
+// GetStatus returns current error count and alert state.
+// BUG-NEW-6 FIX: возвращает count-based метрику вместо rate (denominator connectionCount
+// никогда не инкрементировался в production → rate всегда был 0%).
+// errorRatePct теперь = (errorCount / thresholdCount) * 100 — показывает насыщенность
+// буфера алертов (0% = нет ошибок, 100% = порог достигнут, >100% = превышен).
 func (hc *HealthChecker) GetStatus() (errorCount int, errorRatePct float64, wouldAlert bool) {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
@@ -130,12 +130,8 @@ func (hc *HealthChecker) GetStatus() (errorCount int, errorRatePct float64, woul
 		}
 	}
 
-	if hc.connectionCount == 0 {
-		return validCount, 0, false
-	}
-
-	ratePct := (float64(validCount) / float64(hc.connectionCount)) * 100
-	return validCount, ratePct, ratePct > hc.thresholdPct
+	pct := float64(validCount) / float64(hc.thresholdCount) * 100
+	return validCount, pct, validCount >= hc.thresholdCount
 }
 
 // Reset clears all tracked errors.
@@ -143,19 +139,19 @@ func (hc *HealthChecker) Reset() {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 	hc.errors = hc.errors[:0]
-	hc.connectionCount = 0
 	hc.lastAlertTime = time.Time{}
 }
 
 // SetThresholds allows customization of detection parameters.
-func (hc *HealthChecker) SetThresholds(windowDuration time.Duration, errorThresholdPct float64, alertCooldown time.Duration) {
+// errorThresholdCount: минимальное число ошибок в окне для триггера алерта (0 = не менять).
+func (hc *HealthChecker) SetThresholds(windowDuration time.Duration, errorThresholdCount int, alertCooldown time.Duration) {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
 	if windowDuration > 0 {
 		hc.windowDuration = windowDuration
 	}
-	if errorThresholdPct > 0 {
-		hc.thresholdPct = errorThresholdPct
+	if errorThresholdCount > 0 {
+		hc.thresholdCount = errorThresholdCount
 	}
 	if alertCooldown > 0 {
 		hc.alertCooldown = alertCooldown

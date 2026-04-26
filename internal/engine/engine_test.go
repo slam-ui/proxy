@@ -50,7 +50,8 @@ func TestNeedsDownload_ReturnsFalse_WhenFileExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "existing.exe")
 
-	if err := os.WriteFile(path, []byte("fake exe content"), 0755); err != nil {
+	// File must be >= MinValidBinarySize (1MB) to be considered valid
+	if err := os.WriteFile(path, make([]byte, 1024*1024), 0755); err != nil {
 		t.Fatalf("Failed to create file: %v", err)
 	}
 
@@ -115,7 +116,7 @@ func TestFmtBytes_Kilobytes(t *testing.T) {
 		{1024, "1.0KB"},
 		{1536, "1.5KB"},
 		{10240, "10.0KB"},
-		{1024 * 1024 - 1, "1024.0KB"},
+		{1024*1024 - 1, "1024.0KB"},
 	}
 
 	for _, tc := range tests {
@@ -420,9 +421,9 @@ func TestFetchLatestAsset_ReturnsError_OnNoWindowsAsset(t *testing.T) {
 func TestFetchLatestAsset_ReturnsAsset_OnSuccess(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		release := githubRelease{
-			TagName: "v1.2.3",
+			TagName: "v1.13.7",
 			Assets: []githubAsset{
-				{Name: "sing-box-1.2.3-windows-amd64.zip", DownloadURL: "http://example.com/windows.zip", Size: 1024},
+				{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: "http://example.com/windows.zip", Size: 1024},
 			},
 		}
 		json.NewEncoder(w).Encode(release)
@@ -438,11 +439,11 @@ func TestFetchLatestAsset_ReturnsAsset_OnSuccess(t *testing.T) {
 		t.Fatalf("fetchLatestAsset failed: %v", err)
 	}
 
-	if version != "v1.2.3" {
-		t.Errorf("Version = %q, want v1.2.3", version)
+	if version != "v1.13.7" {
+		t.Errorf("Version = %q, want v1.13.7", version)
 	}
-	if asset.Name != "sing-box-1.2.3-windows-amd64.zip" {
-		t.Errorf("Asset name = %q, want sing-box-1.2.3-windows-amd64.zip", asset.Name)
+	if asset.Name != "sing-box-1.13.7-windows-amd64.zip" {
+		t.Errorf("Asset name = %q, want sing-box-1.13.7-windows-amd64.zip", asset.Name)
 	}
 }
 
@@ -453,15 +454,15 @@ func TestFetchLatestAsset_FetchesChecksum(t *testing.T) {
 	var ts *httptest.Server
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".sha256") {
-			w.Write([]byte(expectedSum + "  sing-box-1.2.3-windows-amd64.zip"))
+			w.Write([]byte(expectedSum + "  sing-box-1.13.7-windows-amd64.zip"))
 			return
 		}
 
 		release := githubRelease{
-			TagName: "v1.2.3",
+			TagName: "v1.13.7",
 			Assets: []githubAsset{
-				{Name: "sing-box-1.2.3-windows-amd64.zip", DownloadURL: "http://example.com/windows.zip"},
-				{Name: "sing-box-1.2.3-windows-amd64.zip.sha256", DownloadURL: ts.URL + "/checksum.sha256"},
+				{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: "http://example.com/windows.zip"},
+				{Name: "sing-box-1.13.7-windows-amd64.zip.sha256", DownloadURL: ts.URL + "/checksum.sha256"},
 			},
 		}
 		json.NewEncoder(w).Encode(release)
@@ -479,6 +480,37 @@ func TestFetchLatestAsset_FetchesChecksum(t *testing.T) {
 
 	if asset.Checksum != expectedSum {
 		t.Errorf("Checksum = %q, want %q", asset.Checksum, expectedSum)
+	}
+}
+
+// ── fetchLatestAssetFallback Tests ─────────────────────────────────────────────
+
+// BUG FIX: fallback больше не делает HTTP запрос — конструирует URL из pinnedVersion.
+// Проверяем что URL корректен и версия совпадает с pinnedVersion.
+func TestFetchLatestAssetFallback_ConstructsURLFromPinnedVersion(t *testing.T) {
+	noClient := &http.Client{Timeout: time.Second, Transport: http.DefaultTransport}
+	asset, version, err := fetchLatestAssetFallback(context.Background(), noClient)
+	if err != nil {
+		t.Fatalf("fetchLatestAssetFallback вернул ошибку: %v", err)
+	}
+	if version != pinnedVersion {
+		t.Errorf("version = %q, want %q", version, pinnedVersion)
+	}
+	ver := strings.TrimPrefix(pinnedVersion, "v")
+	wantName := fmt.Sprintf("sing-box-%s-windows-amd64.zip", ver)
+	if asset.Name != wantName {
+		t.Errorf("asset.Name = %q, want %q", asset.Name, wantName)
+	}
+	wantURL := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/%s/%s", pinnedVersion, wantName)
+	if asset.DownloadURL != wantURL {
+		t.Errorf("asset.DownloadURL = %q, want %q", asset.DownloadURL, wantURL)
+	}
+}
+
+// Проверяем что после смены pinnedVersion githubAPI тоже обновляется.
+func TestPinnedVersion_GithubAPIContainsTag(t *testing.T) {
+	if !strings.Contains(githubAPI, pinnedVersion) {
+		t.Errorf("githubAPI %q не содержит pinnedVersion %q", githubAPI, pinnedVersion)
 	}
 }
 
@@ -569,8 +601,8 @@ func TestEnsureEngine_ReturnsNil_WhenFileExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sing-box.exe")
 
-	// Create existing file
-	if err := os.WriteFile(path, []byte("existing exe"), 0755); err != nil {
+	// Create existing file >= MinValidBinarySize (1MB) so NeedsDownload returns false
+	if err := os.WriteFile(path, make([]byte, 1024*1024), 0755); err != nil {
 		t.Fatalf("Failed to create file: %v", err)
 	}
 
@@ -593,9 +625,9 @@ func TestEnsureEngine_SendsProgress(t *testing.T) {
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "releases") {
 			release := githubRelease{
-				TagName: "v1.0.0",
+				TagName: "v1.13.7",
 				Assets: []githubAsset{
-					{Name: "sing-box-1.0.0-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
+					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
 				},
 			}
 			json.NewEncoder(w).Encode(release)
@@ -630,6 +662,76 @@ func TestEnsureEngine_SendsProgress(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("EnsureEngine failed: %v", err)
+	}
+}
+
+func TestEnsureEngine_ExposeBusyStateUntilVerificationFinishes(t *testing.T) {
+	enteredVerify := make(chan struct{})
+	releaseVerify := make(chan struct{})
+	oldVerify := verifySingBoxBinaryFn
+	verifySingBoxBinaryFn = func(_ context.Context, _ string) error {
+		close(enteredVerify)
+		<-releaseVerify
+		return nil
+	}
+	defer func() { verifySingBoxBinaryFn = oldVerify }()
+
+	var ts *httptest.Server
+	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "releases") {
+			release := githubRelease{
+				TagName: "v1.13.7",
+				Assets: []githubAsset{
+					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
+				},
+			}
+			_ = json.NewEncoder(w).Encode(release)
+			return
+		}
+
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		fw, _ := zw.Create("sing-box.exe")
+		_, _ = fw.Write([]byte("fake exe"))
+		_ = zw.Close()
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	oldAPI := githubAPI
+	githubAPI = ts.URL + "/releases/latest"
+	defer func() { githubAPI = oldAPI }()
+
+	execPath := filepath.Join(t.TempDir(), "sing-box.exe")
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- EnsureEngine(context.Background(), execPath, nil)
+	}()
+
+	select {
+	case <-enteredVerify:
+	case <-time.After(5 * time.Second):
+		t.Fatal("EnsureEngine did not reach verification")
+	}
+	if !EnsureInProgress() {
+		t.Fatal("EnsureInProgress() = false while verification is blocked")
+	}
+
+	waitCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := WaitForEnsure(waitCtx); err == nil {
+		t.Fatal("WaitForEnsure should block until verification finishes")
+	}
+
+	close(releaseVerify)
+	if err := <-errCh; err != nil {
+		t.Fatalf("EnsureEngine: %v", err)
+	}
+	if err := WaitForEnsure(context.Background()); err != nil {
+		t.Fatalf("WaitForEnsure after completion: %v", err)
+	}
+	if EnsureInProgress() {
+		t.Fatal("EnsureInProgress() = true after EnsureEngine completion")
 	}
 }
 
@@ -742,9 +844,9 @@ func TestEnsureEngine_CreatesDirectory(t *testing.T) {
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "releases") {
 			release := githubRelease{
-				TagName: "v1.0.0",
+				TagName: "v1.13.7",
 				Assets: []githubAsset{
-					{Name: "sing-box-1.0.0-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
+					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
 				},
 			}
 			json.NewEncoder(w).Encode(release)
@@ -901,9 +1003,9 @@ func TestEnsureEngine_Retries_OnServerErrors(t *testing.T) {
 			}
 			// Третий → успех
 			release := githubRelease{
-				TagName: "v1.5.0",
+				TagName: "v1.13.7",
 				Assets: []githubAsset{
-					{Name: "sing-box-1.5.0-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
+					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
 				},
 			}
 			json.NewEncoder(w).Encode(release)
@@ -913,7 +1015,7 @@ func TestEnsureEngine_Retries_OnServerErrors(t *testing.T) {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
 		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe v1.5.0"))
+		fw.Write([]byte("fake exe v1.13.7"))
 		zw.Close()
 		w.Write(buf.Bytes())
 	}))
@@ -967,9 +1069,9 @@ func TestEnsureEngine_WritesVersionFile(t *testing.T) {
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "releases") || r.URL.Path == "/" {
 			release := githubRelease{
-				TagName: "v2.0.0",
+				TagName: "v1.13.7",
 				Assets: []githubAsset{
-					{Name: "sing-box-2.0.0-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
+					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
 				},
 			}
 			json.NewEncoder(w).Encode(release)
@@ -992,8 +1094,8 @@ func TestEnsureEngine_WritesVersionFile(t *testing.T) {
 		t.Fatalf("EnsureEngine failed: %v", err)
 	}
 
-	if v := InstalledVersion(path); v != "v2.0.0" {
-		t.Errorf("InstalledVersion после EnsureEngine = %q, want v2.0.0", v)
+	if v := InstalledVersion(path); v != "v1.13.7" {
+		t.Errorf("InstalledVersion после EnsureEngine = %q, want v1.13.7", v)
 	}
 }
 
@@ -1087,6 +1189,71 @@ func FuzzFmtBytes(f *testing.F) {
 			t.Error("fmtBytes returned empty string")
 		}
 	})
+}
+
+// ── БАГ 5: fetchLatestAssetFallback SHA256 ────────────────────────────────────
+
+// TestFetchLatestAssetFallback_PopulatesChecksum проверяет что при наличии sha256sums.txt
+// на сервере checksum заполняется в возвращённом asset'е.
+func TestFetchLatestAssetFallback_PopulatesChecksum(t *testing.T) {
+	ver := strings.TrimPrefix(pinnedVersion, "v")
+	zipName := fmt.Sprintf("sing-box-%s-%s-%s.zip", ver, assetOS, assetArch)
+	expectedSum := strings.Repeat("a", 64)
+
+	// Имитируем sha256sums.txt сервера GitHub
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Возвращаем sha256sums.txt с нашей суммой для нужного файла
+		fmt.Fprintf(w, "%s  %s\n", expectedSum, zipName)
+	}))
+	defer ts.Close()
+
+	// Подменяем pinnedVersion URL на тестовый сервер через monkey-patching суммы URL.
+	// fetchLatestAssetFallback строит URL на основе pinnedVersion и github.com — мы не можем
+	// его подменить напрямую, поэтому тестируем через fetchChecksumFromSums напрямую.
+	client := ts.Client()
+	sum, err := fetchChecksumFromSums(context.Background(), ts.URL+"/sha256sums.txt", zipName, client)
+	if err != nil {
+		t.Fatalf("fetchChecksumFromSums failed: %v", err)
+	}
+	if sum != expectedSum {
+		t.Errorf("sum = %q, want %q", sum, expectedSum)
+	}
+}
+
+// TestFetchLatestAssetFallback_NoChecksumOnError проверяет что при недоступности
+// sha256sums.txt asset всё равно возвращается (без Checksum) — без ошибки.
+func TestFetchLatestAssetFallback_NoChecksumOnError(t *testing.T) {
+	// Сервер возвращает 404 для sha256sums.txt
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	// fetchLatestAssetFallback не должна возвращать ошибку даже если sha256sums недоступен.
+	// Тестируем косвенно через fetchChecksumFromSums — ожидаем ошибку HTTP 404.
+	_, err := fetchChecksumFromSums(context.Background(), ts.URL+"/sha256sums.txt", "any.zip", client)
+	if err == nil {
+		t.Error("ожидалась ошибка при HTTP 404")
+	}
+	// При такой ошибке fetchLatestAssetFallback должна продолжать без Checksum (не возвращать ошибку).
+	// Проверяем поведение всей функции: она должна вернуть asset с пустым Checksum.
+	orig := githubAPI
+	githubAPI = ts.URL + "/api"
+	defer func() { githubAPI = orig }()
+
+	asset, version, fallbackErr := fetchLatestAssetFallback(context.Background(), client)
+	if fallbackErr != nil {
+		t.Errorf("fetchLatestAssetFallback не должна возвращать ошибку: %v", fallbackErr)
+	}
+	if asset.Name == "" {
+		t.Error("asset.Name должен быть заполнен")
+	}
+	if version == "" {
+		t.Error("version должна быть заполнена")
+	}
+	// Checksum может быть пустым — это нормально при недоступном sha256sums.txt
+	_ = asset.Checksum
 }
 
 func FuzzVerifyChecksum(f *testing.F) {

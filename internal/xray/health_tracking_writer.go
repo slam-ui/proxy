@@ -30,12 +30,26 @@ func NewHealthTrackingWriter(dst io.Writer, checker *HealthChecker) *healthTrack
 	}
 }
 
+// maxLineBuf ограничивает размер внутреннего буфера.
+// Защита от OOM при аварийном дампе или бинарном выводе sing-box без '\n'.
+const maxLineBuf = 64 * 1024 // 64 KB
+
 // Write parses sing-box output for connection errors and updates HealthChecker.
 func (h *healthTrackingWriter) Write(p []byte) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	h.buf = append(h.buf, p...)
+
+	// BUG FIX: защита от неограниченного роста буфера при отсутствии '\n'.
+	// При аварийном дампе или бинарном выводе sing-box buf мог расти до OOM.
+	if len(h.buf) > maxLineBuf {
+		if idx := bytes.LastIndexByte(h.buf[:len(h.buf)-1], '\n'); idx >= 0 {
+			h.buf = h.buf[idx+1:]
+		} else {
+			h.buf = h.buf[len(h.buf)-maxLineBuf:]
+		}
+	}
 
 	// Process each complete line
 	for {

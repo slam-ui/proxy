@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
@@ -22,6 +23,7 @@ func SetupSettingsRoutes(s *Server) {
 	h := &SettingsHandlers{server: s}
 	s.router.HandleFunc("/api/settings", h.handleGetSettings).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/settings/autorun", h.handleSetAutorun).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/settings/startup-proxy", h.handleSetStartupProxy).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/killswitch", h.handleSetKillSwitch).Methods("POST", "OPTIONS")
 	// B-2: Proxy Guard endpoints
 	s.router.HandleFunc("/api/settings/proxy-guard", h.handleGetProxyGuard).Methods("GET", "OPTIONS")
@@ -36,17 +38,24 @@ func SetupSettingsRoutes(s *Server) {
 
 // SettingsResponse — состояние всех настроек приложения.
 type SettingsResponse struct {
-	Autorun    bool `json:"autorun"`     // включён ли автозапуск при входе в Windows
-	KillSwitch bool `json:"kill_switch"` // активен ли Kill Switch прямо сейчас
-	ProxyGuard bool `json:"proxy_guard"` // B-2: активна ли Proxy Guard для восстановления
+	Autorun            bool `json:"autorun"`               // включён ли автозапуск при входе в Windows
+	KillSwitch         bool `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
+	ProxyGuard         bool `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
+	StartProxyOnLaunch bool `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
 }
 
 // handleGetSettings GET /api/settings
 func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Request) {
+	appSettings, err := config.LoadAppSettings(config.AppSettingsFile)
+	if err != nil {
+		h.server.logger.Warn("handleGetSettings: %v", err)
+		appSettings = config.DefaultAppSettings()
+	}
 	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
-		Autorun:    autorun.IsEnabled(),
-		KillSwitch: killswitch.IsEnabled(),
-		ProxyGuard: h.server.IsProxyGuardEnabled(),
+		Autorun:            autorun.IsEnabled(),
+		KillSwitch:         killswitch.IsEnabled(),
+		ProxyGuard:         h.server.IsProxyGuardEnabled(),
+		StartProxyOnLaunch: appSettings.StartProxyOnLaunch,
 	})
 }
 
@@ -60,8 +69,6 @@ func (h *SettingsHandlers) handleGetProxyGuard(w http.ResponseWriter, _ *http.Re
 
 // handleSetProxyGuard POST /api/settings/proxy-guard — включить/отключить Proxy Guard
 // Body: {"enabled": true|false}
-// B-2: Примечание: фактическое запущение/остановка горутины guard происходит на уровне App.
-// Этот хендлер только обновляет флаг. App периодически синхронизирует состояние.
 func (h *SettingsHandlers) handleSetProxyGuard(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled bool `json:"enabled"`
@@ -72,6 +79,16 @@ func (h *SettingsHandlers) handleSetProxyGuard(w http.ResponseWriter, r *http.Re
 	}
 
 	h.server.SetProxyGuardEnabled(body.Enabled)
+	if body.Enabled {
+		if err := h.server.StartProxyGuard(); err != nil {
+			h.server.logger.Warn("handleSetProxyGuard: StartGuard: %v", err)
+		} else {
+			h.server.logger.Info("Proxy Guard запущен через UI")
+		}
+	} else {
+		h.server.StopProxyGuard()
+		h.server.logger.Info("Proxy Guard остановлен через UI")
+	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled": body.Enabled,
@@ -104,6 +121,34 @@ func (h *SettingsHandlers) handleSetAutorun(w http.ResponseWriter, r *http.Reque
 	h.server.respondJSON(w, http.StatusOK, SettingsResponse{Autorun: autorun.IsEnabled()})
 }
 
+// handleSetStartupProxy POST /api/settings/startup-proxy
+// Body: {"enabled": true|false}
+func (h *SettingsHandlers) handleSetStartupProxy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	settings, err := config.LoadAppSettings(config.AppSettingsFile)
+	if err != nil {
+		h.server.logger.Warn("handleSetStartupProxy: LoadAppSettings: %v", err)
+		settings = config.DefaultAppSettings()
+	}
+	settings.StartProxyOnLaunch = body.Enabled
+	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
+		"enabled": body.Enabled,
+		"message": "настройка запуска прокси обновлена",
+	})
+}
+
 // handleSetKillSwitch POST /api/settings/killswitch
 // Body: {"enabled": true|false}
 // Примечание: настройка сохраняется в памяти и читается при старте приложения.
@@ -130,15 +175,27 @@ func (h *SettingsHandlers) handleSetKillSwitch(w http.ResponseWriter, r *http.Re
 }
 
 // B-7: handleGetDNS GET /api/settings/dns — получить текущую DNS конфигурацию
+// FIX Bug2: читаем из in-memory tunHandlers.routing, а не с диска.
+// Чтение с диска могло вернуть устаревшее состояние если конкурентная горутина
+// (handleAddRule и др.) обновила routing в памяти но ещё не сохранила на диск.
+// Когда tunHandlers не инициализирован (старт приложения) — fallback на диск.
 func (h *SettingsHandlers) handleGetDNS(w http.ResponseWriter, _ *http.Request) {
-	routingConfigPath := config.DataDir + "/routing.json"
-	cfg, err := config.LoadRoutingConfig(routingConfigPath)
-	if err != nil {
-		h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения конфигурации: "+err.Error())
-		return
+	var dnsConfig *config.DNSConfig
+
+	if h.server.tunHandlers != nil {
+		h.server.tunHandlers.mu.RLock()
+		dnsConfig = h.server.tunHandlers.routing.DNS
+		h.server.tunHandlers.mu.RUnlock()
+	} else {
+		routingConfigPath := config.DataDir + "/routing.json"
+		cfg, err := config.LoadRoutingConfig(routingConfigPath)
+		if err != nil {
+			h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения конфигурации: "+err.Error())
+			return
+		}
+		dnsConfig = cfg.DNS
 	}
 
-	dnsConfig := cfg.DNS
 	if dnsConfig == nil {
 		dnsConfig = config.DefaultDNSConfig()
 	}
@@ -172,29 +229,67 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Загружаем текущую конфиг, обновляем DNS, сохраняем
 	routingConfigPath := config.DataDir + "/routing.json"
-	cfg, err := config.LoadRoutingConfig(routingConfigPath)
-	if err != nil {
-		h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения конфигурации: "+err.Error())
-		return
-	}
-
-	cfg.DNS = &config.DNSConfig{
+	newDNS := &config.DNSConfig{
 		RemoteDNS: body.RemoteDNS,
 		DirectDNS: body.DirectDNS,
 	}
+	// Если клиент передал пустую строку — используем значение по умолчанию.
+	defaultDNS := config.DefaultDNSConfig()
+	if newDNS.RemoteDNS == "" {
+		newDNS.RemoteDNS = defaultDNS.RemoteDNS
+	}
+	if newDNS.DirectDNS == "" {
+		newDNS.DirectDNS = defaultDNS.DirectDNS
+	}
 
-	if err := config.SaveRoutingConfig(routingConfigPath, cfg); err != nil {
-		h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения: "+err.Error())
-		return
+	if h.server.tunHandlers != nil {
+		// FIX Bug2: работаем через in-memory tunHandlers.routing под мьютексом.
+		// Чтение с диска + запись на диск создавало race с конкурентными handleAddRule и др.:
+		// если те уже изменили routing.Rules в памяти но ещё не сохранили на диск,
+		// handleSetDNS читал устаревший диск и перезаписывал его, теряя новые правила.
+		h.server.tunHandlers.mu.Lock()
+		oldDNS := h.server.tunHandlers.routing.DNS
+		h.server.tunHandlers.routing.DNS = newDNS
+		// Снимаем копию всего routing для сохранения на диск — включает все актуальные правила.
+		routingSnapshot := *h.server.tunHandlers.routing
+		h.server.tunHandlers.mu.Unlock()
+
+		if err := config.SaveRoutingConfig(routingConfigPath, &routingSnapshot); err != nil {
+			// Откатываем in-memory изменение при ошибке записи.
+			h.server.tunHandlers.mu.Lock()
+			h.server.tunHandlers.routing.DNS = oldDNS
+			h.server.tunHandlers.mu.Unlock()
+			h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения: "+err.Error())
+			return
+		}
+	} else {
+		// Fallback: TUN ещё не инициализирован — читаем с диска, обновляем DNS, сохраняем.
+		// В этом состоянии нет конкурентных горутин изменяющих routing, race невозможен.
+		cfg, err := config.LoadRoutingConfig(routingConfigPath)
+		if err != nil {
+			h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения конфигурации: "+err.Error())
+			return
+		}
+		cfg.DNS = newDNS
+		if err := config.SaveRoutingConfig(routingConfigPath, cfg); err != nil {
+			h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения: "+err.Error())
+			return
+		}
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"message":    "DNS конфигурация обновлена",
-		"remote_dns": body.RemoteDNS,
-		"direct_dns": body.DirectDNS,
+		"remote_dns": newDNS.RemoteDNS, // реально сохранённое значение (с дефолтом при пустой строке)
+		"direct_dns": newDNS.DirectDNS,
 	})
+
+	// Применяем новый DNS сразу — sing-box должен использовать новые серверы.
+	if h.server.tunHandlers != nil {
+		if err := h.server.tunHandlers.TriggerApply(); err != nil {
+			h.server.logger.Warn("handleSetDNS: TriggerApply: %v", err)
+		}
+	}
 }
 
 // B-10: handleGetGeositeUpdate GET /api/settings/geosite-update — статус и настройки автообновления geosite
@@ -213,9 +308,11 @@ func (h *SettingsHandlers) handleGetGeositeUpdate(w http.ResponseWriter, _ *http
 	})
 }
 
-// B-10: handleSetGeositeUpdate POST /api/settings/geosite-update — изменить настройки автообновления geosite
+// B-10 / БАГ 10: handleSetGeositeUpdate POST /api/settings/geosite-update — изменить настройки автообновления geosite
 // Body: {"enabled": true, "interval_days": 7}
-// При enabled=false останавливает updater; при enabled=true запускает (если ещё не запущен).
+// Применяет изменения немедленно:
+//   - enabled=false  → останавливает updater
+//   - enabled=true   → запускает/перезапускает updater (в т.ч. при смене интервала)
 func (h *SettingsHandlers) handleSetGeositeUpdate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled      bool `json:"enabled"`
@@ -229,33 +326,53 @@ func (h *SettingsHandlers) handleSetGeositeUpdate(w http.ResponseWriter, r *http
 		body.IntervalDays = 7
 	}
 
+	// БАГ 10: читаем старый интервал ДО сохранения чтобы понять изменился ли он.
+	oldSettings := loadGeoAutoUpdateSettings()
+
 	s := geoAutoUpdateSettings{Enabled: body.Enabled, IntervalDays: body.IntervalDays}
 	if err := saveGeoAutoUpdateSettings(s); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения настроек: "+err.Error())
 		return
 	}
 
+	intervalChanged := body.IntervalDays != oldSettings.IntervalDays
+	newInterval := time.Duration(body.IntervalDays) * 24 * time.Hour
+
 	g := h.server.GetGeoAutoUpdater()
-	if g != nil {
-		if body.Enabled && !g.IsRunning() {
-			g.Start(h.server.lifecycleCtx)
-		} else if !body.Enabled && g.IsRunning() {
+	if !body.Enabled {
+		// Выключаем updater если запущен.
+		if g != nil && g.IsRunning() {
 			g.Stop()
+		}
+	} else {
+		// Включаем или перезапускаем с новым интервалом.
+		if g == nil || !g.IsRunning() {
+			// Создаём новый updater и запускаем.
+			newG := NewGeoAutoUpdater(h.server.logger, newInterval)
+			h.server.SetGeoAutoUpdater(newG)
+			newG.Start(h.server.lifecycleCtx)
+		} else if intervalChanged {
+			// Интервал изменился — нельзя поменять на ходу, нужен пересоздать.
+			g.Stop()
+			newG := NewGeoAutoUpdater(h.server.logger, newInterval)
+			h.server.SetGeoAutoUpdater(newG)
+			newG.Start(h.server.lifecycleCtx)
 		}
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled":       body.Enabled,
 		"interval_days": body.IntervalDays,
-		"message":       "настройки автообновления geosite обновлены",
+		"applied":       true,
 	})
 }
 
 // B-7: validateDNSURL проверяет что DNS URL имеет разрешённую схему.
 // Разрешённые: https://, tls://, udp://, tcp://, quic://
+// Пустая строка допустима — означает «использовать значение по умолчанию».
 func validateDNSURL(url string) error {
 	if url == "" {
-		return fmt.Errorf("DNS адрес не должен быть пуст")
+		return nil // пустая строка = "использовать значение по умолчанию"
 	}
 
 	allowedSchemes := []string{"https://", "tls://", "udp://", "tcp://", "quic://"}

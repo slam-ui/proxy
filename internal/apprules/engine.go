@@ -23,13 +23,13 @@ type Engine interface {
 
 // engine реализация Engine
 type engine struct {
-	rules      map[string]*Rule
+	rules map[string]*Rule
 	// BUG FIX #12: sorted кэширует rules в порядке убывания Priority.
 	// Ранее Match() вызывал sort.Slice на каждый вызов (O(n log n)).
 	// Теперь сортировка выполняется только в rebuildSorted() при мутациях.
-	sorted     []*Rule
-	matcher    Matcher
-	mu         sync.RWMutex
+	sorted  []*Rule
+	matcher Matcher
+	mu      sync.RWMutex
 }
 
 // rebuildSorted пересобирает и сортирует срез enabled-правил.

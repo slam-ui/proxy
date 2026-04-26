@@ -30,6 +30,11 @@ type Manager interface {
 	// вызови Stop() или отмени ctx чтобы завершить guard.
 	StartGuard(ctx context.Context, interval time.Duration) error
 	StopGuard()
+	// БАГ 14: PauseGuard приостанавливает Proxy Guard на duration — используется во время
+	// doApply чтобы guard не восстанавливал прокси пока sing-box перезапускается.
+	PauseGuard(d time.Duration)
+	// ResumeGuard снимает паузу Proxy Guard досрочно.
+	ResumeGuard()
 }
 
 type manager struct {
@@ -42,6 +47,17 @@ type manager struct {
 	guardCtx     context.Context
 	guardCancel  context.CancelFunc
 	guardRunning bool // BUG FIX: sync.Once не позволяет перезапуск после StopGuard
+	// BUG FIX: guardGen — монотонный счётчик поколений guard-горутины.
+	// Когда StartGuard запускает новую горутину, он инкрементирует guardGen и передаёт
+	// значение в замыкание. При завершении горутина проверяет совпадение с текущим
+	// m.guardGen: если не совпадает — это старая горутина, m.guardRunning трогать нельзя.
+	// Без этого: при двойном вызове StartGuard старая горутина после завершения ставила
+	// m.guardRunning = false, хотя новая горутина уже работала → race condition.
+	guardGen int
+	// БАГ 14: pausedUntil — время до которого Proxy Guard приостановлен.
+	// Используется во время doApply чтобы guard не восстанавливал прокси
+	// пока sing-box перезапускается.
+	pausedUntil time.Time
 }
 
 func NewManager(log logger.Logger) Manager {
@@ -131,11 +147,16 @@ func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error 
 	}
 	m.guardCtx, m.guardCancel = context.WithCancel(ctx)
 	m.guardRunning = true
+	m.guardGen++
+	myGen := m.guardGen
 	guardCtx := m.guardCtx
 	go func() {
 		m.guardLoop(guardCtx, interval)
 		m.mu.Lock()
-		m.guardRunning = false
+		// Очищаем флаг только если мы ещё актуальная горутина (не вытеснены повторным StartGuard).
+		if m.guardGen == myGen {
+			m.guardRunning = false
+		}
 		m.mu.Unlock()
 	}()
 
@@ -169,11 +190,30 @@ func (m *manager) guardLoop(guardCtx context.Context, interval time.Duration) {
 	}
 }
 
+// PauseGuard приостанавливает Proxy Guard на d — checkAndRestore возвращается сразу.
+func (m *manager) PauseGuard(d time.Duration) {
+	m.mu.Lock()
+	m.pausedUntil = time.Now().Add(d)
+	m.mu.Unlock()
+}
+
+// ResumeGuard снимает паузу досрочно.
+func (m *manager) ResumeGuard() {
+	m.mu.Lock()
+	m.pausedUntil = time.Time{}
+	m.mu.Unlock()
+}
+
 // checkAndRestore проверяет нужно ли восстанавливать системный прокси.
 func (m *manager) checkAndRestore() {
 	m.mu.Lock()
 	expectedEnabled := m.enabled
 	expectedConfig := m.config
+	// БАГ 14: пропускаем восстановление пока guard приостановлен (doApply).
+	if !m.pausedUntil.IsZero() && time.Now().Before(m.pausedUntil) {
+		m.mu.Unlock()
+		return
+	}
 	m.mu.Unlock()
 
 	// Если мы не включали прокси — ничего не восстанавливаем

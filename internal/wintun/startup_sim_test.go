@@ -111,20 +111,21 @@ func TestRecordStop_ClearsCleanShutdown(t *testing.T) {
 	}
 }
 
-// TestRecordCleanShutdown_DoesNotAffectStopFile проверяет что RecordCleanShutdown
-// не трогает StopFile (timestamp последней остановки должен оставаться корректным).
-func TestRecordCleanShutdown_DoesNotAffectStopFile(t *testing.T) {
+// TestRecordCleanShutdown_RemovesStopFile проверяет BUG-8 FIX: RecordCleanShutdown
+// удаляет StopFile симметрично тому как RecordStop удаляет CleanShutdownFile.
+// Без этого EstimateReadyAt использовал бы старый StopFile timestamp при следующем вызове.
+func TestRecordCleanShutdown_RemovesStopFile(t *testing.T) {
 	defer simu(t)()
 
 	wintun.RecordStop()
-	data1, _ := os.ReadFile(wintun.StopFile)
+	if _, err := os.Stat(wintun.StopFile); os.IsNotExist(err) {
+		t.Fatal("StopFile должен существовать после RecordStop")
+	}
 
-	time.Sleep(5 * time.Millisecond)
 	wintun.RecordCleanShutdown()
-	data2, _ := os.ReadFile(wintun.StopFile)
 
-	if string(data1) != string(data2) {
-		t.Error("БАГ: RecordCleanShutdown изменил StopFile — timestamp испорчен")
+	if _, err := os.Stat(wintun.StopFile); !os.IsNotExist(err) {
+		t.Error("БАГ: RecordCleanShutdown должен удалять StopFile — старый timestamp испортит EstimateReadyAt")
 	}
 }
 

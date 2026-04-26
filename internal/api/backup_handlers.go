@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,16 +13,18 @@ import (
 	"strings"
 	"time"
 
+	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
 )
 
 // B-8: Backup & Restore handlers
 
 // handleBackup GET /api/backup — crear ZIP архив со всеми конфигами
-func handleBackup(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	buf := bytes.NewBuffer(nil)
 	zw := zip.NewWriter(buf)
-	defer zw.Close()
+	// БАГ 6: defer zw.Close() удалён — он вызывался ПОСЛЕ явного Close ниже,
+	// что приводило к двойной записи центрального каталога ZIP → невалидный архив.
 
 	// B-8: backup_meta.json с информацией о версии
 	meta := map[string]interface{}{
@@ -49,8 +52,9 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// FIX 43: profiles хранятся в profiles/ (не data/profiles/).
 	// B-8: Архивируем все файлы из profiles/ директории
-	profilesDir := "data/profiles"
+	profilesDir := "profiles"
 	if entries, err := os.ReadDir(profilesDir); err == nil {
 		for _, entry := range entries {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
@@ -64,7 +68,11 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	zw.Close()
+	// БАГ 6: проверяем ошибку Close — повреждённый архив не отправляем клиенту.
+	if err := zw.Close(); err != nil {
+		http.Error(w, "Failed to finalize ZIP", http.StatusInternalServerError)
+		return
+	}
 
 	// B-8: Отправляем ZIP файл
 	w.Header().Set("Content-Type", "application/zip")
@@ -74,17 +82,28 @@ func handleBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleBackupRestore POST /api/backup/restore — восстановить конфиги из ZIP
-func handleBackupRestore(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	// B-8: Ограничиваем размер 5MB
 	const maxSize = 5 * 1024 * 1024
+
+	// Сначала проверяем Content-Length (быстрый ранний выход).
 	if r.ContentLength > maxSize {
 		http.Error(w, "File too large (max 5MB)", http.StatusRequestEntityTooLarge)
 		return
 	}
 
+	// MaxBytesReader ограничивает тело запроса даже если Content-Length не задан.
+	// +32KB — запас на multipart-заголовки и boundary.
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+32*1024)
+
 	// B-8: Парсим multipart form
 	if err := r.ParseMultipartForm(maxSize); err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "File too large (max 5MB)", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Failed to parse form", http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -95,9 +114,14 @@ func handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	// B-8: Читаем ZIP архив
+	// B-8: Читаем ZIP архив с проверкой размера.
+	// io.CopyN читает до maxSize+1 байт — если скопировано больше maxSize, файл слишком большой.
 	fileData := bytes.NewBuffer(nil)
-	io.CopyN(fileData, file, maxSize+1)
+	n, _ := io.CopyN(fileData, file, int64(maxSize)+1)
+	if n > int64(maxSize) {
+		http.Error(w, "File too large (max 5MB)", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	zr, err := zip.NewReader(bytes.NewReader(fileData.Bytes()), int64(fileData.Len()))
 	if err != nil {
@@ -105,9 +129,47 @@ func handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// B-8: Проверяем backup_meta.json для валидности архива
+	// FIX 44: Валидируем backup_meta.json перед восстановлением.
+	// Защищаемся от случайных или повреждённых ZIP-архивов.
+	metaValid := false
+	for _, f := range zr.File {
+		if f.Name == "backup_meta.json" {
+			rc, err := f.Open()
+			if err != nil {
+				break
+			}
+			raw, _ := io.ReadAll(io.LimitReader(rc, 4096))
+			rc.Close()
+			var m map[string]interface{}
+			if json.Unmarshal(raw, &m) == nil {
+				if sv, ok := m["schema_version"]; ok {
+					// schema_version может быть float64 при JSON unmarshal
+					switch v := sv.(type) {
+					case float64:
+						metaValid = v == 1
+					case int:
+						metaValid = v == 1
+					}
+				}
+			}
+			break
+		}
+	}
+	if !metaValid {
+		http.Error(w, "Invalid backup: missing or incompatible schema_version in backup_meta.json", http.StatusBadRequest)
+		return
+	}
+
+	// FIX 42: вычисляем абсолютный путь рабочей директории для Zip Slip защиты.
+	workDir, err := filepath.Abs(".")
+	if err != nil {
+		http.Error(w, "Internal error: cannot determine work dir", http.StatusInternalServerError)
+		return
+	}
+
 	restored := 0
 	skipped := 0
+	overwrite := r.FormValue("overwrite") == "true"
 
 	for _, file := range zr.File {
 		if file.FileInfo().IsDir() {
@@ -119,39 +181,79 @@ func handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// FIX 42: Zip Slip защита — проверяем что итоговый путь внутри рабочей директории.
+		cleanName := filepath.Clean(file.Name)
+		destPath := filepath.Join(workDir, cleanName)
+		absDestPath, absErr := filepath.Abs(destPath)
+		if absErr != nil || !strings.HasPrefix(absDestPath, workDir+string(filepath.Separator)) {
+			// Путь выходит за пределы рабочей директории — пропускаем.
+			skipped++
+			continue
+		}
+
 		// B-8: Проверяем параметр overwrite
-		overwrite := r.FormValue("overwrite") == "true"
-		if !overwrite && fileExists(file.Name) {
+		if !overwrite && fileExists(absDestPath) {
 			skipped++
 			continue
 		}
 
 		// B-8: Создаём директорию если нужно
-		dir := filepath.Dir(file.Name)
-		if dir != "." {
+		if dir := filepath.Dir(absDestPath); dir != "." {
 			os.MkdirAll(dir, 0755)
 		}
 
-		// B-8: Читаем и пишем файл атомарно
+		// B-8: Читаем и пишем файл атомарно.
+		// FIX Bug5: ограничиваем размер распакованного файла — защита от zip bomb.
+		// Сжатый архив 5MB может раскрыться в гигабайты без LimitReader → OOM.
+		const maxExtractedFileSize = 10 * 1024 * 1024 // 10 MB на один файл
 		rc, err := file.Open()
 		if err != nil {
 			continue
 		}
-		data, _ := io.ReadAll(rc)
+		data, err := io.ReadAll(io.LimitReader(rc, maxExtractedFileSize+1))
 		rc.Close()
+		if err != nil {
+			skipped++
+			continue
+		}
+		if int64(len(data)) > maxExtractedFileSize {
+			skipped++
+			continue
+		}
 
-		if err := fileutil.WriteAtomic(file.Name, data, 0644); err == nil {
+		if err := fileutil.WriteAtomic(absDestPath, data, 0644); err == nil {
 			restored++
+		}
+	}
+
+	// CHANGE-16: После восстановления файлов перезагружаем in-memory routing из disk
+	// и применяем конфиг — иначе tunHandlers продолжает работать со старыми правилами.
+	// Условие: tunHandlers инициализирован (TUN запущен) и routing.json был среди файлов.
+	if s.tunHandlers != nil {
+		routingPath := config.DataDir + "/routing.json"
+		if newRouting, err := config.LoadRoutingConfig(routingPath); err == nil {
+			s.tunHandlers.mu.Lock()
+			s.tunHandlers.routing = newRouting
+			s.tunHandlers.mu.Unlock()
+			if applyErr := s.tunHandlers.TriggerApply(); applyErr != nil {
+				s.logger.Warn("handleBackupRestore: TriggerApply: %v", applyErr)
+			} else {
+				s.logger.Info("handleBackupRestore: routing перезагружен и применён из восстановлённого backup")
+			}
+		} else {
+			s.logger.Warn("handleBackupRestore: не удалось загрузить routing после restore: %v", err)
 		}
 	}
 
 	// B-8: Возвращаем статус восстановления
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"restored": restored,
 		"skipped":  skipped,
 		"message":  "Backup restored successfully",
-	})
+	}); err != nil {
+		s.logger.Debug("handleBackupRestore: encode response: %v", err)
+	}
 }
 
 func fileExists(path string) bool {

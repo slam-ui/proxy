@@ -64,6 +64,16 @@ var noisePatterns = []noisePattern{
 		re:          regexp.MustCompile(`Get \"http://169\.254\.169\.254/metadata/instance/compute\": io: read/write on closed pipe`),
 		description: "cloud metadata request aborted",
 	},
+	// 8. Закрытые pipe/context canceled появляются при штатном shutdown/restart,
+	// когда sing-box отменяет активные inbound/http запросы.
+	{
+		re:          regexp.MustCompile(`inbound/http\[.*\]:.*(?:io: read/write on closed pipe|context canceled)`),
+		description: "inbound request canceled during shutdown/restart",
+	},
+	{
+		re:          regexp.MustCompile(`connection: open connection .*: operation was canceled`),
+		description: "outbound dial canceled during shutdown/restart",
+	},
 }
 
 // FilterWriter оборачивает dst и подавляет строки совпадающие с noisePatterns.
@@ -80,6 +90,11 @@ func NewFilterWriter(dst io.Writer) *FilterWriter {
 	return &FilterWriter{dst: dst}
 }
 
+// maxFilterLineBuf — максимальный размер внутреннего буфера FilterWriter.
+// Защита от OOM при бинарном выводе или crash-дампе sing-box без '\n'.
+// Аналогично healthTrackingWriter.maxLineBuf = 64KB.
+const maxFilterLineBuf = 64 * 1024
+
 // Write принимает байты (потенциально несколько строк), буферизует по '\n'
 // и решает для каждой строки: пропустить или подавить.
 func (f *FilterWriter) Write(p []byte) (int, error) {
@@ -87,6 +102,17 @@ func (f *FilterWriter) Write(p []byte) (int, error) {
 	defer f.mu.Unlock()
 
 	f.buf = append(f.buf, p...)
+
+	// BUG FIX: защита от бесконечного роста буфера при отсутствии '\n'.
+	// При бинарном выводе или crash-дампе sing-box buf мог расти до OOM.
+	// Аналогична защите в healthTrackingWriter (maxLineBuf = 64KB).
+	if len(f.buf) > maxFilterLineBuf {
+		if idx := bytes.LastIndexByte(f.buf[:len(f.buf)-1], '\n'); idx >= 0 {
+			f.buf = f.buf[idx+1:]
+		} else {
+			f.buf = f.buf[len(f.buf)-maxFilterLineBuf:]
+		}
+	}
 	for {
 		idx := bytes.IndexByte(f.buf, '\n')
 		if idx < 0 {

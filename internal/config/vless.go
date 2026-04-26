@@ -59,9 +59,19 @@ func (c *VLESSCache) Parse(secretPath string) (*VLESSParams, error) {
 		return nil, err
 	}
 
+	// BUG FIX #4: TOCTOU — между Stat() выше и реальным чтением файл мог измениться.
+	// Повторно читаем mtime ПОСЛЕ чтения файла и сохраняем актуальное значение.
+	// Это предотвращает ситуацию когда кэш хранит старый mtime при новых params:
+	// если файл снова изменится с тем же mtime (Windows, разрешение ~15ms),
+	// Parse вернул бы устаревший кэш вместо перечитывания файла.
+	actualMtime := modTime
+	if fi2, err2 := os.Stat(secretPath); err2 == nil {
+		actualMtime = fi2.ModTime()
+	}
+
 	c.mu.Lock()
 	c.path = secretPath
-	c.mtime = modTime
+	c.mtime = actualMtime
 	c.params = params
 	c.mu.Unlock()
 

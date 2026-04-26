@@ -8,8 +8,6 @@ import (
 
 // ─── tailWriter ───────────────────────────────────────────────────────────
 
-
-
 func TestTailWriter_CrashMessageNotCut(t *testing.T) {
 	// Simulate wintun crash message at buffer boundary.
 	// The crash detector looks for "Cannot create a file when that file already exists".
@@ -116,5 +114,3 @@ func TestIsTunConflict_MatchesKnownSignatures(t *testing.T) {
 		})
 	}
 }
-
-

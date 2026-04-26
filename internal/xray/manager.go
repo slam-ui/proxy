@@ -41,15 +41,30 @@ func sendCtrlBreak(pid int) error {
 	return nil
 }
 
+// isAccessViolation проверяет содержит ли ошибка признаки 0xc0000005 (ACCESS_VIOLATION).
+// Windows Defender и другие AV блокируют свежескачанный .exe при первом запуске —
+// sing-box check возвращает exit status 0xc0000005 пока идёт облачная проверка SmartScreen.
+func isAccessViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "0xc0000005") || strings.Contains(s, "Access is denied")
+}
+
+// IsAccessViolation reports Windows ACCESS_VIOLATION/AV-scan startup failures.
+func IsAccessViolation(err error) bool {
+	return isAccessViolation(err)
+}
+
 // ValidateSingBoxConfig валидирует конфиг sing-box используя команду check.
-// Запускает sing-box check -c конфигPath с таймаутом 10s.
+// Запускает sing-box check -c конфигPath с таймаутом 10s на каждую попытку.
+// При ACCESS_VIOLATION (0xc0000005) — повторяет до 5 раз с задержкой 3с:
+// Windows Defender/SmartScreen сканирует свежескачанный .exe при первом запуске.
 // Возвращает nil если конфиг валиден, иначе ошибку с output.
 // B-1: Используется перед остановкой текущего процесса чтобы не потерять
 // рабочую конфигурацию в случае невалидного нового конфига.
 func ValidateSingBoxConfig(ctx context.Context, execPath, configPath string) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	// Проверяем что исполняемый файл существует
 	if _, err := os.Stat(execPath); err != nil {
 		return fmt.Errorf("sing-box не найден: %w", err)
@@ -60,12 +75,37 @@ func ValidateSingBoxConfig(ctx context.Context, execPath, configPath string) err
 		return fmt.Errorf("конфиг не найден: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, execPath, "check", "-c", configPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("конфиг невалиден: %w\nВывод: %s", err, string(output))
+	const maxAttempts = 5
+	const retryDelay = 3 * time.Second
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		cmd := exec.CommandContext(checkCtx, execPath, "check", "-c", configPath)
+		output, err := cmd.CombinedOutput()
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("конфиг невалиден: %w\nВывод: %s", err, string(output))
+
+		// Если это не ACCESS_VIOLATION — конфиг реально невалиден, не ретраим
+		if !isAccessViolation(err) {
+			return lastErr
+		}
+
+		// ACCESS_VIOLATION — AV сканирует бинарник, ретраим
+		if attempt < maxAttempts {
+			select {
+			case <-time.After(retryDelay):
+			case <-ctx.Done():
+				return fmt.Errorf("валидация прервана: %w (последняя ошибка: %v)", ctx.Err(), lastErr)
+			}
+		}
 	}
-	return nil
+	return fmt.Errorf("валидация провалена после %d попыток (AV блокирует sing-box.exe): %w", maxAttempts, lastErr)
 }
 
 // Config конфигурация менеджера процесса
@@ -300,8 +340,14 @@ func (m *manager) Start() error {
 	m.done = make(chan struct{})
 	m.stopped = false
 	m.mu.Unlock()
-	m.crashes.Reset() // успешный старт — сбрасываем счётчик крашей
-	return m.doStart()
+	// FIX 8: сбрасываем счётчик крашей только при успешном старте.
+	// Ранее Reset() вызывался до doStart() — если doStart падал,
+	// счётчик оказывался сброшен, и цикл крашей не обнаруживался.
+	if err := m.doStart(); err != nil {
+		return err
+	}
+	m.crashes.Reset()
+	return nil
 }
 
 // StartAfterManualCleanup запускает sing-box без вызова BeforeRestart.
@@ -317,8 +363,12 @@ func (m *manager) StartAfterManualCleanup() error {
 	// (handleCrash) уже сделал cleanup вручную для этой попытки.
 	m.firstStart = true
 	m.mu.Unlock()
+	// FIX 9: аналогично Start() — Reset только при успехе.
+	if err := m.doStart(); err != nil {
+		return err
+	}
 	m.crashes.Reset()
-	return m.doStart()
+	return nil
 }
 
 func (m *manager) doStart() error {
@@ -376,7 +426,12 @@ func (m *manager) doStart() error {
 		stderrWithHealth = stderrBase
 	}
 
-	if stderrWithHealth == io.Discard {
+	// BUG FIX: проверяем stderrBase (не stderrWithHealth) чтобы определить нужен ли MultiWriter.
+	// stderrWithHealth всегда *healthTrackingWriter (не io.Discard), поэтому старое условие
+	// stderrWithHealth == io.Discard было всегда false — оптимизация никогда не срабатывала.
+	// Когда stderrBase = io.Discard (нет логовых назначений), достаточно m.tail:
+	// health-tracking поверх Discard добавлял накладные расходы без пользы.
+	if stderrBase == io.Discard {
 		cmd.Stderr = m.tail
 	} else {
 		cmd.Stderr = io.MultiWriter(stderrWithHealth, m.tail)
@@ -406,7 +461,7 @@ func (m *manager) doStart() error {
 
 	m.cmd = cmd
 	m.startedAt = time.Now()
-	m.logger.Info("XRay успешно запущен с PID: %d", cmd.Process.Pid)
+	m.logger.Info("sing-box успешно запущен с PID: %d", cmd.Process.Pid)
 
 	// BUG FIX: передаём cmd и done как локальные переменные в monitor().
 	// Если Start() вызывается пока старый monitor() ещё работает,
@@ -449,9 +504,15 @@ func (m *manager) monitor(cmd *exec.Cmd, done chan struct{}) {
 	m.mu.RUnlock()
 
 	if err != nil {
-		m.logger.Warn("XRay завершился с ошибкой: %v", err)
+		if wasStoppedIntentionally {
+			// Мы сами завершили процесс — exit status 1 при TerminateProcess ожидаем.
+			// Логируем INFO чтобы не генерировать ложные WARN_BURST аномалии.
+			m.logger.Info("Процесс sing-box принудительно остановлен (exit: %v)", err)
+		} else {
+			m.logger.Warn("sing-box завершился с ошибкой: %v", err)
+		}
 	} else {
-		m.logger.Info("Процесс XRay завершён")
+		m.logger.Info("Процесс sing-box завершён")
 	}
 
 	if wasStoppedIntentionally || onCrash == nil {
@@ -518,19 +579,28 @@ func (m *manager) Stop() error {
 	}
 	pid := m.cmd.Process.Pid
 	proc := m.cmd.Process
-	m.stopped = true
+	// FIX Bug6: НЕ устанавливаем m.stopped здесь — иначе monitor() может прочитать
+	// stopped=true при реальном краше который произошёл ОДНОВРЕМЕННО с вызовом Stop().
+	// Результат: OnCrash не вызывается, sing-box не перезапускается.
 	doneCh := m.done
 	m.mu.Unlock()
 
-	m.logger.Info("Остановка процесса XRay (PID: %d)...", pid)
+	m.logger.Info("Остановка процесса sing-box (PID: %d)...", pid)
 
-	// Проверяем — может, процесс уже завершился сам.
+	// Проверяем — может, процесс уже завершился сам (краш до нашего вызова).
+	// В этом случае НЕ помечаем stopped=true: это был краш, а не намеренная остановка.
 	select {
 	case <-doneCh:
-		m.logger.Info("Процесс XRay уже завершился")
+		m.logger.Info("Процесс sing-box уже завершился")
 		return nil
 	case <-time.After(500 * time.Millisecond):
 	}
+
+	// Процесс ещё жив — фиксируем намерение остановить ДО отправки сигнала.
+	// Теперь monitor() увидит stopped=true и не вызовет OnCrash.
+	m.mu.Lock()
+	m.stopped = true
+	m.mu.Unlock()
 
 	// OPT #1: сначала CTRL_BREAK — sing-box перехватывает его и делает graceful shutdown:
 	// сохраняет DNS-кэш, закрывает TUN-адаптер корректно.
@@ -541,7 +611,7 @@ func (m *manager) Stop() error {
 		m.logger.Info("Отправлен CTRL_BREAK (PID: %d), ожидаем graceful shutdown...", pid)
 		select {
 		case <-doneCh:
-			m.logger.Info("Процесс XRay корректно завершился (graceful)")
+			m.logger.Info("Процесс sing-box корректно завершился (graceful)")
 			// ОПТИМИЗАЦИЯ: уведомляем wintun о чистом завершении.
 			// Следующий PollUntilFree пропустит все задержки (gap=0, settle=0).
 			if m.config.OnGracefulStop != nil {
@@ -553,12 +623,12 @@ func (m *manager) Stop() error {
 		}
 	}
 
-	m.logger.Info("Принудительная остановка XRay (PID: %d)...", pid)
+	m.logger.Info("Принудительная остановка sing-box (PID: %d)...", pid)
 	if err := proc.Kill(); err != nil {
 		return fmt.Errorf("не удалось остановить процесс: %w", err)
 	}
 	<-doneCh
-	m.logger.Info("Процесс XRay принудительно остановлен")
+	m.logger.Info("Процесс sing-box принудительно остановлен")
 	return nil
 }
 
@@ -677,4 +747,10 @@ func IsTunConflict(output string) bool {
 		}
 	}
 	return false
+}
+
+// IsCacheFileTimeout проверяет, содержит ли вывод sing-box ошибку таймаута cache-file.
+// Происходит когда предыдущий экземпляр sing-box оставил заблокированный dns_cache.db.
+func IsCacheFileTimeout(output string) bool {
+	return strings.Contains(output, "initialize cache-file: timeout")
 }

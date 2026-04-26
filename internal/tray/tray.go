@@ -1,13 +1,16 @@
+// Package tray реализует системный трей SafeSky через кастомный Win32 бэкенд.
+//
+// Поведение иконки (в отличие от getlantern/systray):
+//   - Левый клик / двойной клик → показать меню
+//   - Правый клик → перевести главное окно на передний план (OnOpen)
+//
+// Меню использует тёмную тему Windows (SetWindowTheme "DarkMode_Explorer"),
+// что даёт тёмный фон на Windows 10 20H1+ и Windows 11.
 package tray
 
-import (
-	"sync"
-
-	"github.com/getlantern/systray"
-)
+import "sync"
 
 // ServerItem описывает один сервер в подменю трея.
-// C-6: аналог Clash Verge Rev — список серверов с активным маркером и пингом.
 type ServerItem struct {
 	ID     string
 	Name   string
@@ -15,243 +18,150 @@ type ServerItem struct {
 	Ping   string // опциональный пинг, например "45ms"
 }
 
-// Callbacks — функции которые трей вызывает при действиях пользователя
+// Callbacks — функции которые трей вызывает при действиях пользователя.
 type Callbacks struct {
 	OnOpen         func()
 	OnEnable       func()
 	OnDisable      func()
-	OnCopyAddr     func(addr string) // копировать адрес прокси в буфер обмена
+	OnCopyAddr     func(addr string)
 	OnQuit         func()
-	OnServerSwitch func(serverID string) // C-6: переключить активный сервер
+	OnServerSwitch func(serverID string)
 }
 
-const maxServerSlots = 10 // C-6: максимум серверов в подменю трея
+const maxServerSlots = 10
 
 var (
-	mOpen     *systray.MenuItem
-	mEnable   *systray.MenuItem
-	mDisable  *systray.MenuItem
-	mCopyAddr *systray.MenuItem
-	mQuit     *systray.MenuItem
-
-	// C-6: подменю серверов
-	mServersParent *systray.MenuItem
-	serverSlots    [maxServerSlots]*systray.MenuItem
-
-	cb        Callbacks
-	readyCh   = make(chan struct{})
-	proxyAddr string // адрес прокси для копирования
-
-	// C-6: текущие ID серверов в слотах и имя активного сервера
-	serverSlotsMu    sync.Mutex
-	serverSlotIDs    [maxServerSlots]string
-	activeServerName string
-	proxyEnabled     bool // для построения тултипа
+	cb      Callbacks
+	readyCh = make(chan struct{})
 )
 
-// Run запускает системный трей. Блокирует текущий поток (должен вызываться из main).
+// Run запускает системный трей. Блокирует текущий поток.
+// Должен вызываться из main-горутины (Win32 message loop требует конкретный поток).
 func Run(callbacks Callbacks) {
 	cb = callbacks
-	systray.Run(onReady, onExit)
+	win32Run(onReady, onExit)
 }
 
-// WaitReady блокируется до тех пор, пока onReady не инициализирует пункты меню.
-// Вызывать перед первым SetEnabled — иначе вызов будет тихо проигнорирован.
+// WaitReady блокируется пока трей не инициализирован.
 func WaitReady() {
 	<-readyCh
 }
 
-// SetProxyAddr обновляет адрес прокси в меню трея.
-// Вызывать после WaitReady().
-func SetProxyAddr(addr string) {
-	proxyAddr = addr
-	if mCopyAddr != nil {
-		if addr != "" {
-			mCopyAddr.SetTitle("Копировать адрес  " + addr)
-			mCopyAddr.Enable()
-		} else {
-			mCopyAddr.SetTitle("Копировать адрес")
-			mCopyAddr.Disable()
-		}
-	}
-	if proxyEnabled {
-		setTooltip(true)
-	}
-}
-
-// SetEnabled меняет иконку и состояние пунктов меню.
-// Вызывать только после WaitReady() или внутри onReady.
+// SetEnabled переключает иконку и состояние пунктов меню.
 func SetEnabled(enabled bool) {
-	proxyEnabled = enabled
-	// Защита на случай вызова до onReady (не должна срабатывать если используется WaitReady).
-	if mEnable == nil || mDisable == nil {
-		return
-	}
+	win32SetIcon(enabled)
+	win32SetTooltip(buildTooltip(enabled))
 
-	if enabled {
-		systray.SetIcon(iconOn())
-		setTooltip(true)
-		mEnable.Disable()
-		mDisable.Enable()
-	} else {
-		systray.SetIcon(iconOff())
-		systray.SetTooltip("Proxy — выключен")
-		mEnable.Enable()
-		mDisable.Disable()
-	}
+	win32MenuState.Lock()
+	win32MenuState.enableEnabled = !enabled
+	win32MenuState.disableEnabled = enabled
+	win32MenuState.Unlock()
 }
 
-// C-6: SetActiveServer обновляет тултип с именем активного сервера.
-// Вызывать после успешного применения конфига.
+// SetProxyAddr обновляет адрес прокси в меню.
+func SetProxyAddr(addr string) {
+	win32MenuState.Lock()
+	win32MenuState.copyAddr = addr
+	win32MenuState.Unlock()
+}
+
+// SetActiveServer обновляет тултип трея с именем активного сервера.
+// Вызывается после смены сервера чтобы тултип отражал текущий сервер
+// даже если состояние enabled/disabled не менялось.
 func SetActiveServer(name string) {
 	serverSlotsMu.Lock()
 	activeServerName = name
 	serverSlotsMu.Unlock()
-	if proxyEnabled {
-		setTooltip(true)
-	}
+
+	// Обновляем тултип: читаем текущее состояние прокси из menu state.
+	// disableEnabled=true ⟺ прокси включён (кнопка "Выключить" активна).
+	win32MenuState.Lock()
+	isEnabled := win32MenuState.disableEnabled
+	win32MenuState.Unlock()
+	win32SetTooltip(buildTooltip(isEnabled))
 }
 
-// C-6: SetServerList обновляет динамическое подменю серверов (до maxServerSlots).
-// Лишние серверы (>10) отображаются как «Открыть панель...» в UI.
-// Потокобезопасен — можно вызывать из любой горутины.
+// SetServerList обновляет список серверов в подменю трея.
 func SetServerList(servers []ServerItem) {
-	if mServersParent == nil {
-		return
-	}
-
 	n := len(servers)
 	if n > maxServerSlots {
 		n = maxServerSlots
 	}
+	win32MenuState.Lock()
+	win32MenuState.servers = make([]ServerItem, n)
+	copy(win32MenuState.servers, servers[:n])
+	isEnabled := win32MenuState.disableEnabled // читаем под тем же локом
+	win32MenuState.Unlock()
 
-	serverSlotsMu.Lock()
-	defer serverSlotsMu.Unlock()
-
-	for i := 0; i < maxServerSlots; i++ {
-		if serverSlots[i] == nil {
-			continue
-		}
-		if i < n {
-			s := servers[i]
-			serverSlotIDs[i] = s.ID
-			title := buildSlotTitle(s)
-			serverSlots[i].SetTitle(title)
-			serverSlots[i].Show()
-		} else {
-			serverSlotIDs[i] = ""
-			serverSlots[i].Hide()
-		}
-	}
+	// Обновляем тултип при смене списка серверов (active-флаг мог измениться).
+	win32SetTooltip(buildTooltip(isEnabled))
 }
 
-// buildSlotTitle формирует заголовок пункта меню для сервера.
-// Активный помечается «✓ », неактивный — «  » для выравнивания.
-func buildSlotTitle(s ServerItem) string {
-	prefix := "  "
-	if s.Active {
-		prefix = "✓ "
-	}
-	title := prefix + s.Name
-	if s.Ping != "" {
-		title += " (" + s.Ping + ")"
-	}
-	return title
+// SetBringToFront устанавливает функцию переноса окна на передний план.
+// Вызывается из main.go после инициализации window.
+func SetBringToFront(fn func()) {
+	win32BringFront = fn
 }
 
-// setTooltip выставляет тултип трея с учётом имени активного сервера и адреса прокси.
-func setTooltip(enabled bool) {
+// SetWarming обновляет иконку/тултип трея при запуске/перезапуске sing-box.
+// warming=true → тултип "SafeSky — Запуск...", warming=false → обычный тултип.
+func SetWarming(warming bool) {
+	warmingMu.Lock()
+	warmingActive = warming
+	warmingMu.Unlock()
+
+	win32MenuState.Lock()
+	isEnabled := win32MenuState.disableEnabled
+	win32MenuState.Unlock()
+
+	win32SetTooltip(buildTooltip(isEnabled))
+}
+
+// ── Internal ──────────────────────────────────────────────────────────────
+
+var (
+	serverSlotsMu    sync.Mutex // защищает activeServerName
+	activeServerName string
+
+	warmingMu     sync.Mutex // защищает warmingActive
+	warmingActive bool
+)
+
+func buildTooltip(enabled bool) string {
+	warmingMu.Lock()
+	warming := warmingActive
+	warmingMu.Unlock()
+
+	if warming {
+		return "SafeSky — Запуск..."
+	}
 	if !enabled {
-		systray.SetTooltip("Proxy — выключен")
-		return
+		return "SafeSky — Выключен"
 	}
-	serverSlotsMu.Lock()
-	name := activeServerName
-	serverSlotsMu.Unlock()
+	tip := "SafeSky — Включён"
+	win32MenuState.Lock()
+	servers := win32MenuState.servers
+	win32MenuState.Unlock()
 
-	tooltip := "Proxy — включён"
-	if name != "" {
-		tooltip += "  " + name
+	for _, s := range servers {
+		if s.Active {
+			tip += "  " + s.Name
+			break
+		}
 	}
-	if proxyAddr != "" {
-		tooltip += "  " + proxyAddr
-	}
-	systray.SetTooltip(tooltip)
+	return tip
 }
 
 func onReady() {
-	systray.SetIcon(iconOff())
-	systray.SetTitle("Proxy")
-	systray.SetTooltip("Proxy Control")
+	// Инициализируем иконку (выключена по умолчанию)
+	win32SetIcon(false)
 
-	mOpen = systray.AddMenuItem("Открыть панель", "Открыть Web UI")
-	mCopyAddr = systray.AddMenuItem("Копировать адрес", "Скопировать адрес прокси в буфер")
-	mCopyAddr.Disable()
-	systray.AddSeparator()
-	mEnable = systray.AddMenuItem("Включить", "Включить прокси")
-	mDisable = systray.AddMenuItem("Выключить", "Выключить прокси")
-	mDisable.Disable()
+	win32MenuState.Lock()
+	win32MenuState.enableEnabled = true
+	win32MenuState.disableEnabled = false
+	win32MenuState.Unlock()
 
-	// C-6: динамическое подменю серверов (до maxServerSlots слотов)
-	systray.AddSeparator()
-	mServersParent = systray.AddMenuItem("Серверы ▶", "Выбрать сервер")
-	for i := 0; i < maxServerSlots; i++ {
-		i := i // захват для горутины
-		serverSlots[i] = mServersParent.AddSubMenuItem("", "")
-		serverSlots[i].Hide()
-		go func() {
-			for range serverSlots[i].ClickedCh {
-				serverSlotsMu.Lock()
-				id := serverSlotIDs[i]
-				serverSlotsMu.Unlock()
-				if id != "" && cb.OnServerSwitch != nil {
-					cb.OnServerSwitch(id)
-				}
-			}
-		}()
-	}
-
-	systray.AddSeparator()
-	mQuit = systray.AddMenuItem("Выход", "Завершить приложение")
-
-	// Сигнализируем WaitReady: все пункты меню инициализированы
-	if proxyAddr != "" {
-		mCopyAddr.SetTitle("Копировать адрес  " + proxyAddr)
-		mCopyAddr.Enable()
-	} else {
-		mCopyAddr.SetTitle("Копировать адрес")
-		mCopyAddr.Disable()
-	}
-	if proxyEnabled {
-		setTooltip(true)
-	}
 	close(readyCh)
-
-	// Обработка кликов основных пунктов
-	go func() {
-		for {
-			select {
-			case <-mOpen.ClickedCh:
-				if cb.OnOpen != nil {
-					cb.OnOpen()
-				}
-			case <-mCopyAddr.ClickedCh:
-				if cb.OnCopyAddr != nil {
-					cb.OnCopyAddr(proxyAddr)
-				}
-			case <-mEnable.ClickedCh:
-				if cb.OnEnable != nil {
-					cb.OnEnable()
-				}
-			case <-mDisable.ClickedCh:
-				if cb.OnDisable != nil {
-					cb.OnDisable()
-				}
-			case <-mQuit.ClickedCh:
-				systray.Quit()
-			}
-		}
-	}()
 }
 
 func onExit() {

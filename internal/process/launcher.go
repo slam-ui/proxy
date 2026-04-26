@@ -29,14 +29,14 @@ type LaunchResult struct {
 
 // launcher реализация Launcher
 type launcher struct {
-	logger  logger.Logger
-	engine  apprules.Engine
+	logger logger.Logger
+	engine apprules.Engine
 	// OPT #9: кэш базового environ — os.Environ() копирует весь environ процесса
 	// (~100-200 строк) при каждом вызове. Кэшируем один раз при создании launcher.
 	// При частых запусках дочерних процессов экономит одну полную копию environ
 	// на каждый Launch. Инвалидируется только при явном вызове refreshBaseEnv().
-	baseEnvMu  sync.RWMutex
-	baseEnv    []string
+	baseEnvMu sync.RWMutex
+	baseEnv   []string
 }
 
 // NewLauncher создает новый process launcher
