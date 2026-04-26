@@ -293,6 +293,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/stats")
 	s.addSilentPath("/api/connections")
 	s.addSilentPath("/api/servers")  // FIX 31: подавляем шумные логи при опросе списка серверов
+	s.addSilentPath("/api/geoip")    // частые lookup-запросы для флагов стран
 	s.addSilentPath("/api/procicon") // иконки процессов — частые запросы, не нужно логировать
 	s.addSilentPath("/api/traffic/by-process")
 	s.addSilentPath("/api/stats/total")
