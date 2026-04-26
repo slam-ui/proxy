@@ -327,7 +327,9 @@ func EnsureEngine(ctx context.Context, execPath string, progress chan<- Progress
 
 	// A-3: атомарно сохраняем версию рядом с exe для InstalledVersion()
 	// FIX 52: fileutil.WriteAtomic предотвращает повреждение файла при сбое питания.
-	_ = fileutil.WriteAtomic(versionFilePath(execPath), []byte(version), 0644)
+	if err := fileutil.WriteAtomic(versionFilePath(execPath), []byte(version), 0644); err != nil {
+		send(Progress{Stage: "warn", Message: fmt.Sprintf("Не удалось сохранить версию sing-box: %v", err), Percent: 99, Version: version})
+	}
 
 	send(Progress{Stage: "done", Message: fmt.Sprintf("sing-box %s готов ✓", version), Percent: 100, Version: version})
 	return nil

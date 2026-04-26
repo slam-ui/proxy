@@ -58,6 +58,7 @@ func SetupProfileRoutes(s *Server) {
 
 	s.router.HandleFunc("/api/profiles", h.handleList).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles", h.handleSave).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/profiles/builtins", s.handleBuiltinProfiles).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}/apply", h.handleApply).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleLoad).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleDelete).Methods("DELETE", "OPTIONS")

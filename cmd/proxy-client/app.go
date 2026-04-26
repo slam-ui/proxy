@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 // App инкапсулирует весь lifecycle приложения.
@@ -11,6 +13,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,13 +32,19 @@ import (
 	"proxyclient/internal/anomalylog"
 	"proxyclient/internal/api"
 	"proxyclient/internal/config"
+	"proxyclient/internal/connhistory"
+	"proxyclient/internal/crashreport"
 	"proxyclient/internal/engine"
 	"proxyclient/internal/eventlog"
+	"proxyclient/internal/keepalive"
 	"proxyclient/internal/killswitch"
+	"proxyclient/internal/latency"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/netwatch"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/trafficstats"
 	"proxyclient/internal/tray"
 	"proxyclient/internal/window"
 	"proxyclient/internal/wintun"
@@ -43,9 +53,14 @@ import (
 
 // AppConfig содержит все настраиваемые параметры приложения.
 type AppConfig struct {
-	KillSwitch         bool // блокировать трафик при падении туннеля
-	ProxyGuardEnabled  bool // B-2: включить Proxy Guard для восстановления системного прокси
-	StartProxyOnLaunch bool // включать прокси сразу после запуска клиента
+	KillSwitch           bool // блокировать трафик при падении туннеля
+	ProxyGuardEnabled    bool // B-2: включить Proxy Guard для восстановления системного прокси
+	StartProxyOnLaunch   bool // включать прокси сразу после запуска клиента
+	ReconnectIntervalMin int
+	KeepaliveEnabled     bool
+	KeepaliveIntervalSec int
+	Schedule             config.Schedule
+	MemoryLimitMB        uint64
 	// B-10: автообновление geosite баз данных
 	GeoAutoUpdateEnabled      bool
 	GeoAutoUpdateIntervalDays int
@@ -68,6 +83,8 @@ func DefaultAppConfig() AppConfig {
 		KillSwitch:                false,
 		ProxyGuardEnabled:         true, // B-2: default включить
 		StartProxyOnLaunch:        true,
+		KeepaliveEnabled:          true,
+		KeepaliveIntervalSec:      120,
 		GeoAutoUpdateEnabled:      true, // B-10: автообновление geosite по умолчанию
 		GeoAutoUpdateIntervalDays: 7,    // B-10: обновлять раз в 7 дней
 		WarmUpHosts: []string{
@@ -241,6 +258,7 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 
 	if xray.IsAccessViolation(crashErr) && a.allowEngineAVRetry() {
 		a.mainLogger.Warn("sing-box вернул 0xc0000005 — возможно, бинарник ещё проверяется Windows Defender; повторный запуск через 5s")
+		addDefenderExclusion(a.cfg.SingBoxPath, a.mainLogger)
 		select {
 		case <-time.After(5 * time.Second):
 		case <-a.lifecycleCtx.Done():
@@ -259,6 +277,9 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 	}
 
 	lastOut := currentMgr.LastOutput()
+	if path, err := crashreport.Generate(lastOut, crashErr.Error(), a.cfg.ConfigPath, currentMgr.MemoryMB()).SaveToFile(); err == nil {
+		a.mainLogger.Info("Краш-отчёт сохранён: %s", path)
+	}
 	isTunConflict := xray.IsTunConflict(lastOut)
 
 	// FIX 3: обработка "initialize cache-file: timeout" — удаляем зависший dns_cache.db и перезапускаем.
@@ -449,6 +470,21 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 	killswitch.Disable(a.mainLogger)
 }
 
+func addDefenderExclusion(path string, log logger.Logger) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Add-MpPreference -ExclusionPath $env:SAFESKY_DEFENDER_EXCLUSION")
+	cmd.Env = append(os.Environ(), "SAFESKY_DEFENDER_EXCLUSION="+absPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Run(); err != nil {
+		if log != nil {
+			log.Debug("не удалось добавить исключение Windows Defender: %v", err)
+		}
+	}
+}
+
 func (a *App) allowEngineAVRetry() bool {
 	a.engineCrashMu.Lock()
 	defer a.engineCrashMu.Unlock()
@@ -528,10 +564,193 @@ func (a *App) finalizeStartup() {
 		a.mainLogger.Info("B-10: GeoAutoUpdater запущен (интервал: %d дней)", a.cfg.GeoAutoUpdateIntervalDays)
 	}
 
+	if mgr := a.apiServer.GetXRayManager(); mgr != nil {
+		mgr.SetHealthAlertFn(func() {
+			a.mainLogger.Info("HealthAlert: деградация — запуск автоподключения")
+			connhistory.Global.Add(connhistory.Event{Time: time.Now(), Kind: connhistory.EventFailover, Reason: "health alert"})
+			a.apiServer.AutoConnect()
+		})
+	}
+	if a.cfg.ReconnectIntervalMin > 0 {
+		a.apiServer.StartPeriodicReconnect(time.Duration(a.cfg.ReconnectIntervalMin) * time.Minute)
+	}
+	if a.cfg.KeepaliveEnabled {
+		interval := time.Duration(a.cfg.KeepaliveIntervalSec) * time.Second
+		if interval <= 0 {
+			interval = 120 * time.Second
+		}
+		go keepalive.Run(a.lifecycleCtx, config.ProxyAddr, interval)
+	}
+	go a.runNetwatch()
+	go a.runTrayHealth()
+	go a.runMemoryWatchdog()
+	if a.cfg.Schedule.Enabled {
+		go a.runScheduler()
+	}
+
 	a.mainLogger.Info("Фоновая инициализация завершена")
 	a.apiServer.DrainQueuedApply()
 	if proxyEnabled {
 		go preWarmProxyConnection(a.lifecycleCtx, config.ProxyAddr, a.cfg.WarmUpHosts, a.mainLogger)
+	}
+	go a.runLatencyHistory()
+}
+
+func (a *App) runNetwatch() {
+	var mu sync.Mutex
+	var lastEvent time.Time
+	var lastApply time.Time
+	startedAt := time.Now()
+	const (
+		startupQuiet  = 30 * time.Second
+		debounceDelay = 5 * time.Second
+		applyCooldown = 90 * time.Second
+	)
+	if err := netwatch.Watch(a.lifecycleCtx, func() {
+		now := time.Now()
+		if now.Sub(startedAt) < startupQuiet {
+			return
+		}
+		mu.Lock()
+		if now.Sub(lastEvent) < debounceDelay {
+			mu.Unlock()
+			return
+		}
+		lastEvent = now
+		mu.Unlock()
+
+		time.Sleep(debounceDelay)
+		if a.lifecycleCtx.Err() != nil {
+			return
+		}
+		if a.apiServer.IsRestarting() || a.apiServer.IsWarming() || a.apiServer.IsApplyBusy() {
+			a.mainLogger.Debug("Netwatch: событие сети пропущено — sing-box/apply ещё стабилизируется")
+			return
+		}
+		mu.Lock()
+		if time.Since(lastApply) < applyCooldown {
+			mu.Unlock()
+			a.mainLogger.Debug("Netwatch: событие сети пропущено — cooldown после предыдущего apply")
+			return
+		}
+		lastApply = time.Now()
+		mu.Unlock()
+
+		a.mainLogger.Info("Netwatch: смена сети — переприменяем конфиг")
+		connhistory.Global.Add(connhistory.Event{Time: time.Now(), Kind: connhistory.EventNetChange})
+		if err := a.apiServer.TriggerApply(); err != nil {
+			a.mainLogger.Warn("Netwatch TriggerApply: %v", err)
+		}
+	}); err != nil && a.lifecycleCtx.Err() == nil {
+		a.mainLogger.Warn("Netwatch stopped: %v", err)
+	}
+}
+
+func (a *App) runTrayHealth() {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.lifecycleCtx.Done():
+			return
+		case <-t.C:
+			mgr := a.apiServer.GetXRayManager()
+			if mgr == nil {
+				continue
+			}
+			cnt, _, alert := mgr.GetHealthStatus()
+			switch {
+			case alert:
+				tray.SetHealthState(tray.HealthCritical)
+			case cnt > 0:
+				tray.SetHealthState(tray.HealthDegraded)
+			default:
+				tray.SetHealthState(tray.HealthOK)
+			}
+		}
+	}
+}
+
+func (a *App) runMemoryWatchdog() {
+	if a.cfg.MemoryLimitMB == 0 {
+		return
+	}
+	t := time.NewTicker(60 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.lifecycleCtx.Done():
+			return
+		case <-t.C:
+			mgr := a.apiServer.GetXRayManager()
+			if mgr == nil {
+				continue
+			}
+			used := mgr.MemoryMB()
+			if used > a.cfg.MemoryLimitMB {
+				a.mainLogger.Warn("sing-box: %d MB > лимит %d MB — мягкий перезапуск", used, a.cfg.MemoryLimitMB)
+				connhistory.Global.Add(connhistory.Event{Time: time.Now(), Kind: connhistory.EventReconnect, Reason: fmt.Sprintf("memory limit %dMB", used)})
+				_ = a.apiServer.TriggerApply()
+			}
+		}
+	}
+}
+
+func (a *App) runScheduler() {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.lifecycleCtx.Done():
+			return
+		case <-t.C:
+			shouldBeOn := api.IsWithinSchedule(time.Now(), a.cfg.Schedule)
+			if shouldBeOn && !a.proxyManager.IsEnabled() {
+				_ = a.proxyManager.Enable(a.proxyConfig)
+				setClashMode(a.lifecycleCtx, a.mainLogger, "rule")
+			} else if !shouldBeOn && a.proxyManager.IsEnabled() {
+				_ = a.proxyManager.Disable()
+				setClashMode(a.lifecycleCtx, a.mainLogger, "direct")
+			}
+		}
+	}
+}
+
+func (a *App) runLatencyHistory() {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	type pingAllResp struct {
+		Results []struct {
+			ID        string `json:"id"`
+			LatencyMs int64  `json:"latency_ms"`
+			OK        bool   `json:"ok"`
+		} `json:"results"`
+	}
+	client := &http.Client{Timeout: 20 * time.Second}
+	for {
+		select {
+		case <-a.lifecycleCtx.Done():
+			return
+		case <-t.C:
+			req, _ := http.NewRequestWithContext(a.lifecycleCtx, http.MethodGet, "http://localhost"+a.cfg.APIAddress+"/api/servers/ping-all", nil)
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			var out pingAllResp
+			err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out)
+			resp.Body.Close()
+			if err != nil {
+				continue
+			}
+			for _, result := range out.Results {
+				ms := result.LatencyMs
+				if !result.OK {
+					ms = -1
+				}
+				latency.Global.Record(result.ID, ms)
+			}
+		}
 	}
 }
 
@@ -550,12 +769,28 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		err error
 	}
 	cfgReady := make(chan cfgResult, 1)
+	sendWintunReady := func(result startupPrepResult) bool {
+		select {
+		case wintunReady <- result:
+			return true
+		case <-a.lifecycleCtx.Done():
+			return false
+		}
+	}
+	sendCfgReady := func(result cfgResult) bool {
+		select {
+		case cfgReady <- result:
+			return true
+		case <-a.lifecycleCtx.Done():
+			return false
+		}
+	}
 
 	// Конфиг не зависит от API и Wintun, поэтому готовим его параллельно.
 	go func() {
 		a.waitForSecretKey()
 		if a.lifecycleCtx.Err() != nil {
-			cfgReady <- cfgResult{err: a.lifecycleCtx.Err()}
+			sendCfgReady(cfgResult{err: a.lifecycleCtx.Err()})
 			return
 		}
 		routingCfg, err := config.LoadRoutingConfig(a.cfg.DataDir + "/routing.json")
@@ -563,7 +798,15 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Warn("Не удалось загрузить routing config: %v, используем дефолтный", err)
 			routingCfg = config.DefaultRoutingConfig()
 		}
-		cfgReady <- cfgResult{err: config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)}
+		if appSettings, err := config.LoadAppSettings(a.cfg.SettingsFile); err == nil && appSettings.ManualSingBoxConfig {
+			if _, statErr := os.Stat(a.cfg.ConfigPath); statErr == nil {
+				a.mainLogger.Info("Ручной sing-box конфиг включён — стартуем с существующим %s", a.cfg.ConfigPath)
+				sendCfgReady(cfgResult{})
+				return
+			}
+			a.mainLogger.Warn("Ручной sing-box конфиг включён, но %s не найден — генерируем заново", a.cfg.ConfigPath)
+		}
+		sendCfgReady(cfgResult{err: config.GenerateSingBoxConfig(a.cfg.SecretFile, a.cfg.ConfigPath, routingCfg)})
 	}()
 
 	go func() {
@@ -609,12 +852,12 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			if lastDownloadErr != nil {
 				// При отмене контекста (пользователь закрыл приложение) — не показываем ошибку.
 				if errors.Is(lastDownloadErr, context.Canceled) || errors.Is(lastDownloadErr, context.DeadlineExceeded) {
-					wintunReady <- startupPrepResult{err: lastDownloadErr}
+					sendWintunReady(startupPrepResult{err: lastDownloadErr})
 					return
 				}
 				a.mainLogger.Error("Не удалось загрузить sing-box.exe: %v", lastDownloadErr)
 				notification.Send("SafeSky — ошибка", "Не удалось загрузить sing-box. Проверьте интернет и перезапустите.")
-				wintunReady <- startupPrepResult{err: lastDownloadErr}
+				sendWintunReady(startupPrepResult{err: lastDownloadErr})
 				return
 			}
 			a.mainLogger.Info("sing-box.exe успешно загружен ✓")
@@ -663,14 +906,18 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			a.mainLogger.Info("wintun: чистое завершение — пропускаем RemoveStaleTunAdapter")
 		}
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
-		wintunReady <- startupPrepResult{dirtyStart: dirtyStart}
+		sendWintunReady(startupPrepResult{dirtyStart: dirtyStart})
 	}()
 
 	go func() {
 		// Ждём и API, и wintun — оба нужны перед запуском sing-box.
 		// Wintun cleanup начался раньше, так что к моменту apiReady
 		// часть gap уже может быть отработана.
-		<-apiReady
+		select {
+		case <-apiReady:
+		case <-a.lifecycleCtx.Done():
+			return
+		}
 		tray.SetEnabled(false)
 		tray.SetWarming(true)
 
@@ -679,12 +926,22 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 
 		// Ждём завершения обоих: wintun/engine И генерации конфига.
 		// Если engine download упал — engineErr != nil, не запускаем sing-box.
-		prep := <-wintunReady
+		var prep startupPrepResult
+		select {
+		case prep = <-wintunReady:
+		case <-a.lifecycleCtx.Done():
+			return
+		}
 		if prep.err != nil {
 			a.mainLogger.Error("Прерываем запуск sing-box: engine не готов (%v)", prep.err)
 			return
 		}
-		cfgRes := <-cfgReady
+		var cfgRes cfgResult
+		select {
+		case cfgRes = <-cfgReady:
+		case <-a.lifecycleCtx.Done():
+			return
+		}
 
 		a.mainLogger.Info("Запуск sing-box...")
 		if cfgRes.err != nil {
@@ -699,6 +956,12 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 			if removeErr := os.Remove(config.DNSCacheFile); removeErr == nil {
 				a.mainLogger.Info("dns_cache.db удалён после грязного старта")
 			}
+		}
+
+		if busyPorts := checkPortsBusy(config.ProxyAddr, config.ClashAPIAddr); len(busyPorts) > 0 {
+			a.mainLogger.Error("Порты заняты другим процессом: %v — sing-box не запустится", busyPorts)
+			notification.Send("SafeSky — ошибка", fmt.Sprintf("Порт %d занят. Завершите конфликтующий процесс.", busyPorts[0]))
+			return
 		}
 
 		xrayManager, err := xray.NewManager(xrayCfg, a.lifecycleCtx)
@@ -753,17 +1016,35 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 	}()
 }
 
+func checkPortsBusy(addrs ...string) []int {
+	var busy []int
+	for _, addr := range addrs {
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			_, port, splitErr := net.SplitHostPort(addr)
+			if splitErr == nil {
+				if p, atoiErr := strconv.Atoi(port); atoiErr == nil {
+					busy = append(busy, p)
+				}
+			}
+			continue
+		}
+		_ = ln.Close()
+	}
+	return busy
+}
+
 // handleConfigError обрабатывает ошибку генерации конфига.
 // Возвращает true если можно продолжить (запустить с существующим конфигом).
 func (a *App) handleConfigError(err error) bool {
-	secretData, readErr := os.ReadFile(a.cfg.SecretFile)
-	if readErr != nil || len(secretData) == 0 {
+	secretData, readErr := config.ReadSecretKey(a.cfg.SecretFile)
+	if readErr != nil || strings.TrimSpace(secretData) == "" {
 		a.mainLogger.Error("файл %s не найден или пуст — вставьте вашу VLESS-ссылку", a.cfg.SecretFile)
 		notification.Send("SafeSky — ошибка", "Вставьте VLESS-ссылку в secret.key")
 		return false
 	}
 	allComments := true
-	for _, line := range strings.Split(strings.TrimSpace(string(secretData)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(secretData), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {
 			allComments = false
@@ -826,6 +1107,9 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	if err := a.proxyManager.Disable(); err != nil {
 		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
 	}
+	if err := trafficstats.SaveToFile(); err != nil {
+		a.mainLogger.Warn("Не удалось сохранить счётчик трафика: %v", err)
+	}
 	a.mainLogger.Info("Работа завершена корректно")
 }
 
@@ -834,11 +1118,11 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 // При обычном запуске файл уже есть — возвращается мгновенно.
 func (a *App) waitForSecretKey() {
 	hasKey := func() bool {
-		data, err := os.ReadFile(a.cfg.SecretFile)
-		if err != nil || len(data) == 0 {
+		content, err := config.ReadSecretKey(a.cfg.SecretFile)
+		if err != nil || strings.TrimSpace(content) == "" {
 			return false
 		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
 			line = strings.TrimSpace(line)
 			if line != "" && !strings.HasPrefix(line, "#") && strings.HasPrefix(line, "vless://") {
 				return true
@@ -869,9 +1153,15 @@ func (a *App) extractServerIP(secretFile string) string {
 	a.cachedServerIPMu.Lock()
 	defer a.cachedServerIPMu.Unlock()
 
-	data, _ := os.ReadFile(secretFile)
-	currentHash := sha256.Sum256(data)
-	if a.cachedServerIP != "" && a.cachedForFile == secretFile && a.cachedSecretHash == currentHash {
+	content, _ := config.ReadSecretKey(secretFile)
+	currentHash := sha256.Sum256([]byte(content))
+	norm := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return strings.ToLower(r)
+		}
+		return strings.ToLower(p)
+	}
+	if a.cachedServerIP != "" && norm(a.cachedForFile) == norm(secretFile) && a.cachedSecretHash == currentHash {
 		return a.cachedServerIP
 	}
 
@@ -891,7 +1181,7 @@ func extractServerIP(secretFile string) string {
 }
 
 func resolveServerIP(ctx context.Context, secretFile string) string {
-	data, err := os.ReadFile(secretFile)
+	content, err := config.ReadSecretKey(secretFile)
 	if err != nil {
 		return ""
 	}
@@ -899,7 +1189,7 @@ func resolveServerIP(ctx context.Context, secretFile string) string {
 	// Раньше весь файл обрабатывался как один URL — если в комментарии был '@'
 	// (например email), парсинг давал мусорный результат.
 	vlessURL := ""
-	raw := strings.TrimPrefix(strings.TrimSpace(string(data)), "\xef\xbb\xbf")
+	raw := strings.TrimPrefix(strings.TrimSpace(content), "\xef\xbb\xbf")
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "#") {

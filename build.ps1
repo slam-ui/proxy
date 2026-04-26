@@ -38,6 +38,9 @@
 .PARAMETER SkipTests
     Пропустить тесты.
 
+.PARAMETER NoPause
+    Не ждать нажатия Enter в конце или при ошибке. Удобно для CI/CD и автоматизации.
+
 .PARAMETER GoExePath
     Явный путь к go.exe (определяется автоматически если не указан).
 
@@ -53,6 +56,7 @@ param(
     [switch]$ResetData,
     [switch]$NoGui,
     [switch]$SkipTests,
+    [switch]$NoPause,
     [string]$GoExePath = ""
 )
 
@@ -81,6 +85,13 @@ function Write-OK([string]$text)    { Write-Host "  OK $text" -ForegroundColor G
 function Write-Skip([string]$text)  { Write-Host "     $text" -ForegroundColor DarkGray }
 function Write-Warn([string]$text)  { Write-Host "  !! $text" -ForegroundColor DarkYellow }
 function Write-Fail([string]$text)  { Write-Host ""; Write-Host "  XX $text" -ForegroundColor Red; Write-Host "" }
+function Wait-BuildClose {
+    if (-not $NoPause) { Read-Host "  Press Enter to close" | Out-Null }
+}
+function Exit-Build([int]$code) {
+    Wait-BuildClose
+    exit $code
+}
 
 Write-Banner "SafeSky build"
 
@@ -97,6 +108,7 @@ if (-not $isAdmin) {
     if ($ResetData) { $argList += "-ResetData" }
     if ($NoGui)     { $argList += "-NoGui"     }
     if ($SkipTests) { $argList += "-SkipTests" }
+    if ($NoPause)   { $argList += "-NoPause"   }
     Start-Process powershell -Verb RunAs -ArgumentList $argList
     exit 0
 }
@@ -122,7 +134,7 @@ if ($GoExePath -eq "") {
 }
 if (-not $GoExePath -or -not (Test-Path $GoExePath)) {
     Write-Fail "go.exe not found. Install from https://go.dev/dl/"
-    Read-Host "Press Enter"; exit 1
+    Exit-Build 1
 }
 Write-OK "$(& $GoExePath version)"
 
@@ -142,7 +154,7 @@ if ($running) {
     }
     if (Get-Process -Name "SafeSky" -ErrorAction SilentlyContinue) {
         Write-Fail "Could not stop SafeSky.exe -- close it manually and retry"
-        Read-Host "Press Enter"; exit 1
+        Exit-Build 1
     }
     Write-OK "Process stopped"
 }
@@ -191,7 +203,7 @@ if ($SkipTests) {
     $testOut | ForEach-Object { Write-Host "     $_" -ForegroundColor DarkGray }
     if ($cmdExit -ne 0 -or $internalExit -ne 0) {
         Write-Fail "Tests failed -- fix before building"
-        Read-Host "Press Enter"; exit 1
+        Exit-Build 1
     }
     Write-OK "All tests passed"
 }
@@ -238,7 +250,20 @@ $icoPath = "app_icon.ico"
 
 if ($goversioninfoExe -and (Test-Path $viJson) -and (Test-Path $icoPath)) {
     Push-Location $MAIN_PATH
-    & $goversioninfoExe -icon "..\..\app_icon.ico" -o "rsrc_windows_amd64.syso" -goarch amd64
+    $oldErrorActionPreference = $ErrorActionPreference
+    try {
+        # Some goversioninfo builds print usage to stderr and exit non-zero for -h.
+        # Capture that output without letting $ErrorActionPreference=Stop abort the build.
+        $ErrorActionPreference = "Continue"
+        $goviHelp = (& $goversioninfoExe -h 2>&1) | Out-String
+    } finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+    }
+    if ($goviHelp -match "-goarch") {
+        & $goversioninfoExe -icon "..\..\app_icon.ico" -o "rsrc_windows_amd64.syso" -goarch amd64 "versioninfo.json"
+    } else {
+        & $goversioninfoExe -64 -icon "..\..\app_icon.ico" -o "rsrc_windows_amd64.syso" "versioninfo.json"
+    }
     $goviExit = $LASTEXITCODE
     Pop-Location
     if ($goviExit -eq 0) {
@@ -272,7 +297,7 @@ $buildArgs = @("build", "-o", "$DIST_DIR\$BINARY")
 if ($ldflags -ne "") { $buildArgs += @("-ldflags", $ldflags) }
 $buildArgs += $MAIN_PATH
 & $GoExePath @buildArgs
-if ($LASTEXITCODE -ne 0) { Write-Fail "Compilation failed"; Read-Host "Press Enter"; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Fail "Compilation failed"; Exit-Build 1 }
 $sizeMB = [math]::Round((Get-Item "$DIST_DIR\$BINARY").Length / 1MB, 2)
 Write-OK "$BINARY  ($sizeMB MB)"
 
@@ -502,4 +527,4 @@ if ($skOK) {
     Write-Host "  Docs: dist\README.txt" -ForegroundColor DarkGray
 }
 Write-Host ""
-Read-Host "  Press Enter to close"
+Wait-BuildClose

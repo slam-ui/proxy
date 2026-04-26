@@ -1,8 +1,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -144,6 +146,86 @@ func TestParseVLESSKey_TrailingWhitespace(t *testing.T) {
 	}
 }
 
+func TestReadWriteSecretKey_RoundTripAndPlaintextCompatibility(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret.key")
+	const url = "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s"
+
+	if err := WriteSecretKey(path, url); err != nil {
+		t.Fatalf("WriteSecretKey: %v", err)
+	}
+	got, err := ReadSecretKey(path)
+	if err != nil {
+		t.Fatalf("ReadSecretKey encrypted: %v", err)
+	}
+	if got != url {
+		t.Fatalf("ReadSecretKey encrypted = %q, want %q", got, url)
+	}
+
+	const legacy = "vless://legacy@host.com:443?sni=x.com&pbk=k&sid=s"
+	if err := os.WriteFile(path, []byte("  "+legacy+"\r\n"), 0644); err != nil {
+		t.Fatalf("write legacy plaintext: %v", err)
+	}
+	got, err = ReadSecretKey(path)
+	if err != nil {
+		t.Fatalf("ReadSecretKey plaintext: %v", err)
+	}
+	if got != legacy {
+		t.Fatalf("ReadSecretKey plaintext = %q, want %q", got, legacy)
+	}
+}
+
+func TestParseVLESSKey_AntiDPIParams(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "antidpi.key")
+	url := "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&fragment=1&fragment_size=2-4&fp=chrome"
+	if err := os.WriteFile(path, []byte(url), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	p, err := parseVLESSKey(path)
+	if err != nil {
+		t.Fatalf("parseVLESSKey: %v", err)
+	}
+	if !p.Fragment || p.FragmentSize != "2-4" {
+		t.Fatalf("fragment params not parsed: %+v", p)
+	}
+	if p.UTLSFingerprint() != "chrome" {
+		t.Fatalf("UTLSFingerprint = %q, want chrome", p.UTLSFingerprint())
+	}
+}
+
+func TestParseVLESSKey_FragmentDefaultOn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nofragment.key")
+	url := "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s"
+	if err := os.WriteFile(path, []byte(url), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	p, err := parseVLESSKey(path)
+	if err != nil {
+		t.Fatalf("parseVLESSKey: %v", err)
+	}
+	if !p.Fragment {
+		t.Fatal("fragment must be enabled when parameter is absent")
+	}
+}
+
+func TestParseVLESSKey_FragmentCanBeDisabled(t *testing.T) {
+	for _, value := range []string{"0", "false"} {
+		t.Run(value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fragment-off.key")
+			url := "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&fragment=" + value
+			if err := os.WriteFile(path, []byte(url), 0644); err != nil {
+				t.Fatalf("write key: %v", err)
+			}
+			p, err := parseVLESSKey(path)
+			if err != nil {
+				t.Fatalf("parseVLESSKey: %v", err)
+			}
+			if p.Fragment {
+				t.Fatalf("fragment must be disabled when parameter is %q", value)
+			}
+		})
+	}
+}
+
 // ─── parseVLESSKey: кэширование ───────────────────────────────────────────
 
 func TestParseVLESSKey_Caching_SameResult(t *testing.T) {
@@ -211,6 +293,60 @@ func TestBuildVLESSOutbound_WithMux(t *testing.T) {
 	}
 	if out.Multiplex.MaxStreams != 8 {
 		t.Errorf("Multiplex.MaxStreams = %d, want 8", out.Multiplex.MaxStreams)
+	}
+}
+
+func TestBuildVLESSOutbound_AntiDPIOptions(t *testing.T) {
+	params := &VLESSParams{
+		Address:      "example.com",
+		Port:         443,
+		UUID:         "test-uuid",
+		SNI:          "example.com",
+		PublicKey:    "pubkey",
+		ShortID:      "shortid",
+		Fragment:     true,
+		FragmentSize: "2-4",
+		Fingerprint:  "chrome",
+		Mux:          true,
+	}
+	out := buildVLESSOutbound(params)
+	if !out.TCPMultiPath {
+		t.Fatal("TCPMultiPath должен быть включён")
+	}
+	if out.TLS == nil || out.TLS.UTLS == nil || out.TLS.UTLS.Fingerprint != "chrome" {
+		t.Fatalf("uTLS fingerprint не применён: %+v", out.TLS)
+	}
+	if out.TLSFragment == nil || !out.TLSFragment.Enabled || out.TLSFragment.Size != "2-4" {
+		t.Fatalf("TLSFragment не применён: %+v", out.TLSFragment)
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal outbound: %v", err)
+	}
+	if strings.Contains(string(raw), "tls_fragment") {
+		t.Fatalf("tls_fragment must not be emitted for sing-box 1.13.x: %s", raw)
+	}
+	if out.Multiplex == nil || !out.Multiplex.Padding {
+		t.Fatalf("mux padding должен быть включён при mux=1: %+v", out.Multiplex)
+	}
+}
+
+func TestBuildVLESSOutbound_PlainTLSUsesTLS13(t *testing.T) {
+	params := &VLESSParams{
+		Address: "plain.example.com",
+		Port:    443,
+		UUID:    "test-uuid",
+		SNI:     "plain.example.com",
+	}
+	out := buildVLESSOutbound(params)
+	if out.TLS == nil {
+		t.Fatal("TLS должен быть задан")
+	}
+	if out.TLS.MinVersion != "1.3" {
+		t.Fatalf("MinVersion = %q, want 1.3", out.TLS.MinVersion)
+	}
+	if len(out.TLS.ALPN) != 2 || out.TLS.ALPN[0] != "h2" || out.TLS.ALPN[1] != "http/1.1" {
+		t.Fatalf("ALPN не задан: %#v", out.TLS.ALPN)
 	}
 }
 

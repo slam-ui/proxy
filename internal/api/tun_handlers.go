@@ -39,13 +39,17 @@ func tryHotReload(configPath string) error {
 	if err != nil {
 		return err
 	}
-	body, _ := json.Marshal(map[string]any{"path": absPath, "force": true})
+	body, err := json.Marshal(map[string]any{"path": absPath, "force": true})
+	if err != nil {
+		return fmt.Errorf("marshal hot reload request: %w", err)
+	}
 	req, err := http.NewRequest(http.MethodPut,
 		clashAPIBaseURL+"/configs", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+config.ClashAPISecret())
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -106,7 +110,12 @@ func waitForSingBoxReady(ctx context.Context, log logger.Logger) error {
 		case <-deadline.C:
 			return fmt.Errorf("sing-box не ответил за 60 секунд")
 		case <-ticker.C:
-			resp, err := client.Get(clashAPIBaseURL + "/")
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, clashAPIBaseURL+"/", nil)
+			if reqErr != nil {
+				continue
+			}
+			req.Header.Set("Authorization", "Bearer "+config.ClashAPISecret())
+			resp, err := client.Do(req)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 500 {
@@ -168,8 +177,12 @@ func cloneRoutingConfig(src *config.RoutingConfig) *config.RoutingConfig {
 		return config.DefaultRoutingConfig()
 	}
 	dst := &config.RoutingConfig{
-		DefaultAction: src.DefaultAction,
-		BypassEnabled: src.BypassEnabled,
+		DefaultAction:   src.DefaultAction,
+		BypassEnabled:   src.BypassEnabled,
+		BlockQUIC:       src.BlockQUIC,
+		BlockTelemetry:  src.BlockTelemetry,
+		LANShareEnabled: src.LANShareEnabled,
+		LANSharePort:    src.LANSharePort,
 	}
 	if src.Rules != nil {
 		dst.Rules = append([]config.RoutingRule(nil), src.Rules...)
@@ -350,11 +363,22 @@ func (h *TunHandlers) drainQueuedApply() {
 	}
 }
 
+func (h *TunHandlers) IsApplyBusy() bool {
+	h.apply.mu.Lock()
+	defer h.apply.mu.Unlock()
+	return h.apply.running || h.apply.pendingApply
+}
+
 // TriggerApply запускает перегенерацию конфига и полный перезапуск sing-box без HTTP-контекста.
 // Hot-reload намеренно не используется: изменения правил, DNS, geosite и серверов должны
 // проходить один и тот же полный restart-путь.
 func (h *TunHandlers) TriggerApply() error {
 	return h.TriggerApplyFull()
+}
+
+func (h *TunHandlers) manualSingBoxConfigEnabled() bool {
+	settings, err := config.LoadAppSettings(config.AppSettingsFile)
+	return err == nil && settings.ManualSingBoxConfig
 }
 
 // TriggerApplyWithConfig запускает перезапуск sing-box с уже готовым конфигом на диске.
@@ -401,10 +425,14 @@ func (h *TunHandlers) TriggerApplyWithConfig() error {
 
 // RulesResponse ответ GET /api/tun/rules
 type RulesResponse struct {
-	DefaultAction config.RuleAction    `json:"default_action"`
-	Rules         []config.RoutingRule `json:"rules"`
-	BypassEnabled bool                 `json:"bypass_enabled,omitempty"`
-	DNS           *config.DNSConfig    `json:"dns,omitempty"` // FIX 26: возвращаем DNS вместе с правилами
+	DefaultAction   config.RuleAction    `json:"default_action"`
+	Rules           []config.RoutingRule `json:"rules"`
+	BypassEnabled   bool                 `json:"bypass_enabled,omitempty"`
+	DNS             *config.DNSConfig    `json:"dns,omitempty"` // FIX 26: возвращаем DNS вместе с правилами
+	BlockQUIC       bool                 `json:"block_quic"`
+	BlockTelemetry  bool                 `json:"block_telemetry,omitempty"`
+	LANShareEnabled bool                 `json:"lan_share_enabled,omitempty"`
+	LANSharePort    int                  `json:"lan_share_port,omitempty"`
 }
 
 // handleListRules GET /api/tun/rules
@@ -413,10 +441,14 @@ func (h *TunHandlers) handleListRules(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.RUnlock()
 
 	resp := RulesResponse{
-		DefaultAction: h.routing.DefaultAction,
-		Rules:         h.routing.Rules,
-		BypassEnabled: h.routing.BypassEnabled,
-		DNS:           h.routing.DNS, // FIX 26
+		DefaultAction:   h.routing.DefaultAction,
+		Rules:           h.routing.Rules,
+		BypassEnabled:   h.routing.BypassEnabled,
+		DNS:             h.routing.DNS, // FIX 26
+		BlockQUIC:       h.routing.BlockQUIC,
+		BlockTelemetry:  h.routing.BlockTelemetry,
+		LANShareEnabled: h.routing.LANShareEnabled,
+		LANSharePort:    h.routing.LANSharePort,
 	}
 	if resp.Rules == nil {
 		resp.Rules = []config.RoutingRule{}
@@ -527,10 +559,14 @@ func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 
 // handleBulkReplaceRules тело PUT /api/tun/rules
 type BulkReplaceRequest struct {
-	DefaultAction config.RuleAction    `json:"default_action"`
-	Rules         []config.RoutingRule `json:"rules"`
-	BypassEnabled *bool                `json:"bypass_enabled,omitempty"`
-	DNS           *config.DNSConfig    `json:"dns,omitempty"` // FIX 26: принимаем DNS вместе с правилами
+	DefaultAction   config.RuleAction    `json:"default_action"`
+	Rules           []config.RoutingRule `json:"rules"`
+	BypassEnabled   *bool                `json:"bypass_enabled,omitempty"`
+	DNS             *config.DNSConfig    `json:"dns,omitempty"` // FIX 26: принимаем DNS вместе с правилами
+	BlockQUIC       *bool                `json:"block_quic,omitempty"`
+	BlockTelemetry  *bool                `json:"block_telemetry,omitempty"`
+	LANShareEnabled *bool                `json:"lan_share_enabled,omitempty"`
+	LANSharePort    *int                 `json:"lan_share_port,omitempty"`
 }
 
 func normalizeRoutingRules(rules []config.RoutingRule) error {
@@ -617,10 +653,15 @@ func (h *TunHandlers) replaceRoutingAndApply(incoming config.RoutingConfig) (int
 	h.mu.Lock()
 	oldRouting := cloneRoutingConfig(h.routing)
 
+	config.SanitizeRoutingConfig(&incoming)
 	h.routing.DefaultAction = incoming.DefaultAction
 	h.routing.Rules = incoming.Rules
 	h.routing.BypassEnabled = incoming.BypassEnabled
 	h.routing.DNS = incoming.DNS
+	h.routing.BlockQUIC = incoming.BlockQUIC
+	h.routing.BlockTelemetry = incoming.BlockTelemetry
+	h.routing.LANShareEnabled = incoming.LANShareEnabled
+	h.routing.LANSharePort = incoming.LANSharePort
 
 	// FIX Bug7: освобождаем мьютекс до I/O.
 	routingCopy := cloneRoutingConfig(h.routing)
@@ -659,10 +700,14 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 
 	h.mu.RLock()
 	incoming := config.RoutingConfig{
-		DefaultAction: h.routing.DefaultAction,
-		Rules:         req.Rules,
-		BypassEnabled: h.routing.BypassEnabled,
-		DNS:           h.routing.DNS,
+		DefaultAction:   h.routing.DefaultAction,
+		Rules:           req.Rules,
+		BypassEnabled:   h.routing.BypassEnabled,
+		DNS:             h.routing.DNS,
+		BlockQUIC:       h.routing.BlockQUIC,
+		BlockTelemetry:  h.routing.BlockTelemetry,
+		LANShareEnabled: h.routing.LANShareEnabled,
+		LANSharePort:    h.routing.LANSharePort,
 	}
 	h.mu.RUnlock()
 	if req.DefaultAction != "" {
@@ -673,6 +718,18 @@ func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Requ
 	}
 	if req.DNS != nil {
 		incoming.DNS = req.DNS
+	}
+	if req.BlockQUIC != nil {
+		incoming.BlockQUIC = *req.BlockQUIC
+	}
+	if req.BlockTelemetry != nil {
+		incoming.BlockTelemetry = *req.BlockTelemetry
+	}
+	if req.LANShareEnabled != nil {
+		incoming.LANShareEnabled = *req.LANShareEnabled
+	}
+	if req.LANSharePort != nil {
+		incoming.LANSharePort = *req.LANSharePort
 	}
 
 	count, applyErr, err := h.replaceRoutingAndApply(incoming)
@@ -843,6 +900,17 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 	snapshot := cloneRoutingConfig(h.routing)
 	h.mu.RUnlock()
 
+	if h.manualSingBoxConfigEnabled() {
+		h.server.logger.Info("Apply: ручной sing-box конфиг включён — применяем существующий config.singbox.json")
+		h.server.respondJSON(w, http.StatusAccepted, map[string]interface{}{
+			"message": "применение ручного конфига запущено",
+			"rules":   len(snapshot.Rules),
+			"manual":  true,
+		})
+		go h.doApply(snapshot, "", true)
+		return
+	}
+
 	// FIX: pre-validate конфиг до запуска горутины.
 	// Аналог nekoray BuildConfig — строит конфиг в памяти и возвращает ошибку
 	// ДО любых деструктивных действий. Если новый конфиг не генерируется,
@@ -862,17 +930,21 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 
 	// B-11: вычисляем diff синхронно до запуска горутины
 	h.mu.RLock()
-	diff := computeRoutingDiff(h.lastApplied, snapshot)
+	var lastApplied *config.RoutingConfig
+	if h.lastApplied != nil {
+		lastApplied = cloneRoutingConfig(h.lastApplied)
+	}
+	diff := computeRoutingDiff(lastApplied, snapshot)
 	h.mu.RUnlock()
 
 	// B-11: логируем diff при каждом apply
 	defaultChange := ""
-	if diff.DefaultActionChanged && h.lastApplied != nil {
-		defaultChange = fmt.Sprintf(", default_action %s→%s", h.lastApplied.DefaultAction, snapshot.DefaultAction)
+	if diff.DefaultActionChanged && lastApplied != nil {
+		defaultChange = fmt.Sprintf(", default_action %s→%s", lastApplied.DefaultAction, snapshot.DefaultAction)
 	}
 	processChange := ""
 	if diff.ProcessRulesChanged {
-		oldHas := hasProcessRules(h.lastApplied)
+		oldHas := hasProcessRules(lastApplied)
 		newHas := hasProcessRules(snapshot)
 		processChange = fmt.Sprintf(", process-правила: %v→%v ⚠️ ТРЕБУЕТСЯ ПОЛНЫЙ ПЕРЕЗАПУСК", oldHas, newHas)
 	}
@@ -896,6 +968,9 @@ func (h *TunHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 // outbound соединения → sing-box продолжает туннелировать через старый сервер.
 // В остальном идентичен TriggerApply.
 func (h *TunHandlers) TriggerApplyFull() error {
+	if h.manualSingBoxConfigEnabled() {
+		return h.TriggerApplyWithConfig()
+	}
 	if h.server.IsRestarting() {
 		h.queueApply(true, false, "TriggerApplyFull")
 		return nil
@@ -999,7 +1074,13 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	}
 
 	// FIX 30: вычисляем diff один раз на уровне функции — используется и в restart пути.
-	diff := computeRoutingDiff(h.lastApplied, snapshot)
+	h.mu.RLock()
+	var lastApplied *config.RoutingConfig
+	if h.lastApplied != nil {
+		lastApplied = cloneRoutingConfig(h.lastApplied)
+	}
+	diff := computeRoutingDiff(lastApplied, snapshot)
+	h.mu.RUnlock()
 
 	// Hot reload отключён: при изменении правил, DNS, geosite или сервера нужен полный
 	// перезапуск sing-box, чтобы не оставались старые outbound/TUN/process состояния.
@@ -1013,7 +1094,7 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 			h.server.logger.Info("Apply: полный перезапуск sing-box (hot-reload отключён)")
 		} else if diff.ProcessRulesChanged {
 			h.server.logger.Info("Process-правила изменились (старые: %v, новые: %v) — пропускаем hot-reload",
-				hasProcessRules(h.lastApplied), hasProcessRules(snapshot))
+				hasProcessRules(lastApplied), hasProcessRules(snapshot))
 		}
 
 		if tmpConfigPath != "" && hotMgr != nil && hotMgr.IsRunning() && !skipHotReload {
@@ -1065,12 +1146,18 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 
 	// B-1: Валидируем новый конфиг ДО остановки текущего процесса.
 	// Если валидация провалена — не трогаем работающий sing-box, удаляем .pending.
-	if tmpConfigPath != "" && h.xrayConfig.ExecutablePath != "" {
-		if err := xray.ValidateSingBoxConfig(h.server.lifecycleCtx, h.xrayConfig.ExecutablePath, tmpConfigPath); err != nil {
+	validatePath := tmpConfigPath
+	if validatePath == "" {
+		validatePath = h.xrayConfig.ConfigPath
+	}
+	if validatePath != "" && h.xrayConfig.ExecutablePath != "" {
+		if err := xray.ValidateSingBoxConfig(h.server.lifecycleCtx, h.xrayConfig.ExecutablePath, validatePath); err != nil {
 			h.server.logger.Error("Валидация конфига провалена: %v", err)
 			setValidationErr(err.Error())
 			setErr("конфиг невалиден, текущий процесс остался без изменений")
-			_ = os.Remove(tmpConfigPath)
+			if tmpConfigPath != "" {
+				_ = os.Remove(tmpConfigPath)
+			}
 			return
 		}
 		setValidationErr("") // очищаем старую ошибку валидации
@@ -1220,10 +1307,10 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	waitStart := time.Now()
 	waitCtx, waitCancel := context.WithCancel(h.server.lifecycleCtx)
 	go func() {
+		defer waitCancel()
 		// Ждём завершения sing-box — отменяем waitCtx как только процесс умер.
 		// newManager.Wait() блокируется до завершения процесса (внутри select на done chan).
 		_ = newManager.Wait()
-		waitCancel()
 	}()
 	waitErr := waitForSingBoxReady(waitCtx, h.server.logger)
 	waitCancel() // освобождаем горутину если waitForSingBoxReady вернулся раньше
@@ -1327,10 +1414,14 @@ func (h *TunHandlers) handleExport(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.RUnlock()
 
 	data, err := json.MarshalIndent(&config.RoutingConfig{
-		DefaultAction: h.routing.DefaultAction,
-		Rules:         h.routing.Rules,
-		BypassEnabled: h.routing.BypassEnabled,
-		DNS:           h.routing.DNS, // FIX 14: экспортируем DNS настройки вместе с правилами
+		DefaultAction:   h.routing.DefaultAction,
+		Rules:           h.routing.Rules,
+		BypassEnabled:   h.routing.BypassEnabled,
+		DNS:             h.routing.DNS, // FIX 14: экспортируем DNS настройки вместе с правилами
+		BlockQUIC:       h.routing.BlockQUIC,
+		BlockTelemetry:  h.routing.BlockTelemetry,
+		LANShareEnabled: h.routing.LANShareEnabled,
+		LANSharePort:    h.routing.LANSharePort,
 	}, "", "  ")
 	if err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "marshal error")
@@ -1398,6 +1489,7 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	config.SanitizeRoutingConfig(&incoming)
 
 	// ВЫС-5: валидируем что импортированный конфиг генерирует корректный sing-box конфиг.
 	// Проверяем ДО сохранения — не хотим затирать рабочий routing.json невалидным файлом.

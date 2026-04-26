@@ -6,6 +6,10 @@
 *.test
 /proxy-client
 proxy-client.exe
+SafeSky.exe
+diagnose.exe
+sing-box.exe
+wintun.dll
 
 # Build output
 bin/
@@ -16,6 +20,13 @@ release/
 # dist/ -- коммитим только README, всё остальное генерируется build.ps1
 dist/
 !dist/README.txt
+
+# Local runtime state generated when running from the repository root
+data/
+geosite/
+config.runtime.json
+config.singbox.json
+window_state.json
 
 # Geosite .bin не коммитим из корня (источник -- geosite/)
 *.bin
@@ -77,6 +88,7 @@ test-output/
 # Cache
 .cache/
 .local/
+.continue/
 
 # Local Codex workspace notes
 .codex-project-context.md

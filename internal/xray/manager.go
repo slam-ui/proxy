@@ -9,37 +9,10 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"proxyclient/internal/logger"
 )
-
-// kernel32 для CTRL_BREAK graceful shutdown.
-// Используем LazyDLL — загрузка при первом вызове, не при старте приложения.
-var (
-	kernel32          = syscall.NewLazyDLL("kernel32.dll")
-	procGenCtrlEvt    = kernel32.NewProc("GenerateConsoleCtrlEvent")
-	procAttachConsole = kernel32.NewProc("AttachConsole")
-	procFreeConsole   = kernel32.NewProc("FreeConsole")
-)
-
-// sendCtrlBreak посылает CTRL_BREAK в процесс pid.
-// Sing-box перехватывает это событие и выполняет graceful shutdown:
-// сохраняет DNS-кэш, закрывает TUN-адаптер — что снижает вероятность
-// "file already exists" при следующем старте.
-func sendCtrlBreak(pid int) error {
-	procAttachConsole.Call(uintptr(pid))
-	defer procFreeConsole.Call()
-	ret, _, err := procGenCtrlEvt.Call(
-		syscall.CTRL_BREAK_EVENT,
-		uintptr(pid),
-	)
-	if ret == 0 {
-		return fmt.Errorf("GenerateConsoleCtrlEvent failed: %w", err)
-	}
-	return nil
-}
 
 // isAccessViolation проверяет содержит ли ошибка признаки 0xc0000005 (ACCESS_VIOLATION).
 // Windows Defender и другие AV блокируют свежескачанный .exe при первом запуске —
@@ -156,6 +129,8 @@ type Manager interface {
 	// GetHealthStatus возвращает текущее состояние здоровья сервиса VLESS.
 	// БАГ #3: детектирует долгие периоды недоступности.
 	GetHealthStatus() (errorCount int, errorRatePct float64, wouldAlert bool)
+	SetHealthAlertFn(fn func())
+	MemoryMB() uint64
 }
 
 // ── tailWriter ────────────────────────────────────────────────────────────────
@@ -283,6 +258,8 @@ type manager struct {
 	// БАГ #3: healthChecker отслеживает ошибки соединений и детектирует
 	// долгие периоды недоступности VLESS-сервера (>9 минут).
 	healthChecker *HealthChecker
+	healthAlertFn func()
+	healthAlertMu sync.Mutex
 }
 
 func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
@@ -308,6 +285,12 @@ func NewManager(cfg Config, lifecycleCtx context.Context) (Manager, error) {
 	}
 
 	return m, nil
+}
+
+func (m *manager) SetHealthAlertFn(fn func()) {
+	m.healthAlertMu.Lock()
+	m.healthAlertFn = fn
+	m.healthAlertMu.Unlock()
 }
 
 func validateConfig(cfg Config) error {
@@ -384,10 +367,7 @@ func (m *manager) doStart() error {
 
 	// CREATE_NO_WINDOW: подавляет отдельное консольное окно для sing-box.exe
 	// в билдах с -H windowsgui.
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000,
-		HideWindow:    true,
-	}
+	hideConsole(cmd)
 
 	stdoutOK := isStdoutValid()
 
@@ -421,7 +401,7 @@ func (m *manager) doStart() error {
 	// БАГ #3: оборачиваем stderr с health tracking для детектирования недоступности VLESS
 	stderrWithHealth := io.Writer(nil)
 	if m.healthChecker != nil {
-		stderrWithHealth = NewHealthTrackingWriter(stderrBase, m.healthChecker)
+		stderrWithHealth = NewHealthTrackingWriter(stderrBase, m.healthChecker, m)
 	} else {
 		stderrWithHealth = stderrBase
 	}

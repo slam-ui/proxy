@@ -4,10 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SafeSky</title>
-<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet" crossorigin="anonymous">
 <!-- Fonts load asynchronously; fallbacks ('Segoe UI', 'Consolas') activate instantly if CDN unreachable -->
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+*{letter-spacing:0!important}
 :root{
   --bg:#070713;
   --s1:#0c0c1d;
@@ -33,8 +34,8 @@
   --grid:rgba(255,255,255,0.02);
   --body-g1:rgba(56,200,255,0.04);
   --body-g2:rgba(45,232,154,0.03);
-  --font:'Chakra Petch','Segoe UI','Arial',sans-serif;
-  --mono:'Space Mono','Consolas','Courier New',monospace;
+  --font:'Inter','Segoe UI','Arial',sans-serif;
+  --mono:'JetBrains Mono','Consolas','Courier New',monospace;
   --r:10px;--r-lg:16px;--r-xl:22px;
 }
 html,body{
@@ -646,18 +647,21 @@ html[data-theme="light"] .cc-tag{background:rgba(0,120,200,0.06);border-color:rg
 
 /* ═══ SETTINGS PAGE ═══ */
 .pg-wrap{padding:14px clamp(12px,3vw,20px) 20px;flex-direction:column;gap:10px}
+.settings-grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(260px,0.85fr);gap:10px;align-items:start}
+.settings-col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.settings-wide{grid-column:1/-1}
 .pg-section{background:var(--g0);border:0.5px solid var(--hairline);border-radius:var(--r-lg);padding:14px 16px}
-.pg-section-ttl{font-size:8px;font-weight:700;letter-spacing:0.18em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}
-.pg-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:0.5px solid var(--hairline)}
+.pg-section-ttl{font-size:10px;font-weight:700;letter-spacing:0;color:var(--text);text-transform:none;margin-bottom:12px}
+.pg-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:0.5px solid var(--hairline)}
 .pg-row:last-child{border-bottom:none;padding-bottom:0}
-.pg-lbl{font-size:10px;color:var(--dim);flex:1}
-.pg-sub{font-size:8px;color:var(--muted);font-family:var(--mono);margin-top:2px}
+.pg-lbl{font-size:11px;color:var(--text);font-weight:600;flex:1;letter-spacing:0}
+.pg-sub{font-size:9px;color:var(--muted);font-family:var(--font);margin-top:3px;line-height:1.45;letter-spacing:0}
 .pg-val{font-size:10px;color:var(--text);font-family:var(--mono)}
 .pg-btn{
   background:var(--g1);border:0.5px solid var(--hairline2);
-  border-radius:8px;padding:5px 12px;font-size:9px;
+  border-radius:8px;padding:6px 12px;font-size:10px;
   color:var(--dim);cursor:pointer;font-family:var(--font);
-  letter-spacing:0.06em;transition:all 0.18s;white-space:nowrap;
+  letter-spacing:0;transition:all 0.18s;white-space:nowrap;
 }
 .pg-btn:hover{background:var(--g2);color:var(--text);border-color:var(--hairline2)}
 .pg-btn.acc{color:var(--acc);border-color:rgba(56,200,255,0.3)}
@@ -690,7 +694,7 @@ html[data-theme="light"] .cc-tag{background:rgba(0,120,200,0.06);border-color:rg
 }
 .pg-inp{
   background:var(--g1);border:0.5px solid var(--hairline2);
-  border-radius:8px;padding:6px 10px;font-size:9px;font-family:var(--mono);
+  border-radius:8px;padding:7px 10px;font-size:10px;font-family:var(--mono);
   color:var(--text);outline:none;width:100%;
   transition:border-color 0.18s;
 }
@@ -708,6 +712,15 @@ html[data-theme="light"] .cc-tag{background:rgba(0,120,200,0.06);border-color:rg
 .eng-dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}
 .eng-dot.ok{background:var(--on);box-shadow:0 0 6px var(--on)}
 .eng-dot.err{background:var(--off);box-shadow:0 0 6px var(--off)}
+.speed-progress{display:none;margin-top:8px}
+.speed-progress.vis{display:block}
+.speed-track{height:6px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden;border:0.5px solid var(--hairline)}
+.speed-fill{height:100%;width:0%;background:linear-gradient(90deg,var(--acc),var(--on));transition:width 0.35s ease}
+.speed-meta{display:flex;justify-content:space-between;margin-top:5px;font-size:9px;color:var(--muted);font-family:var(--font)}
+.config-editor-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.config-pill{font-size:9px;font-family:var(--mono);color:var(--muted);background:var(--g1);border:0.5px solid var(--hairline);border-radius:6px;padding:3px 7px}
+.singbox-editor{min-height:52vh;font-size:10px;line-height:1.55}
+@media (max-width:760px){.settings-grid{grid-template-columns:1fr}.settings-wide{grid-column:auto}}
 
 /* ═══ RULES PAGE ═══ */
 .rules-list{display:flex;flex-direction:column;gap:6px}
@@ -791,10 +804,11 @@ html[data-theme="light"] .cc-tag{background:rgba(0,120,200,0.06);border-color:rg
   background:rgba(4,6,14,0.68);backdrop-filter:blur(8px);padding:18px;
 }
 .json-modal{
-  width:min(540px,100%);max-height:86vh;background:var(--s1);border:0.5px solid var(--hairline2);
+  width:min(860px,100%);max-height:92vh;background:var(--s1);border:0.5px solid var(--hairline2);
   border-radius:14px;padding:14px;box-shadow:0 18px 60px rgba(0,0,0,0.45);
   display:flex;flex-direction:column;gap:10px;
 }
+.json-modal .json-editor{min-height:58vh}
 .json-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .json-modal-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 
@@ -1424,6 +1438,8 @@ span.log-domain{color:var(--on)}
       <div class="pg-section-ttl" style="display:flex;justify-content:space-between;align-items:center">
         <span>Правила маршрутизации</span>
         <div style="display:flex;gap:6px;align-items:center">
+          <button class="pg-btn" onclick="$id('rulesImportFile').click()">↑ импорт</button>
+          <input type="file" id="rulesImportFile" accept=".txt,.list,.yaml,.yml,.conf,.base64" style="display:none" onchange="importRulesFile(this)">
           <button class="pg-btn" onclick="openRulesJsonEditor()">{} вручную</button>
           <button class="pg-btn" onclick="loadRules()" style="margin-bottom:-2px">↻ обновить</button>
         </div>
@@ -1470,95 +1486,168 @@ span.log-domain{color:var(--on)}
 
   <!-- ── Page 4: Настройки ── -->
   <div id="page4" class="page pg-wrap">
-    <!-- Серверы -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">Добавить сервер</div>
-      <div class="pg-inp-row">
-        <input class="pg-inp" id="srvUrlInp" placeholder="vless://...">
-        <button class="pg-btn acc" onclick="importSrvUrl()">+ Добавить</button>
-      </div>
-      <div style="margin-top:8px;display:flex;gap:6px">
-        <button class="pg-btn" style="flex:1" onclick="importClipboard()">📋 Из буфера</button>
-        <button class="pg-btn" style="flex:1" onclick="autoConnect()">⚡ Авто-коннект</button>
-      </div>
-    </div>
-
-    <!-- Тема -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">Тема оформления</div>
-      <div class="theme-grid" id="themeGrid">
-        <div class="theme-chip active" data-theme="safesky"  onclick="applyTheme(this)">SafeSky</div>
-        <div class="theme-chip"       data-theme="dark"     onclick="applyTheme(this)">Dark</div>
-        <div class="theme-chip"       data-theme="light"    onclick="applyTheme(this)">Light</div>
-        <div class="theme-chip"       data-theme="hacker"   onclick="applyTheme(this)">Hacker</div>
-        <div class="theme-chip"       data-theme="midnight" onclick="applyTheme(this)">Midnight</div>
-        <div class="theme-chip"       data-theme="sepia"    onclick="applyTheme(this)">Sepia</div>
-      </div>
-    </div>
-
-    <!-- Движок -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">sing-box Engine</div>
-      <div class="pg-row">
-        <div>
-          <div class="pg-lbl">Статус движка</div>
-          <div class="pg-sub" id="engVer">загрузка...</div>
+    <div class="settings-grid">
+      <div class="settings-col">
+        <div class="pg-section">
+          <div class="pg-section-ttl">Быстрые действия</div>
+          <div class="pg-inp-row">
+            <input class="pg-inp" id="srvUrlInp" placeholder="vless://...">
+            <button class="pg-btn acc" onclick="importSrvUrl()">Добавить</button>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:6px">
+            <button class="pg-btn" style="flex:1" onclick="importClipboard()">Из буфера</button>
+            <button class="pg-btn" style="flex:1" onclick="autoConnect()">Авто-коннект</button>
+          </div>
+          <div class="pg-row" id="clipVlessBanner" style="display:none;margin-top:8px">
+            <div><div class="pg-lbl">VLESS в буфере обмена</div><div class="pg-sub">Ссылка готова к добавлению</div></div>
+            <button class="pg-btn acc" onclick="addClipboardServerFromBanner()">Добавить</button>
+          </div>
         </div>
-        <div class="eng-status"><div class="eng-dot" id="engDot"></div><span class="pg-val" id="engState">—</span></div>
-      </div>
-      <div class="pg-row">
-        <div><div class="pg-lbl">Обновить движок</div><div class="pg-sub">Скачать последнюю версию Xray</div></div>
-        <button class="pg-btn acc" id="engDlBtn" onclick="downloadEngine()">↓ Скачать</button>
-      </div>
-    </div>
 
-    <!-- Geosite -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">Geosite базы</div>
-      <div id="geositeList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
-        <div class="pg-sub" style="text-align:center;padding:8px">загрузка...</div>
-      </div>
-      <button class="pg-btn" id="geoUpdateBtn" style="width:100%;justify-content:center;display:block;text-align:center" onclick="downloadGeosite()">↓ Обновить базы из правил</button>
-    </div>
-
-    <!-- Бэкап -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">Резервное копирование</div>
-      <div class="pg-row">
-        <div><div class="pg-lbl">Экспорт конфигурации</div><div class="pg-sub">Скачать backup.zip</div></div>
-        <button class="pg-btn" onclick="downloadBackup()">↓ Экспорт</button>
-      </div>
-      <div class="pg-row">
-        <div><div class="pg-lbl">Импорт конфигурации</div><div class="pg-sub">Восстановить из backup.zip</div></div>
-        <button class="pg-btn danger" onclick="$id('backupFile').click()">↑ Импорт</button>
-        <input type="file" id="backupFile" accept=".zip" style="display:none" onchange="restoreBackup(this)">
-      </div>
-    </div>
-
-    <!-- Приложение -->
-    <div class="pg-section">
-      <div class="pg-section-ttl">Приложение</div>
-      <div class="pg-row">
-        <div class="pg-lbl">Версия</div>
-        <span class="pg-val">2.4.1</span>
-      </div>
-      <div class="pg-row">
-        <div>
-          <div class="pg-lbl">Автозапуск</div>
-          <div class="pg-sub">Запускать SafeSky при входе в Windows</div>
+        <div class="pg-section">
+          <div class="pg-section-ttl">Маршрутизация и LAN</div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Блокировать QUIC/STUN</div><div class="pg-sub">Повышает стабильность TUN-маршрута</div></div>
+            <div class="rule-toggle" id="blockQuicToggle" onclick="toggleRoutingOption('block_quic')" title="Блокировать QUIC и STUN"></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Блокировать telemetry</div><div class="pg-sub">Windows и популярные telemetry домены</div></div>
+            <div class="rule-toggle" id="blockTelemetryToggle" onclick="toggleRoutingOption('block_telemetry')" title="Блокировать telemetry"></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">LAN share</div><div class="pg-sub" id="lanInfoResult">загрузка...</div></div>
+            <div class="rule-toggle" id="lanShareToggle" onclick="toggleRoutingOption('lan_share_enabled')" title="Раздать SOCKS в LAN"></div>
+          </div>
+          <div class="pg-inp-row" style="margin-top:8px">
+            <input class="pg-inp" id="lanSharePortInp" type="number" min="1024" max="65535" placeholder="10808">
+            <button class="pg-btn" onclick="saveRoutingOptions()">Сохранить LAN</button>
+          </div>
         </div>
-        <div class="rule-toggle" id="autorunToggle" onclick="toggleAutorun()" title="Автозапуск при входе"></div>
-      </div>
-      <div class="pg-row">
-        <div>
-          <div class="pg-lbl">Прокси при запуске</div>
-          <div class="pg-sub">Включать сразу или ждать кнопку включения</div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">Приложение</div>
+          <div class="pg-row"><div class="pg-lbl">Версия</div><span class="pg-val">2.4.1</span></div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Автозапуск</div><div class="pg-sub">Запускать SafeSky при входе в Windows</div></div>
+            <div class="rule-toggle" id="autorunToggle" onclick="toggleAutorun()" title="Автозапуск при входе"></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Прокси при запуске</div><div class="pg-sub">Включать сразу или ждать кнопку включения</div></div>
+            <div class="rule-toggle" id="startupProxyToggle" onclick="toggleStartupProxy()" title="Включать прокси при запуске клиента"></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Keepalive</div><div class="pg-sub">Периодическая проверка соединения</div></div>
+            <div class="rule-toggle" id="keepaliveToggle" onclick="toggleLifecycleOption('keepalive_enabled')" title="Включить keepalive"></div>
+          </div>
+          <div class="pg-inp-row" style="margin-top:8px">
+            <input class="pg-inp" id="keepaliveIntervalInp" type="number" min="30" placeholder="Keepalive, сек">
+            <input class="pg-inp" id="reconnectIntervalInp" type="number" min="0" placeholder="Reconnect, мин">
+            <input class="pg-inp" id="memoryLimitInp" type="number" min="0" placeholder="Memory, MB">
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Расписание</div><div class="pg-sub">Окно автоматического включения proxy</div></div>
+            <div class="rule-toggle" id="scheduleToggle" onclick="toggleLifecycleOption('schedule_enabled')" title="Включить расписание"></div>
+          </div>
+          <div class="pg-inp-row" style="margin-top:8px">
+            <input class="pg-inp" id="scheduleOnInp" type="time" value="09:00">
+            <input class="pg-inp" id="scheduleOffInp" type="time" value="18:00">
+            <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>
+          </div>
         </div>
-        <div class="rule-toggle" id="startupProxyToggle" onclick="toggleStartupProxy()" title="Включать прокси при запуске клиента"></div>
       </div>
-      <div class="pg-row">
-        <div class="pg-lbl">Завершить работу</div>
-        <button class="pg-btn danger" onclick="quitApp()">Выход</button>
+
+      <div class="settings-col">
+        <div class="pg-section">
+          <div class="pg-section-ttl">Диагностика</div>
+          <div class="pg-row">
+            <div style="flex:1;min-width:0">
+              <div class="pg-lbl">Speed test</div>
+              <div class="pg-sub" id="speedTestResult">—</div>
+              <div class="speed-progress" id="speedProgress">
+                <div class="speed-track"><div class="speed-fill" id="speedProgressFill"></div></div>
+                <div class="speed-meta"><span id="speedProgressText">Подготовка</span><span id="speedProgressPct">0%</span></div>
+              </div>
+            </div>
+            <button class="pg-btn" id="speedTestBtn" onclick="runSpeedTest()">Тест</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Leak check</div><div class="pg-sub" id="leakCheckResult">—</div></div>
+            <button class="pg-btn" id="leakCheckBtn" onclick="runLeakCheck()">Проверить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Traffic total</div><div class="pg-sub" id="totalStatsResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadTotalStats()">Обновить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">События соединения</div><div class="pg-sub" id="connHistoryResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadConnectionHistory()">Обновить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Crash reports</div><div class="pg-sub" id="crashReportsResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadCrashReports()">Обновить</button>
+          </div>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">sing-box Engine</div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Статус движка</div><div class="pg-sub" id="engVer">загрузка...</div></div>
+            <div class="eng-status"><div class="eng-dot" id="engDot"></div><span class="pg-val" id="engState">—</span></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Обновить движок</div><div class="pg-sub">Скачать последнюю версию sing-box</div></div>
+            <button class="pg-btn acc" id="engDlBtn" onclick="downloadEngine()">Скачать</button>
+          </div>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">config.singbox.json</div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Ручной конфиг</div><div class="pg-sub" id="singboxConfigStatus">загрузка...</div></div>
+            <div class="rule-toggle" id="manualConfigToggle" onclick="toggleManualSingboxConfig()" title="Не перегенерировать config.singbox.json при запуске"></div>
+          </div>
+          <button class="pg-btn acc" style="width:100%;margin-top:8px" onclick="openSingboxConfigEditor()">Открыть редактор</button>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">Geosite базы</div>
+          <div id="geositeList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
+            <div class="pg-sub" style="text-align:center;padding:8px">загрузка...</div>
+          </div>
+          <button class="pg-btn" id="geoUpdateBtn" style="width:100%;justify-content:center;display:block;text-align:center" onclick="downloadGeosite()">Обновить базы из правил</button>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">Резервное копирование</div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Экспорт конфигурации</div><div class="pg-sub">Скачать backup.zip</div></div>
+            <button class="pg-btn" onclick="downloadBackup()">Экспорт</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Импорт конфигурации</div><div class="pg-sub">Восстановить из backup.zip</div></div>
+            <button class="pg-btn danger" onclick="$id('backupFile').click()">Импорт</button>
+            <input type="file" id="backupFile" accept=".zip" style="display:none" onchange="restoreBackup(this)">
+          </div>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-section-ttl">Тема оформления</div>
+          <div class="theme-grid" id="themeGrid">
+            <div class="theme-chip active" data-theme="safesky"  onclick="applyTheme(this)">SafeSky</div>
+            <div class="theme-chip"       data-theme="dark"     onclick="applyTheme(this)">Dark</div>
+            <div class="theme-chip"       data-theme="light"    onclick="applyTheme(this)">Light</div>
+            <div class="theme-chip"       data-theme="hacker"   onclick="applyTheme(this)">Hacker</div>
+            <div class="theme-chip"       data-theme="midnight" onclick="applyTheme(this)">Midnight</div>
+            <div class="theme-chip"       data-theme="sepia"    onclick="applyTheme(this)">Sepia</div>
+          </div>
+        </div>
+
+        <div class="pg-section">
+          <div class="pg-row">
+            <div><div class="pg-lbl">Завершить работу</div><div class="pg-sub">Остановить клиент</div></div>
+            <button class="pg-btn danger" onclick="quitApp()">Выход</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1640,6 +1729,40 @@ span.log-domain{color:var(--on)}
         <button class="pg-btn" onclick="formatRulesJson()">{ } формат</button>
         <button class="pg-btn acc" onclick="saveRulesJson()">✓ сохранить</button>
       </div>
+    </div>
+  </div>
+
+  <!-- sing-box config modal -->
+  <div class="json-modal-ov" id="singboxConfigModal" onclick="if(event.target===this)closeSingboxConfigEditor()" style="display:none">
+    <div class="json-modal">
+      <div class="json-modal-head">
+        <div>
+          <div class="pg-section-ttl" style="margin:0">config.singbox.json</div>
+          <div class="pg-sub" id="singboxConfigPath">—</div>
+        </div>
+        <button class="add-rule-modal-close" onclick="closeSingboxConfigEditor()">✕</button>
+      </div>
+      <div class="config-editor-meta">
+        <span class="config-pill" id="singboxConfigMode">режим: —</span>
+        <span class="config-pill" id="singboxConfigUpdated">изменён: —</span>
+      </div>
+      <textarea class="pg-inp json-editor singbox-editor" id="singboxConfigText" spellcheck="false" oninput="_singboxConfigDirty=true"></textarea>
+      <div class="json-modal-actions">
+        <button class="pg-btn" onclick="loadSingboxConfig()">загрузить</button>
+        <button class="pg-btn" onclick="formatSingboxConfig()">формат</button>
+        <button class="pg-btn" onclick="saveSingboxConfig(false)">сохранить</button>
+        <button class="pg-btn acc" onclick="saveSingboxConfig(true)">сохранить и применить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="json-modal-ov" id="serverInfoModal" onclick="if(event.target===this)closeServerInfoModal()" style="display:none">
+    <div class="add-rule-modal" style="width:min(360px,90vw)">
+      <div class="add-rule-modal-hd">
+        <span id="serverInfoTitle">Сервер</span>
+        <button class="add-rule-modal-close" onclick="closeServerInfoModal()">✕</button>
+      </div>
+      <div id="serverInfoBody" style="display:flex;flex-direction:column;gap:10px;align-items:center"></div>
     </div>
   </div>
 
@@ -2057,6 +2180,8 @@ function renderServerList() {
         <div class="sp-bar-track"><div class="sp-bar-fill ${barCls}" style="width:${barPct}%"></div></div>
       </div>
       <button class="srv-copy-btn" title="Копировать ссылку" onclick="copySrvUrl(event,'${esc(srv.url)}')">📋</button>
+      <button class="srv-copy-btn" title="QR-код" onclick="showSrvQR(event,'${esc(srv.id)}')">▣</button>
+      <button class="srv-copy-btn" title="История latency" onclick="showLatencyHistory(event,'${esc(srv.id)}')">⌁</button>
       <button class="srv-del-btn" title="Удалить" onclick="deleteSrv(event,'${esc(srv.id)}')">🗑</button>
     </div>`;
   }).join('');
@@ -2077,6 +2202,48 @@ function copySrvUrl(e, url) {
   navigator.clipboard.writeText(url)
     .then(() => showToast('Ссылка скопирована', 'on'))
     .catch(() => showToast('Ошибка копирования', 'off'));
+}
+
+function openServerInfo(title, html) {
+  const modal = $id('serverInfoModal');
+  const body = $id('serverInfoBody');
+  if (!modal || !body) return;
+  $id('serverInfoTitle').textContent = title || 'Сервер';
+  body.innerHTML = html;
+  modal.style.display = 'flex';
+}
+function closeServerInfoModal() {
+  const modal = $id('serverInfoModal');
+  if (modal) modal.style.display = 'none';
+}
+function _serverNameById(id) {
+  const srv = state.servers.find(s => s.id === id);
+  return srv ? serverDisplayName(srv) : id;
+}
+function showSrvQR(e, id) {
+  e.stopPropagation();
+  const name = _serverNameById(id);
+  const src = API + '/servers/' + encodeURIComponent(id) + '/qr';
+  openServerInfo(name || 'QR', `<img src="${src}" alt="QR" style="width:256px;height:256px;border-radius:8px;background:#fff;padding:8px">`);
+}
+async function showLatencyHistory(e, id) {
+  e.stopPropagation();
+  const name = _serverNameById(id);
+  openServerInfo(name || 'Latency', '<div class="pg-sub">загрузка...</div>');
+  try {
+    const r = await fetch(API + '/servers/' + encodeURIComponent(id) + '/latency-history');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    const points = d.history || [];
+    const rows = points.slice(-12).reverse().map(p => {
+      const ms = p.latency_ms ?? p.ms ?? p.latency ?? '—';
+      const at = p.at || p.time || p.timestamp || '';
+      return `<div class="pg-row" style="width:100%"><span class="pg-sub">${esc(String(at)).slice(0,19)}</span><span class="pg-val">${esc(String(ms))} ms</span></div>`;
+    }).join('');
+    openServerInfo(name || 'Latency', rows || '<div class="pg-sub">история пока пуста</div>');
+  } catch(e2) {
+    openServerInfo(name || 'Latency', `<div class="pg-sub">ошибка: ${esc(e2.message)}</div>`);
+  }
 }
 
 async function pingAll() {
@@ -2293,7 +2460,11 @@ async function loadRules() {
       default_action: data.default_action || 'proxy',
       rules: _allRules,
       bypass_enabled: !!data.bypass_enabled,
-      dns: data.dns || undefined
+      dns: data.dns || undefined,
+      block_quic: data.block_quic !== false,
+      block_telemetry: !!data.block_telemetry,
+      lan_share_enabled: !!data.lan_share_enabled,
+      lan_share_port: data.lan_share_port || 10808
     };
     renderDefaultAction(_routingConfig.default_action);
     syncRulesJson(false);
@@ -2388,6 +2559,10 @@ function routingJsonPayload() {
   };
   if (_routingConfig.bypass_enabled) payload.bypass_enabled = true;
   if (_routingConfig.dns) payload.dns = _routingConfig.dns;
+  payload.block_quic = _routingConfig.block_quic !== false;
+  payload.block_telemetry = !!_routingConfig.block_telemetry;
+  payload.lan_share_enabled = !!_routingConfig.lan_share_enabled;
+  payload.lan_share_port = Number(_routingConfig.lan_share_port || 10808);
   return payload;
 }
 
@@ -2422,7 +2597,11 @@ async function loadRulesJson() {
       default_action: data.default_action || 'proxy',
       rules: _allRules,
       bypass_enabled: !!data.bypass_enabled,
-      dns: data.dns || undefined
+      dns: data.dns || undefined,
+      block_quic: data.block_quic !== false,
+      block_telemetry: !!data.block_telemetry,
+      lan_share_enabled: !!data.lan_share_enabled,
+      lan_share_port: data.lan_share_port || 10808
     };
     renderDefaultAction(_routingConfig.default_action);
     syncRulesJson(true);
@@ -2472,6 +2651,31 @@ async function saveRulesJson() {
     loadRules();
   } catch(e) {
     showToast('Ошибка сохранения JSON: ' + e.message, 'off');
+  }
+}
+
+async function importRulesFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  try {
+    const content = await file.text();
+    const name = (file.name || '').toLowerCase();
+    const format = name.endsWith('.base64') ? 'gfwlist' : (name.endsWith('.yaml') || name.endsWith('.yml') ? 'clash' : 'text');
+    const r = await fetch(API + '/tun/rules/import', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({format, content, action: 'proxy'})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    showToast(`Импортировано правил: ${d.imported || 0}`, 'on');
+    OpTimer.start('apply', 'Применение импортированных правил', _applyHistory.estimate(5000));
+    _watchApply('Импорт правил');
+    loadRules();
+  } catch(e) {
+    showToast('Ошибка импорта правил: ' + e.message, 'off');
+  } finally {
+    input.value = '';
   }
 }
 
@@ -3046,7 +3250,7 @@ async function saveAddRuleModal() {
 
 // Escape закрывает модал и geosite suggestion
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { closeAddRuleModal(); closeRulesJsonEditor(); const b = $id('geoSuggestBox'); if(b) b.style.display='none'; }
+  if (e.key === 'Escape') { closeAddRuleModal(); closeRulesJsonEditor(); closeSingboxConfigEditor(); const b = $id('geoSuggestBox'); if(b) b.style.display='none'; }
 });
 document.addEventListener('click', e => {
   const b = $id('geoSuggestBox');
@@ -3305,6 +3509,364 @@ async function toggleStartupProxy() {
   }
 }
 
+let _appSettingsCache = {};
+let _speedProgressTimer = null;
+let _speedProgressValue = 0;
+let _singboxConfigDirty = false;
+
+function setSpeedProgress(pct, text) {
+  _speedProgressValue = Math.max(0, Math.min(100, pct));
+  const box = $id('speedProgress');
+  if (box) box.classList.add('vis');
+  if ($id('speedProgressFill')) $id('speedProgressFill').style.width = _speedProgressValue + '%';
+  if ($id('speedProgressPct')) $id('speedProgressPct').textContent = Math.round(_speedProgressValue) + '%';
+  if (text && $id('speedProgressText')) $id('speedProgressText').textContent = text;
+}
+
+function startSpeedProgress() {
+  clearInterval(_speedProgressTimer);
+  setSpeedProgress(6, 'Подготовка запроса');
+  _speedProgressTimer = setInterval(() => {
+    const next = _speedProgressValue < 55
+      ? _speedProgressValue + 7
+      : _speedProgressValue < 86
+        ? _speedProgressValue + 3
+        : _speedProgressValue + 0.8;
+    const label = next < 25 ? 'Проверка прокси' : next < 70 ? 'Загрузка тестового файла' : 'Подсчёт скорости';
+    setSpeedProgress(Math.min(next, 94), label);
+  }, 650);
+}
+
+function finishSpeedProgress(ok) {
+  clearInterval(_speedProgressTimer);
+  setSpeedProgress(ok ? 100 : Math.max(_speedProgressValue, 100), ok ? 'Готово' : 'Ошибка');
+  setTimeout(() => $id('speedProgress')?.classList.remove('vis'), ok ? 1400 : 2200);
+}
+
+async function loadClipboardBanner() {
+  try {
+    const r = await fetch(API + '/clipboard/vless');
+    const d = await r.json();
+    const el = $id('clipVlessBanner');
+    if (el) el.style.display = d.found ? 'flex' : 'none';
+  } catch(_) {}
+}
+
+function refreshClipboardBannerIfVisible() {
+  if ($id('clipVlessBanner')) loadClipboardBanner();
+}
+window.addEventListener('focus', refreshClipboardBannerIfVisible);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshClipboardBannerIfVisible();
+});
+
+async function addClipboardServerFromBanner() {
+  try {
+    const r = await fetch(API + '/clipboard/vless');
+    const d = await r.json();
+    if (!d.found || !d.url) { showToast('VLESS в буфере не найден', 'warn'); return; }
+    const add = await fetch(API + '/servers', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url:d.url})
+    });
+    if (!add.ok && add.status !== 409) throw new Error(await add.text());
+    showToast(add.status === 409 ? 'Сервер уже добавлен' : 'Сервер добавлен', add.status === 409 ? 'warn' : 'on');
+    loadServers();
+    loadClipboardBanner();
+  } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+async function runSpeedTest() {
+  const btn = $id('speedTestBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Идёт...'; }
+  startSpeedProgress();
+  try {
+    const r = await fetch(API + '/speedtest', {method:'POST'});
+    const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error || 'HTTP ' + r.status);
+    $id('speedTestResult').textContent = `${Number(d.download_mbps || 0).toFixed(1)} Mbps, ${d.latency_ms || 0} ms`;
+    finishSpeedProgress(true);
+    showToast('Speed test завершён', 'on');
+  } catch(e) {
+    $id('speedTestResult').textContent = 'ошибка';
+    finishSpeedProgress(false);
+    showToast('Speed test: ' + e.message, 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Тест'; }
+  }
+}
+
+async function runLeakCheck() {
+  const btn = $id('leakCheckBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const r = await fetch(API + '/leak-check');
+    const d = await r.json();
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    $id('leakCheckResult').textContent = `proxy ${d.proxy_ip || '—'} / direct ${d.direct_ip || '—'}`;
+    showToast(d.leaked ? 'Возможна утечка IP' : 'Leak check без совпадений', d.leaked ? 'warn' : 'on');
+  } catch(e) {
+    $id('leakCheckResult').textContent = 'ошибка';
+    showToast('Leak check: ' + e.message, 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '▶ Проверить'; }
+  }
+}
+
+async function loadTotalStats() {
+  try {
+    const r = await fetch(API + '/stats/total');
+    const d = await r.json();
+    const down = (d.total_download_bytes || 0) + (d.session_download_bytes || 0);
+    const up = (d.total_upload_bytes || 0) + (d.session_upload_bytes || 0);
+    $id('totalStatsResult').textContent = `↓ ${fmtBytes(down)} ↑ ${fmtBytes(up)} · сессий ${d.total_sessions || 0}`;
+  } catch(_) {
+    if ($id('totalStatsResult')) $id('totalStatsResult').textContent = 'недоступно';
+  }
+}
+
+async function loadConnectionHistory() {
+  try {
+    const r = await fetch(API + '/connections/history');
+    const d = await r.json();
+    const events = d.events || [];
+    const last = events[events.length - 1];
+    $id('connHistoryResult').textContent = last ? `${last.kind} ${last.server || ''}` : 'событий нет';
+  } catch(_) {
+    if ($id('connHistoryResult')) $id('connHistoryResult').textContent = 'недоступно';
+  }
+}
+
+async function loadCrashReports() {
+  try {
+    const r = await fetch(API + '/diagnostics/crashes');
+    const d = await r.json();
+    const reports = d.reports || [];
+    $id('crashReportsResult').textContent = reports.length ? `${reports.length} последних отчётов` : 'нет отчётов';
+  } catch(_) {
+    if ($id('crashReportsResult')) $id('crashReportsResult').textContent = 'недоступно';
+  }
+}
+
+function applyRoutingControls() {
+  $id('blockQuicToggle')?.classList.toggle('on', _routingConfig.block_quic !== false);
+  $id('blockTelemetryToggle')?.classList.toggle('on', !!_routingConfig.block_telemetry);
+  $id('lanShareToggle')?.classList.toggle('on', !!_routingConfig.lan_share_enabled);
+  if ($id('lanSharePortInp')) $id('lanSharePortInp').value = _routingConfig.lan_share_port || 10808;
+}
+
+async function loadRoutingOptions() {
+  try {
+    const r = await fetch(API + '/tun/rules');
+    if (!r.ok) return;
+    const d = await r.json();
+    _routingConfig = {
+      ..._routingConfig,
+      default_action: d.default_action || _routingConfig.default_action || 'proxy',
+      rules: d.rules || _allRules || [],
+      bypass_enabled: !!d.bypass_enabled,
+      dns: d.dns || _routingConfig.dns,
+      block_quic: d.block_quic !== false,
+      block_telemetry: !!d.block_telemetry,
+      lan_share_enabled: !!d.lan_share_enabled,
+      lan_share_port: d.lan_share_port || 10808
+    };
+    applyRoutingControls();
+  } catch(_) {}
+}
+
+async function saveRoutingOptions() {
+  const port = Number($id('lanSharePortInp')?.value || _routingConfig.lan_share_port || 10808);
+  _routingConfig.lan_share_port = Math.max(1024, Math.min(65535, port));
+  try {
+    const r = await fetch(API + '/tun/rules', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(routingJsonPayload())
+    });
+    if (!r.ok) throw new Error(await r.text());
+    showToast('Настройки маршрутизации сохранены', 'on');
+    loadLANInfo();
+  } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+async function toggleRoutingOption(key) {
+  if (key === 'block_quic') _routingConfig.block_quic = !($id('blockQuicToggle')?.classList.contains('on'));
+  if (key === 'block_telemetry') _routingConfig.block_telemetry = !($id('blockTelemetryToggle')?.classList.contains('on'));
+  if (key === 'lan_share_enabled') _routingConfig.lan_share_enabled = !($id('lanShareToggle')?.classList.contains('on'));
+  applyRoutingControls();
+  await saveRoutingOptions();
+}
+
+async function loadLANInfo() {
+  try {
+    const r = await fetch(API + '/settings/lan-info');
+    const d = await r.json();
+    const ips = d.ips || [];
+    $id('lanInfoResult').textContent = ips.length ? ips.map(ip => `${ip}:${d.port || 10808}`).join(', ') : 'LAN IP не найден';
+  } catch(_) {
+    if ($id('lanInfoResult')) $id('lanInfoResult').textContent = 'недоступно';
+  }
+}
+
+function applyLifecycleControls(d) {
+  _appSettingsCache = d || _appSettingsCache || {};
+  $id('keepaliveToggle')?.classList.toggle('on', !!_appSettingsCache.keepalive_enabled);
+  $id('scheduleToggle')?.classList.toggle('on', !!(_appSettingsCache.schedule && _appSettingsCache.schedule.enabled));
+  $id('manualConfigToggle')?.classList.toggle('on', !!_appSettingsCache.manual_singbox_config);
+  if ($id('keepaliveIntervalInp')) $id('keepaliveIntervalInp').value = _appSettingsCache.keepalive_interval_sec || 120;
+  if ($id('reconnectIntervalInp')) $id('reconnectIntervalInp').value = _appSettingsCache.reconnect_interval_min || 0;
+  if ($id('memoryLimitInp')) $id('memoryLimitInp').value = _appSettingsCache.memory_limit_mb || 0;
+  if ($id('scheduleOnInp')) $id('scheduleOnInp').value = (_appSettingsCache.schedule && _appSettingsCache.schedule.proxy_on) || '09:00';
+  if ($id('scheduleOffInp')) $id('scheduleOffInp').value = (_appSettingsCache.schedule && _appSettingsCache.schedule.proxy_off) || '18:00';
+}
+
+async function saveLifecycleSettings() {
+  const schedule = _appSettingsCache.schedule || {};
+  schedule.enabled = !!$id('scheduleToggle')?.classList.contains('on');
+  schedule.proxy_on = $id('scheduleOnInp')?.value || '09:00';
+  schedule.proxy_off = $id('scheduleOffInp')?.value || '18:00';
+  if (!Array.isArray(schedule.weekdays) || !schedule.weekdays.length) schedule.weekdays = [1,2,3,4,5,6,7];
+  const payload = {
+    keepalive_enabled: !!$id('keepaliveToggle')?.classList.contains('on'),
+    keepalive_interval_sec: Number($id('keepaliveIntervalInp')?.value || 120),
+    reconnect_interval_min: Number($id('reconnectIntervalInp')?.value || 0),
+    memory_limit_mb: Number($id('memoryLimitInp')?.value || 0),
+    manual_singbox_config: !!$id('manualConfigToggle')?.classList.contains('on'),
+    schedule
+  };
+  try {
+    const r = await fetch(API + '/settings', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json().catch(() => payload);
+    applyLifecycleControls(d);
+    showToast('Настройки сохранены', 'on');
+  } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+function toggleLifecycleOption(key) {
+  if (key === 'keepalive_enabled') $id('keepaliveToggle')?.classList.toggle('on');
+  if (key === 'schedule_enabled') $id('scheduleToggle')?.classList.toggle('on');
+  saveLifecycleSettings();
+}
+
+function renderSingboxConfigStatus(d) {
+  if (!d) return;
+  _appSettingsCache.manual_singbox_config = !!d.manual_enabled;
+  $id('manualConfigToggle')?.classList.toggle('on', !!d.manual_enabled);
+  const mode = d.manual_enabled ? 'ручной режим включён' : 'автогенерация включена';
+  const exists = d.exists === false ? 'файл не найден' : (d.path || 'config.singbox.json');
+  if ($id('singboxConfigStatus')) $id('singboxConfigStatus').textContent = `${mode} · ${exists}`;
+  if ($id('singboxConfigPath')) $id('singboxConfigPath').textContent = d.path || 'config.singbox.json';
+  if ($id('singboxConfigMode')) $id('singboxConfigMode').textContent = 'режим: ' + mode;
+  if ($id('singboxConfigUpdated')) {
+    const ts = d.updated_at ? new Date(d.updated_at * 1000).toLocaleString() : '—';
+    $id('singboxConfigUpdated').textContent = 'изменён: ' + ts;
+  }
+}
+
+async function loadSingboxConfigStatus() {
+  try {
+    const r = await fetch(API + '/singbox-config');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    renderSingboxConfigStatus(d);
+  } catch(_) {
+    if ($id('singboxConfigStatus')) $id('singboxConfigStatus').textContent = 'недоступно';
+  }
+}
+
+async function loadSingboxConfig() {
+  try {
+    const r = await fetch(API + '/singbox-config');
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    renderSingboxConfigStatus(d);
+    if ($id('singboxConfigText')) $id('singboxConfigText').value = d.content || '';
+    _singboxConfigDirty = false;
+    showToast('config.singbox.json загружен', 'info');
+  } catch(e) {
+    showToast('Ошибка загрузки config.singbox.json: ' + e.message, 'off');
+  }
+}
+
+function openSingboxConfigEditor() {
+  const modal = $id('singboxConfigModal');
+  if (!modal) return;
+  modal.style.display = 'flex';
+  loadSingboxConfig();
+  setTimeout(() => $id('singboxConfigText')?.focus(), 50);
+}
+
+function closeSingboxConfigEditor() {
+  const modal = $id('singboxConfigModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function formatSingboxConfig() {
+  const el = $id('singboxConfigText');
+  if (!el) return;
+  try {
+    el.value = JSON.stringify(JSON.parse(el.value || '{}'), null, 2);
+    _singboxConfigDirty = true;
+  } catch(e) {
+    showToast('JSON невалиден: ' + e.message, 'warn');
+  }
+}
+
+async function saveSingboxConfig(apply) {
+  const el = $id('singboxConfigText');
+  if (!el) return;
+  let formatted = '';
+  try {
+    formatted = JSON.stringify(JSON.parse(el.value || '{}'), null, 2);
+  } catch(e) {
+    showToast('JSON невалиден: ' + e.message, 'warn');
+    return;
+  }
+  try {
+    const r = await fetch(API + '/singbox-config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({content: formatted, manual_enabled: true, apply: !!apply})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    el.value = formatted;
+    _singboxConfigDirty = false;
+    renderSingboxConfigStatus({path: d.path || $id('singboxConfigPath')?.textContent, manual_enabled: d.manual_enabled, exists: true, updated_at: d.updated_at});
+    showToast(apply ? 'config.singbox.json сохранён и применяется' : 'config.singbox.json сохранён', 'on');
+    if (apply) _watchApply('Применение ручного config.singbox.json');
+  } catch(e) {
+    showToast('Ошибка сохранения config.singbox.json: ' + e.message, 'off');
+  }
+}
+
+async function toggleManualSingboxConfig() {
+  const el = $id('manualConfigToggle');
+  const enabled = !el?.classList.contains('on');
+  try {
+    const r = await fetch(API + '/singbox-config', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({manual_enabled: enabled})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    _appSettingsCache.manual_singbox_config = !!d.manual_enabled;
+    el?.classList.toggle('on', !!d.manual_enabled);
+    loadSingboxConfigStatus();
+    showToast(d.manual_enabled ? 'Ручной config.singbox.json включён' : 'Автогенерация config.singbox.json включена', 'on');
+  } catch(e) {
+    showToast('Ошибка: ' + e.message, 'off');
+  }
+}
+
 async function loadSettingsPage() {
   // Engine status — берём из state (обновляется pollStatus), не из /engine/status
   if ($id('engState')) $id('engState').textContent = state.running ? 'Запущен' : 'Остановлен';
@@ -3318,6 +3880,7 @@ async function loadSettingsPage() {
       if (el) el.classList.toggle('on', !!d.autorun);
       const startupEl = $id('startupProxyToggle');
       if (startupEl) startupEl.classList.toggle('on', !!d.start_proxy_on_launch);
+      applyLifecycleControls(d);
     }
   } catch(_) {}
   try {
@@ -3370,6 +3933,13 @@ async function loadSettingsPage() {
       }
     }
   } catch(_) {}
+  loadClipboardBanner();
+  loadRoutingOptions();
+  loadLANInfo();
+  loadSingboxConfigStatus();
+  loadTotalStats();
+  loadConnectionHistory();
+  loadCrashReports();
 }
 
 let _importSrvRunning = false;
@@ -3414,8 +3984,15 @@ async function importClipboard() {
   try {
     text = await navigator.clipboard.readText();
   } catch (_) {
-    showToast('Нет доступа к буферу обмена', 'off');
-    return;
+    try {
+      const r = await fetch(API + '/clipboard/vless');
+      const d = await r.json();
+      if (d.found && d.url) text = d.url;
+    } catch(_) {}
+    if (!text) {
+      showToast('Нет доступа к буферу обмена', 'off');
+      return;
+    }
   }
   const protos = ['vless://'];
   const lines = text.split(/\r?\n/).map(l => l.trim())
@@ -3502,7 +4079,7 @@ async function downloadGeosite() {
 }
 
 function downloadBackup() {
-  window.location.href = API + '/backup';
+  window.location.href = API + '/backup/export';
 }
 
 async function restoreBackup(input) {
@@ -3512,7 +4089,7 @@ async function restoreBackup(input) {
   fd.append('file', file);
   OpTimer.start('restore', 'Восстановление конфигурации...', 10000);
   try {
-    const r = await fetch(API + '/backup/restore', {method:'POST', body: fd});
+    const r = await fetch(API + '/backup/import', {method:'POST', body: fd});
     if (!r.ok) throw new Error(await r.text());
     showToast('Конфигурация восстановлена', 'on');
     OpTimer.done('restore', 'Конфигурация восстановлена');

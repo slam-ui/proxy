@@ -134,22 +134,18 @@ func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error 
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// BUG FIX: sync.Once срабатывает только один раз за lifetime объекта.
-	// После StopGuard() повторный StartGuard() был no-op — guard не перезапускался.
-	// Явный флаг guardRunning позволяет корректно перезапустить guard.
-	if m.guardRunning {
-		// Останавливаем старый перед перезапуском
-		if m.guardCancel != nil {
-			m.guardCancel()
-		}
-	}
+	oldCancel := m.guardCancel
 	m.guardCtx, m.guardCancel = context.WithCancel(ctx)
 	m.guardRunning = true
 	m.guardGen++
 	myGen := m.guardGen
 	guardCtx := m.guardCtx
+	m.mu.Unlock()
+
+	if oldCancel != nil {
+		oldCancel()
+	}
+
 	go func() {
 		m.guardLoop(guardCtx, interval)
 		m.mu.Lock()
@@ -166,11 +162,12 @@ func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error 
 // StopGuard останавливает proxy guard.
 func (m *manager) StopGuard() {
 	m.mu.Lock()
-	if m.guardCancel != nil {
-		m.guardCancel()
-		m.guardCancel = nil
-	}
+	cancel := m.guardCancel
+	m.guardCancel = nil
 	m.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // guardLoop периодически проверяет состояние системного прокси.
@@ -209,8 +206,9 @@ func (m *manager) checkAndRestore() {
 	m.mu.Lock()
 	expectedEnabled := m.enabled
 	expectedConfig := m.config
+	pausedUntil := m.pausedUntil
 	// БАГ 14: пропускаем восстановление пока guard приостановлен (doApply).
-	if !m.pausedUntil.IsZero() && time.Now().Before(m.pausedUntil) {
+	if !pausedUntil.IsZero() && time.Now().Before(pausedUntil) {
 		m.mu.Unlock()
 		return
 	}

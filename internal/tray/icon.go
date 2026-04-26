@@ -1,7 +1,79 @@
 package tray
 
+import (
+	"bytes"
+	"encoding/binary"
+	"image"
+	"image/color"
+	"image/png"
+	"sync"
+)
+
 func iconOn() []byte  { return iconOnData[:] }
 func iconOff() []byte { return iconOffData[:] }
+
+var (
+	iconDegradedOnce sync.Once
+	iconCriticalOnce sync.Once
+	iconDegradedData []byte
+	iconCriticalData []byte
+)
+
+func iconDegraded() []byte {
+	iconDegradedOnce.Do(func() {
+		iconDegradedData = makeStatusIcon(color.RGBA{R: 255, G: 190, B: 76, A: 255})
+	})
+	return iconDegradedData
+}
+
+func iconCritical() []byte {
+	iconCriticalOnce.Do(func() {
+		iconCriticalData = makeStatusIcon(color.RGBA{R: 255, G: 84, B: 84, A: 255})
+	})
+	return iconCriticalData
+}
+
+func makeStatusIcon(fill color.RGBA) []byte {
+	const size = 16
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	bg := color.NRGBA{R: 16, G: 22, B: 34, A: 255}
+	fg := color.NRGBA(fill)
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx, dy := float64(x)-7.5, float64(y)-7.5
+			if dx*dx+dy*dy <= 56 {
+				img.SetNRGBA(x, y, bg)
+			}
+		}
+	}
+	for y := 3; y < 13; y++ {
+		for x := 3; x < 13; x++ {
+			dx, dy := float64(x)-7.5, float64(y)-7.5
+			if dx*dx+dy*dy <= 24 {
+				img.SetNRGBA(x, y, fg)
+			}
+		}
+	}
+	img.SetNRGBA(6, 5, color.NRGBA{R: 255, G: 255, B: 255, A: 210})
+	img.SetNRGBA(7, 5, color.NRGBA{R: 255, G: 255, B: 255, A: 170})
+
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, img); err != nil {
+		return iconOn()
+	}
+	pngBytes := pngBuf.Bytes()
+	ico := make([]byte, 22+len(pngBytes))
+	binary.LittleEndian.PutUint16(ico[2:], 1)
+	binary.LittleEndian.PutUint16(ico[4:], 1)
+	ico[6] = size
+	ico[7] = size
+	binary.LittleEndian.PutUint16(ico[10:], 1)
+	binary.LittleEndian.PutUint16(ico[12:], 32)
+	binary.LittleEndian.PutUint32(ico[14:], uint32(len(pngBytes)))
+	binary.LittleEndian.PutUint32(ico[18:], 22)
+	copy(ico[22:], pngBytes)
+	return ico
+}
 
 var iconOnData = [...]byte{
 	0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x10, 0x10, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00, 0x7F, 0x02,

@@ -10,11 +10,14 @@
     .\run_tests.ps1 all 60       # то же, но fuzz 60 с
 #>
 param(
+    [ValidateSet("race", "coverage", "fuzz", "all")]
     [string]$Mode     = "race",
+    [ValidateRange(1, 3600)]
     [int]   $FuzzTime = 30
 )
 
 $ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $testScript = Join-Path $ScriptDir "test.ps1"

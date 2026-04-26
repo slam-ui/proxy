@@ -32,9 +32,19 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 		"timestamp":      time.Now().Unix(),
 		"backup_date":    time.Now().Format("2006-01-02 15:04:05"),
 	}
-	metaData, _ := json.MarshalIndent(meta, "", "  ")
+	metaData, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		http.Error(w, "Failed to encode backup metadata", http.StatusInternalServerError)
+		return
+	}
 	if f, err := zw.Create("backup_meta.json"); err == nil {
-		f.Write(metaData)
+		if _, err := f.Write(metaData); err != nil {
+			http.Error(w, "Failed to write backup metadata", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		http.Error(w, "Failed to create backup metadata", http.StatusInternalServerError)
+		return
 	}
 
 	// B-8: Архивируем необходимые файлы
@@ -46,8 +56,14 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	for _, filename := range filesToBackup {
 		data, err := os.ReadFile(filename)
 		if err == nil {
-			if f, err := zw.Create(filename); err == nil {
-				f.Write(data)
+			f, err := zw.Create(filename)
+			if err != nil {
+				http.Error(w, "Failed to add file to ZIP", http.StatusInternalServerError)
+				return
+			}
+			if _, err := f.Write(data); err != nil {
+				http.Error(w, "Failed to write file to ZIP", http.StatusInternalServerError)
+				return
 			}
 		}
 	}
@@ -60,8 +76,14 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
 				path := filepath.Join(profilesDir, entry.Name())
 				if data, err := os.ReadFile(path); err == nil {
-					if f, err := zw.Create(path); err == nil {
-						f.Write(data)
+					f, err := zw.Create(path)
+					if err != nil {
+						http.Error(w, "Failed to add profile to ZIP", http.StatusInternalServerError)
+						return
+					}
+					if _, err := f.Write(data); err != nil {
+						http.Error(w, "Failed to write profile to ZIP", http.StatusInternalServerError)
+						return
 					}
 				}
 			}
@@ -78,7 +100,9 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=proxy-backup-%s.zip", time.Now().Format("2006-01-02")))
 	w.WriteHeader(http.StatusOK)
-	w.Write(buf.Bytes())
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		s.logger.Warn("handleBackup: write response: %v", err)
+	}
 }
 
 // handleBackupRestore POST /api/backup/restore — восстановить конфиги из ZIP
@@ -138,16 +162,17 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				break
 			}
-			raw, _ := io.ReadAll(io.LimitReader(rc, 4096))
-			rc.Close()
+			raw, readErr := io.ReadAll(io.LimitReader(rc, 4096))
+			if closeErr := rc.Close(); closeErr != nil {
+				s.logger.Warn("handleBackupRestore: close metadata: %v", closeErr)
+			}
+			if readErr != nil {
+				break
+			}
 			var m map[string]interface{}
 			if json.Unmarshal(raw, &m) == nil {
 				if sv, ok := m["schema_version"]; ok {
-					// schema_version может быть float64 при JSON unmarshal
-					switch v := sv.(type) {
-					case float64:
-						metaValid = v == 1
-					case int:
+					if v, ok := sv.(float64); ok {
 						metaValid = v == 1
 					}
 				}
@@ -183,9 +208,14 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 
 		// FIX 42: Zip Slip защита — проверяем что итоговый путь внутри рабочей директории.
 		cleanName := filepath.Clean(file.Name)
+		if cleanName == "." || filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) || cleanName == ".." {
+			skipped++
+			continue
+		}
 		destPath := filepath.Join(workDir, cleanName)
 		absDestPath, absErr := filepath.Abs(destPath)
-		if absErr != nil || !strings.HasPrefix(absDestPath, workDir+string(filepath.Separator)) {
+		rel, relErr := filepath.Rel(workDir, absDestPath)
+		if absErr != nil || relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			// Путь выходит за пределы рабочей директории — пропускаем.
 			skipped++
 			continue
@@ -199,7 +229,10 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 
 		// B-8: Создаём директорию если нужно
 		if dir := filepath.Dir(absDestPath); dir != "." {
-			os.MkdirAll(dir, 0755)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				skipped++
+				continue
+			}
 		}
 
 		// B-8: Читаем и пишем файл атомарно.
@@ -211,12 +244,22 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		data, err := io.ReadAll(io.LimitReader(rc, maxExtractedFileSize+1))
-		rc.Close()
+		if closeErr := rc.Close(); closeErr != nil {
+			s.logger.Warn("handleBackupRestore: close %s: %v", file.Name, closeErr)
+		}
 		if err != nil {
 			skipped++
 			continue
 		}
 		if int64(len(data)) > maxExtractedFileSize {
+			skipped++
+			continue
+		}
+		if info, err := os.Lstat(absDestPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			skipped++
+			continue
+		}
+		if pathHasSymlink(workDir, absDestPath) {
 			skipped++
 			continue
 		}
@@ -259,4 +302,23 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func pathHasSymlink(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return true
+	}
+	cur := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
 }

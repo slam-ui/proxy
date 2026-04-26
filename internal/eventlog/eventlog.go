@@ -33,7 +33,7 @@ type Log struct {
 	mu      sync.RWMutex
 	events  []Event
 	maxSize int
-	counter int
+	counter int64
 	// head — индекс самого старого элемента
 	head int
 	// size — текущее число заполненных слотов
@@ -63,7 +63,7 @@ func (l *Log) Add(level Level, source, format string, args ...interface{}) {
 
 	l.counter++
 	e := Event{
-		ID:        l.counter,
+		ID:        int(l.counter),
 		Timestamp: time.Now(),
 		Level:     level,
 		Source:    source,
@@ -133,7 +133,7 @@ func (l *Log) GetLatestID() int {
 	if l.size == 0 {
 		return 0
 	}
-	return l.counter
+	return int(l.counter)
 }
 
 // Clear полностью очищает буфер.

@@ -22,6 +22,7 @@ type SettingsHandlers struct {
 func SetupSettingsRoutes(s *Server) {
 	h := &SettingsHandlers{server: s}
 	s.router.HandleFunc("/api/settings", h.handleGetSettings).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/settings", h.handleSetSettings).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/autorun", h.handleSetAutorun).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/startup-proxy", h.handleSetStartupProxy).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/killswitch", h.handleSetKillSwitch).Methods("POST", "OPTIONS")
@@ -36,12 +37,82 @@ func SetupSettingsRoutes(s *Server) {
 	s.router.HandleFunc("/api/settings/geosite-update", h.handleSetGeositeUpdate).Methods("POST", "OPTIONS")
 }
 
+// handleSetSettings POST /api/settings updates lifecycle settings that are safe
+// to change without rebuilding routing rules.
+func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ReconnectIntervalMin *int             `json:"reconnect_interval_min"`
+		KeepaliveEnabled     *bool            `json:"keepalive_enabled"`
+		KeepaliveIntervalSec *int             `json:"keepalive_interval_sec"`
+		Schedule             *config.Schedule `json:"schedule"`
+		MemoryLimitMB        *uint64          `json:"memory_limit_mb"`
+		StartProxyOnLaunch   *bool            `json:"start_proxy_on_launch"`
+		ManualSingBoxConfig  *bool            `json:"manual_singbox_config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+
+	settings, err := config.LoadAppSettings(config.AppSettingsFile)
+	if err != nil {
+		h.server.logger.Warn("handleSetSettings: LoadAppSettings: %v", err)
+		settings = config.DefaultAppSettings()
+	}
+	if body.ReconnectIntervalMin != nil {
+		if *body.ReconnectIntervalMin < 0 {
+			h.server.respondError(w, http.StatusBadRequest, "reconnect_interval_min must be >= 0")
+			return
+		}
+		settings.ReconnectIntervalMin = *body.ReconnectIntervalMin
+	}
+	if body.KeepaliveEnabled != nil {
+		settings.KeepaliveEnabled = *body.KeepaliveEnabled
+	}
+	if body.KeepaliveIntervalSec != nil {
+		if *body.KeepaliveIntervalSec < 30 {
+			h.server.respondError(w, http.StatusBadRequest, "keepalive_interval_sec must be >= 30")
+			return
+		}
+		settings.KeepaliveIntervalSec = *body.KeepaliveIntervalSec
+	}
+	if body.Schedule != nil {
+		settings.Schedule = *body.Schedule
+	}
+	if body.MemoryLimitMB != nil {
+		settings.MemoryLimitMB = *body.MemoryLimitMB
+	}
+	if body.StartProxyOnLaunch != nil {
+		settings.StartProxyOnLaunch = *body.StartProxyOnLaunch
+	}
+	if body.ManualSingBoxConfig != nil {
+		settings.ManualSingBoxConfig = *body.ManualSingBoxConfig
+	}
+	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if settings.ReconnectIntervalMin > 0 {
+		h.server.StartPeriodicReconnect(time.Duration(settings.ReconnectIntervalMin) * time.Minute)
+	} else {
+		h.server.StopPeriodicReconnect()
+	}
+	h.server.respondJSON(w, http.StatusOK, settings)
+}
+
 // SettingsResponse — состояние всех настроек приложения.
 type SettingsResponse struct {
-	Autorun            bool `json:"autorun"`               // включён ли автозапуск при входе в Windows
-	KillSwitch         bool `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
-	ProxyGuard         bool `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
-	StartProxyOnLaunch bool `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
+	Autorun              bool            `json:"autorun"`               // включён ли автозапуск при входе в Windows
+	KillSwitch           bool            `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
+	ProxyGuard           bool            `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
+	StartProxyOnLaunch   bool            `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
+	ReconnectIntervalMin int             `json:"reconnect_interval_min"`
+	KeepaliveEnabled     bool            `json:"keepalive_enabled"`
+	KeepaliveIntervalSec int             `json:"keepalive_interval_sec"`
+	Schedule             config.Schedule `json:"schedule"`
+	MemoryLimitMB        uint64          `json:"memory_limit_mb"`
+	ManualSingBoxConfig  bool            `json:"manual_singbox_config"`
 }
 
 // handleGetSettings GET /api/settings
@@ -52,10 +123,16 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		appSettings = config.DefaultAppSettings()
 	}
 	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
-		Autorun:            autorun.IsEnabled(),
-		KillSwitch:         killswitch.IsEnabled(),
-		ProxyGuard:         h.server.IsProxyGuardEnabled(),
-		StartProxyOnLaunch: appSettings.StartProxyOnLaunch,
+		Autorun:              autorun.IsEnabled(),
+		KillSwitch:           killswitch.IsEnabled(),
+		ProxyGuard:           h.server.IsProxyGuardEnabled(),
+		StartProxyOnLaunch:   appSettings.StartProxyOnLaunch,
+		ReconnectIntervalMin: appSettings.ReconnectIntervalMin,
+		KeepaliveEnabled:     appSettings.KeepaliveEnabled,
+		KeepaliveIntervalSec: appSettings.KeepaliveIntervalSec,
+		Schedule:             appSettings.Schedule,
+		MemoryLimitMB:        appSettings.MemoryLimitMB,
+		ManualSingBoxConfig:  appSettings.ManualSingBoxConfig,
 	})
 }
 
@@ -201,8 +278,9 @@ func (h *SettingsHandlers) handleGetDNS(w http.ResponseWriter, _ *http.Request) 
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"remote_dns": dnsConfig.RemoteDNS,
-		"direct_dns": dnsConfig.DirectDNS,
+		"remote_dns":          dnsConfig.RemoteDNS,
+		"direct_dns":          dnsConfig.DirectDNS,
+		"remote_dns_fallback": dnsConfig.RemoteDNSFallback,
 	})
 }
 
@@ -211,8 +289,9 @@ func (h *SettingsHandlers) handleGetDNS(w http.ResponseWriter, _ *http.Request) 
 // Разрешённые схемы: https://, tls://, udp://, tcp://, quic://
 func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		RemoteDNS string `json:"remote_dns"`
-		DirectDNS string `json:"direct_dns"`
+		RemoteDNS         string   `json:"remote_dns"`
+		DirectDNS         string   `json:"direct_dns"`
+		RemoteDNSFallback []string `json:"remote_dns_fallback"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
@@ -231,8 +310,9 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 
 	routingConfigPath := config.DataDir + "/routing.json"
 	newDNS := &config.DNSConfig{
-		RemoteDNS: body.RemoteDNS,
-		DirectDNS: body.DirectDNS,
+		RemoteDNS:         body.RemoteDNS,
+		DirectDNS:         body.DirectDNS,
+		RemoteDNSFallback: body.RemoteDNSFallback,
 	}
 	// Если клиент передал пустую строку — используем значение по умолчанию.
 	defaultDNS := config.DefaultDNSConfig()
@@ -241,6 +321,9 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 	}
 	if newDNS.DirectDNS == "" {
 		newDNS.DirectDNS = defaultDNS.DirectDNS
+	}
+	if len(newDNS.RemoteDNSFallback) == 0 {
+		newDNS.RemoteDNSFallback = defaultDNS.RemoteDNSFallback
 	}
 
 	if h.server.tunHandlers != nil {
@@ -279,9 +362,10 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"message":    "DNS конфигурация обновлена",
-		"remote_dns": newDNS.RemoteDNS, // реально сохранённое значение (с дефолтом при пустой строке)
-		"direct_dns": newDNS.DirectDNS,
+		"message":             "DNS конфигурация обновлена",
+		"remote_dns":          newDNS.RemoteDNS,
+		"direct_dns":          newDNS.DirectDNS,
+		"remote_dns_fallback": newDNS.RemoteDNSFallback,
 	})
 
 	// Применяем новый DNS сразу — sing-box должен использовать новые серверы.

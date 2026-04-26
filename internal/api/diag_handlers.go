@@ -2,17 +2,22 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/netutil"
+	"proxyclient/internal/trafficstats"
 )
 
 // DiagHandlers управляет сбором статистики трафика и соединений.
@@ -50,6 +55,7 @@ func SetupDiagRoutes(s *Server, ctx context.Context) {
 	s.router.HandleFunc("/api/stats", h.handleStats).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/debug/stats", h.handleDebugStats).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/connections", h.handleConnections).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/traffic/by-process", h.handleTrafficByProcess).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/test", handleDiagTest).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/ports", handlePortStatus).Methods("GET", "OPTIONS") // БАГ #2B
 }
@@ -95,6 +101,7 @@ func (ts *trafficStore) connect(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	req.Header.Set("Authorization", "Bearer "+config.ClashAPISecret())
 	// OPT #5: используем переиспользуемый клиент (инициализирован в run()).
 	resp, err := ts.client.Do(req)
 	if err != nil {
@@ -124,6 +131,7 @@ func (ts *trafficStore) connect(ctx context.Context) {
 		ts.sessionUpB += snap.Up
 		ts.sessionDnB += snap.Down
 		ts.mu.Unlock()
+		trafficstats.AddSession(snap.Down, snap.Up)
 	}
 }
 
@@ -344,6 +352,7 @@ func (ct *connSpeedTracker) fetchConnectionsData(ctx context.Context) ([]clashCo
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+config.ClashAPISecret())
 	r, err := ct.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -352,11 +361,58 @@ func (ct *connSpeedTracker) fetchConnectionsData(ctx context.Context) ([]clashCo
 	var cr struct {
 		Connections []clashConn `json:"connections"`
 	}
-	// Ограничиваем тело ответа: список соединений не должен превышать 4 МБ.
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&cr); err != nil {
+	const maxBody = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBody {
+		return nil, fmt.Errorf("connections response too large")
+	}
+	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&cr); err != nil {
 		return nil, err
 	}
 	return cr.Connections, nil
+}
+
+func (h *DiagHandlers) handleTrafficByProcess(w http.ResponseWriter, r *http.Request) {
+	conns, err := h.conns.fetchConnectionsData(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	type procStat struct {
+		Process     string `json:"process"`
+		Download    int64  `json:"download"`
+		Upload      int64  `json:"upload"`
+		Connections int    `json:"connections"`
+	}
+	agg := map[string]*procStat{}
+	for _, c := range conns {
+		proc := filepath.Base(c.Metadata.ProcessPath)
+		if proc == "" || proc == "." {
+			proc = "unknown"
+		}
+		stat := agg[proc]
+		if stat == nil {
+			stat = &procStat{Process: proc}
+			agg[proc] = stat
+		}
+		stat.Download += c.Download
+		stat.Upload += c.Upload
+		stat.Connections++
+	}
+	stats := make([]procStat, 0, len(agg))
+	for _, stat := range agg {
+		stats = append(stats, *stat)
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].Download+stats[i].Upload > stats[j].Download+stats[j].Upload
+	})
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{"processes": stats}); err != nil {
+		http.Error(w, fmt.Sprintf("encode error: %v", err), http.StatusInternalServerError)
+	}
 }
 
 func (h *DiagHandlers) handleDebugStats(w http.ResponseWriter, r *http.Request) {
@@ -481,8 +537,7 @@ func handleDiagTest(w http.ResponseWriter, r *http.Request) {
 		directIP = ipResp.IP
 	}
 
-	// B-9: Определяем есть ли утечка DNS
-	dnsLeak := proxyIP != "" && directIP != "" && proxyIP == directIP
+	vpnWorks := proxyIP != "" && directIP != "" && proxyIP != directIP
 
 	if err != nil {
 		_ = json.NewEncoder(w).Encode(DiagResult{
@@ -498,8 +553,9 @@ func handleDiagTest(w http.ResponseWriter, r *http.Request) {
 		"latency_ms":  elapsed,
 		"external_ip": proxyIP,
 		"proxy_ip":    proxyIP,
-		"direct_ip":   directIP,  // B-9
-		"dns_leak":    dnsLeak,   // B-9: true если IP одинаковые
+		"direct_ip":   directIP, // B-9
+		"vpn_works":   vpnWorks,
+		"dns_leak":    false,     // IP comparison is not a DNS leak signal; UI can inspect both IPs.
 		"remote_dns":  remoteDNS, // B-9: настроенный remote DNS
 		"direct_dns":  directDNS, // B-9: настроенный direct DNS
 	})

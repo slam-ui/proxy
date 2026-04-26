@@ -1,3 +1,5 @@
+//go:build windows
+
 // tray_win32.go — кастомная Win32-реализация системного трея SafeSky.
 //
 // Owner-drawn меню с тёмной темой:
@@ -389,12 +391,32 @@ func win32Quit() {
 }
 
 func win32SetIcon(enabled bool) {
+	healthMu.Lock()
+	state := healthState
+	healthMu.Unlock()
+	win32SetIconForHealth(enabled, state)
+}
+
+func win32SetIconForHealth(enabled bool, state HealthState) {
 	win32mu.Lock()
 	var h uintptr
+	preferResource := true
 	if enabled {
-		h = buildIconHandle(iconOn())
+		switch state {
+		case HealthDegraded:
+			h = buildIconHandleWithResource(iconDegraded(), false)
+			preferResource = false
+		case HealthCritical:
+			h = buildIconHandleWithResource(iconCritical(), false)
+			preferResource = false
+		default:
+			h = buildIconHandleWithResource(iconOn(), true)
+		}
 	} else {
-		h = buildIconHandle(iconOff())
+		h = buildIconHandleWithResource(iconOff(), true)
+	}
+	if h == 0 && !preferResource {
+		h = buildIconHandleWithResource(iconOn(), true)
 	}
 	win32hicon = h
 	win32mu.Unlock()
@@ -878,20 +900,26 @@ func setMenuBackground(hMenu uintptr) {
 // ── Icon helpers ──────────────────────────────────────────────────────────
 
 func buildIconHandle(data []byte) uintptr {
+	return buildIconHandleWithResource(data, true)
+}
+
+func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
 	const (
 		imageIcon     = 1
 		lrShared      = 0x8000
 		lrDefaultSize = 0x0040
 	)
-	hMod, _, _ := pGetModuleHandle.Call(0)
-	if hMod != 0 {
-		h, _, _ := pLoadImage.Call(hMod, 1, imageIcon, 16, 16, lrShared)
-		if h != 0 {
-			return h
-		}
-		h, _, _ = pLoadImage.Call(hMod, 1, imageIcon, 0, 0, lrShared|lrDefaultSize)
-		if h != 0 {
-			return h
+	if preferResource {
+		hMod, _, _ := pGetModuleHandle.Call(0)
+		if hMod != 0 {
+			h, _, _ := pLoadImage.Call(hMod, 1, imageIcon, 16, 16, lrShared)
+			if h != 0 {
+				return h
+			}
+			h, _, _ = pLoadImage.Call(hMod, 1, imageIcon, 0, 0, lrShared|lrDefaultSize)
+			if h != 0 {
+				return h
+			}
 		}
 	}
 

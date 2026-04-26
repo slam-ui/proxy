@@ -1581,7 +1581,674 @@ BlockTelemetry bool `json:"block_telemetry"` // default: false (opt-in)
 
 ---
 
-## Порядок реализации
+## ГРУППА Е — Качество кода и исправление ошибок
+
+> Найдено в ходе аудита кода. Не новые функции, а исправление существующих багов и уязвимостей.
+
+---
+
+### Е1. Path Traversal в backup restore (КРИТИЧНО)
+
+**Проблема:** `backup_handlers.go:188` — защита от Zip Slip через `strings.HasPrefix` не работает
+на case-insensitive FS Windows. Путь `C:\Users\test.2\malicious` пройдёт проверку против
+`C:\Users\test` потому что является строковым префиксом.
+
+**Файл:** `internal/api/backup_handlers.go`
+
+```go
+// БЫЛО (уязвимо):
+if absErr != nil || !strings.HasPrefix(absDestPath, workDir+string(filepath.Separator)) {
+    skipped++
+    continue
+}
+
+// СТАЛО (безопасно):
+rel, relErr := filepath.Rel(workDir, absDestPath)
+if relErr != nil || strings.HasPrefix(rel, "..") {
+    skipped++
+    continue
+}
+```
+
+---
+
+### Е2. Command Injection в PowerShell (КРИТИЧНО)
+
+**Проблема:** `cmd/proxy-client/main.go:112` — эскейпинг пути через `strings.ReplaceAll("'", "''")`
+недостаточен. Backtick (`` ` ``), `$()` и управляющие символы в пути могут выполнить произвольный
+PowerShell-код.
+
+**Файл:** `cmd/proxy-client/main.go`
+
+```go
+// БЫЛО (уязвимо к backtick/injection):
+psCmd := fmt.Sprintf(`Start-Process -FilePath '%s' -Verb RunAs`,
+    strings.ReplaceAll(exePath, "'", "''"))
+
+// СТАЛО — использовать -ArgumentList с отдельной строкой, не inline interpolation:
+psCmd := fmt.Sprintf(
+    `Start-Process -FilePath ([System.IO.Path]::GetFullPath('%s')) -Verb RunAs`,
+    strings.NewReplacer("'", "''", "`", "``", "$", "`$").Replace(exePath),
+)
+```
+
+Либо использовать Windows API `ShellExecuteW` с verb `runas` напрямую через `golang.org/x/sys/windows`
+— без PowerShell вообще.
+
+---
+
+### Е3. Игнорирование ошибок json.Marshal (СЕРЬЁЗНО)
+
+**Проблема:** несколько хендлеров игнорируют ошибку `json.Marshal/MarshalIndent`. При ошибке
+клиент получает `null` или пустой ответ без HTTP-ошибки.
+
+**Файлы:** `internal/api/backup_handlers.go:35`, `internal/api/tun_handlers.go:42` и другие.
+
+```go
+// БЫЛО (ошибка молча проглатывается):
+metaData, _ := json.MarshalIndent(meta, "", "  ")
+body, _ := json.Marshal(map[string]any{"path": absPath, "force": true})
+
+// СТАЛО:
+metaData, err := json.MarshalIndent(meta, "", "  ")
+if err != nil {
+    s.respondError(w, http.StatusInternalServerError, "json marshal: "+err.Error())
+    return
+}
+```
+
+Проверить и исправить **все** вхождения `_, _ = json.Marshal` и `data, _ := json.Marshal`
+в `internal/api/`.
+
+---
+
+### Е4. Race condition в profile_handlers.go (СЕРЬЁЗНО)
+
+**Проблема:** `internal/api/profile_handlers.go:69` — несколько горутин с `RLock` итерируют
+map, пока другая горутина может писать в неё. Итерация по map не потокобезопасна даже с `RLock`
+если другие горутины держат `Lock` и пишут параллельно.
+
+**Файл:** `internal/api/profile_handlers.go`
+
+```go
+// Заменить прямую итерацию на снимок под блокировкой:
+func (h *ProfileHandlers) listProfiles() []ProfileInfo {
+    h.mu.RLock()
+    snapshot := make([]ProfileInfo, 0, len(h.profiles))
+    for _, p := range h.profiles {
+        snapshot = append(snapshot, p) // копируем значения, не указатели
+    }
+    h.mu.RUnlock()
+    return snapshot
+}
+```
+
+---
+
+### Е5. Goroutine leak в Server.Start() (СЕРЬЁЗНО)
+
+**Проблема:** `internal/api/server.go:308` — горутина с `ListenAndServe` не реагирует на
+отмену контекста. Если `select` в `Start()` выходит по `<-ctx.Done()`, горутина продолжает
+работать в фоне.
+
+**Файл:** `internal/api/server.go`
+
+```go
+// Добавить WaitGroup для отслеживания горутины:
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+    defer wg.Done()
+    s.logger.Info("API сервер запущен на %s", s.config.ListenAddress)
+    if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+        select {
+        case errChan <- err:
+        default:
+        }
+    }
+}()
+
+// В shutdown:
+s.httpServer.Shutdown(ctx)
+wg.Wait() // дождаться завершения горутины
+```
+
+---
+
+### Е6. Mutex удерживается при запуске горутины (СЕРЬЁЗНО)
+
+**Проблема:** `internal/proxy/manager.go:136` — `m.mu.Lock()` удерживается во время
+запуска фоновой горутины и вызова `m.guardCancel()`. Если `guardCancel()` блокируется —
+возможен deadlock.
+
+**Файл:** `internal/proxy/manager.go`
+
+```go
+// Паттерн: получить нужные значения под локом, разлочить, затем запустить горутину
+m.mu.Lock()
+oldCancel := m.guardCancel
+gen := m.guardGen + 1
+m.guardGen = gen
+m.guardRunning = true
+m.mu.Unlock() // разлочить ДО отмены и запуска горутины
+
+if oldCancel != nil {
+    oldCancel()
+}
+
+go m.runGuard(gen)
+```
+
+---
+
+### Е7. Channel write без select в app.go (НЕЗНАЧИТЕЛЬНО)
+
+**Проблема:** `cmd/proxy-client/app.go:306` — запись в `orphanCh` не обёрнута в `select`
+с контекстом. Если контекст отменён до завершения горутины, запись заблокируется навсегда.
+
+**Файл:** `cmd/proxy-client/app.go`
+
+```go
+// БЫЛО:
+orphanCh <- orphanResult{killed}
+
+// СТАЛО:
+select {
+case orphanCh <- orphanResult{killed}:
+case <-ctx.Done():
+}
+```
+
+---
+
+### Е8. Недостижимый case в type switch (НЕЗНАЧИТЕЛЬНО)
+
+**Проблема:** `internal/api/backup_handlers.go:147` — JSON `Unmarshal` в `interface{}`
+всегда возвращает `float64` для чисел, поэтому `case int:` никогда не выполняется.
+
+**Файл:** `internal/api/backup_handlers.go`
+
+```go
+// БЫЛО:
+switch v := sv.(type) {
+case float64:
+    metaValid = v == 1
+case int:           // недостижимо — json всегда float64
+    metaValid = v == 1
+}
+
+// СТАЛО:
+if v, ok := sv.(float64); ok {
+    metaValid = v == 1
+}
+```
+
+---
+
+### Е9. Унификация error wrapping с %w (НЕЗНАЧИТЕЛЬНО)
+
+**Проблема:** ~83 места где `fmt.Errorf` не использует `%w`. В результате `errors.Is()` и
+`errors.As()` не работают по цепочке ошибок.
+
+**Действие:** выполнить по всему `internal/`:
+```bash
+grep -rn 'fmt.Errorf.*[^%]"' internal/ | grep -v '%w'
+```
+
+Заменить паттерн:
+```go
+// БЫЛО:
+return fmt.Errorf("не удалось прочитать файл: " + err.Error())
+return fmt.Errorf("ошибка: %s", err)
+
+// СТАЛО:
+return fmt.Errorf("не удалось прочитать файл: %w", err)
+```
+
+---
+
+### Е10. Inconsistent resource Close patterns (НЕЗНАЧИТЕЛЬНО)
+
+**Проблема:** три разных паттерна закрытия ресурсов в одном проекте.
+
+**Стандарт для проекта:**
+```go
+// Всегда defer для ресурсов, требующих закрытия:
+f, err := os.Open(path)
+if err != nil { return err }
+defer f.Close()
+
+// Если Close возвращает значимую ошибку (напр. http.Response.Body после чтения):
+defer func() {
+    if err := rc.Close(); err != nil {
+        logger.Warn("close: %v", err)
+    }
+}()
+
+// _ = conn.Close() допустимо ТОЛЬКО если соединение уже в ошибочном состоянии
+```
+
+Файлы для аудита: `internal/api/geosite_handlers.go`, `internal/api/backup_handlers.go`.
+
+---
+
+## ГРУППА Ж — Глубокий аудит: критичные баги второго уровня
+
+> Найдено при построчном анализе всех файлов. Точные строки кода.
+
+---
+
+### Ж1. Race condition в tun_handlers.go:865 — diff вне lock (КРИТИЧНО)
+
+**Файл:** `internal/api/tun_handlers.go:865`
+
+`h.lastApplied` читается **вне** мьютекса при вычислении diff. Между освобождением лока на
+строке 843 и обращением к `h.lastApplied` на строке 865 другая горутина может записать новое
+значение. В итоге `skipHotReload` вычисляется по устаревшим данным.
+
+```go
+// БЫЛО (race):
+snapshot := cloneRoutingConfig(h.routing) // строка 843 — берём под локом
+h.mu.RUnlock()
+// ... другая горутина может изменить h.lastApplied здесь ...
+diff := computeRoutingDiff(h.lastApplied, snapshot) // строка 865 — h.lastApplied не под локом
+
+// СТАЛО:
+h.mu.RLock()
+snapshot := cloneRoutingConfig(h.routing)
+lastApplied := h.lastApplied // снять копию под тем же локом
+h.mu.RUnlock()
+diff := computeRoutingDiff(lastApplied, snapshot)
+```
+
+---
+
+### Ж2. Goroutine panic → deadlock на orphanCh (СЕРЬЁЗНО)
+
+**Файл:** `cmd/proxy-client/app.go:310`
+
+Горутина `killOrphanSingBox` не имеет panic recovery. Если функция паникует — `orphanCh`
+никогда не получает значение, и код на строке 331 `orphanRes := <-orphanCh` блокируется вечно.
+
+```go
+// СТАЛО:
+go func() {
+    defer func() {
+        if r := recover(); r != nil {
+            a.mainLogger.Error("killOrphan panic: %v", r)
+            orphanCh <- orphanResult{killed: false}
+        }
+    }()
+    killed := killOrphanSingBox(app.mainLogger)
+    select {
+    case orphanCh <- orphanResult{killed}:
+    case <-ctx.Done():
+    }
+}()
+```
+
+---
+
+### Ж3. Nil pointer panic: SecretKeyUpdatedFn (СЕРЬЁЗНО)
+
+**Файл:** `cmd/proxy-client/app.go:369`
+
+```go
+// БЫЛО (паника если nil):
+func() { h.server.config.SecretKeyUpdatedFn() }()
+
+// СТАЛО:
+if fn := h.server.config.SecretKeyUpdatedFn; fn != nil {
+    fn()
+}
+```
+
+---
+
+### Ж4. DNS Leak Test — логика инвертирована (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/diag_handlers.go:485`
+
+Текущая логика: `dnsLeak := proxyIP != "" && directIP != "" && proxyIP == directIP`.
+Это **неверно**: если `proxyIP == directIP`, значит оба запроса вернули один IP — либо оба
+пошли через VPN (норма), либо оба через real IP (VPN не работает). Утечка DNS — это когда
+DNS-резолвер реального провайдера виден снаружи, а не когда IP совпадают.
+
+```go
+// СТАЛО — корректная проверка: утечка если прямой IP = настоящий IP:
+dnsLeak := directIP != "" && proxyIP != "" && directIP == realPublicIP
+// Либо отдавать оба IP клиенту и пусть UI решает:
+s.respondJSON(w, http.StatusOK, map[string]interface{}{
+    "direct_ip": directIP,
+    "proxy_ip":  proxyIP,
+    "vpn_works": proxyIP != "" && proxyIP != directIP,
+})
+```
+
+---
+
+### Ж5. IPv6 loopback bypass в SSRF-проверке (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/servers_handlers.go:773-791`
+
+`net.IP.IsLoopback()` не распознаёт `::ffff:127.0.0.1` (IPv4-mapped loopback) как loopback.
+Атакующий может передать такой адрес и обойти проверку.
+
+```go
+// Добавить явную проверку IPv4-mapped loopback:
+func isPrivateOrLoopback(ip net.IP) bool {
+    // Распаковать IPv4-mapped IPv6 (::ffff:127.0.0.1 → 127.0.0.1)
+    if ip4 := ip.To4(); ip4 != nil {
+        ip = ip4
+    }
+    return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+```
+
+---
+
+### Ж6. Переполнение при вычислении медианы (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/servers_handlers.go:662`
+
+```go
+// БЫЛО (overflow при больших int64):
+median = sorted[mid-1] + (sorted[mid]-sorted[mid-1])/2
+
+// СТАЛО (безопасно):
+median = sorted[mid-1]/2 + sorted[mid]/2 + (sorted[mid-1]%2+sorted[mid]%2)/2
+```
+
+---
+
+### Ж7. Silent JSON encode error в respondJSON (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/server.go:310-312`
+
+```go
+// БЫЛО:
+json.NewEncoder(w).Encode(data) // ошибка игнорируется
+
+// СТАЛО:
+if err := json.NewEncoder(w).Encode(data); err != nil {
+    s.logger.Warn("respondJSON encode error: %v", err)
+}
+```
+
+---
+
+### Ж8. LimitReader: EOF при переполнении неотличим от ошибки чтения (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/diag_handlers.go:356`
+
+`io.LimitReader` возвращает `EOF` при достижении лимита — `json.Decode` воспринимает это
+как "файл закончился раньше времени" и возвращает `io.ErrUnexpectedEOF`. Нет возможности
+отличить "тело слишком большое" от "сеть оборвалась".
+
+```go
+// СТАЛО — явная проверка на превышение лимита:
+const maxBody = 4 << 20
+lr := io.LimitReader(r.Body, maxBody+1)
+var cr ClashResponse
+if err := json.NewDecoder(lr).Decode(&cr); err != nil {
+    // Проверяем не был ли лимит превышен
+    if n, _ := io.Copy(io.Discard, lr); n > 0 {
+        http.Error(w, "response too large", http.StatusBadGateway)
+        return
+    }
+    http.Error(w, "decode error: "+err.Error(), http.StatusBadGateway)
+    return
+}
+```
+
+---
+
+### Ж9. Gzip-бомба при загрузке подписки (СЕРЬЁЗНО)
+
+**Файл:** `internal/api/servers_handlers.go:878`
+
+`fetchVLESSFromURL` читает до 64KB тела, но не проверяет Content-Encoding. Если сервер
+вернёт `Content-Encoding: gzip`, `http.Client` автоматически распакует его — и 64KB
+сжатого контента может развернуться в гигабайты памяти.
+
+```go
+// СТАЛО:
+resp.Body = http.MaxBytesReader(nil, resp.Body, 64*1024)
+// Отключить автоматическую распаковку gzip:
+transport := &http.Transport{}
+client := &http.Client{Transport: transport} // без DisableCompression: false
+// ИЛИ явно:
+client := &http.Client{
+    Transport: &http.Transport{DisableCompression: true},
+}
+data, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+```
+
+---
+
+### Ж10. Race в SetOnUpdated вне мьютекса (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/api/server.go:194-204`
+
+`g.SetOnUpdated()` вызывается после проверки `g != nil`, но без `geoUpdaterMu`. Если
+другая горутина одновременно записывает в `s.geoUpdater` и вызывает callback, возможна
+гонка на самом объекте `GeoAutoUpdater`.
+
+```go
+// Обернуть SetOnUpdated в тот же мьютекс:
+s.geoUpdaterMu.Lock()
+if s.geoUpdater != nil {
+    s.geoUpdater.SetOnUpdated(func() { /* ... */ })
+}
+s.geoUpdaterMu.Unlock()
+```
+
+---
+
+### Ж11. noProxyTransport accumulates idle connections (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/api/servers_handlers.go:809`
+
+Глобальный `noProxyTransport` никогда не вызывает `CloseIdleConnections()`. При долгой
+работе накапливает тысячи idle TCP-соединений.
+
+```go
+// В Shutdown() ServersHandlers добавить:
+func (h *ServersHandlers) Shutdown() {
+    noProxyTransport.CloseIdleConnections()
+}
+```
+
+---
+
+### Ж12. tun_handlers.go:1221 — panic в Wait() не закрывает context (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/api/tun_handlers.go:1221`
+
+```go
+// БЫЛО:
+go func() { _ = newManager.Wait(); waitCancel() }()
+
+// СТАЛО:
+go func() {
+    defer waitCancel() // гарантированно вызвать даже при панике
+    _ = newManager.Wait()
+}()
+```
+
+---
+
+### Ж13. Symlink attack через WriteAtomic в backup restore (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/api/backup_handlers.go:206`
+
+`fileutil.WriteAtomic` не проверяет, является ли `destPath` симлинком на файл вне `workDir`.
+Если атакующий заранее создал симлинк `workDir/config.json → /etc/passwd`, восстановление
+перезапишет цель.
+
+```go
+// Добавить перед WriteAtomic:
+if info, err := os.Lstat(destPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+    skipped++
+    continue // отказать в перезаписи симлинков
+}
+```
+
+---
+
+### Ж14. Case-sensitive путь в кэше IP сервера (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `cmd/proxy-client/app.go:874`
+
+```go
+// БЫЛО — c:\Foo и c:\foo считаются разными файлами:
+if a.cachedForFile == secretFile { ... }
+
+// СТАЛО — нормализация через EvalSymlinks:
+norm := func(p string) string {
+    if r, err := filepath.EvalSymlinks(p); err == nil { return r }
+    return strings.ToLower(p)
+}
+if norm(a.cachedForFile) == norm(secretFile) { ... }
+```
+
+---
+
+### Ж15. Missing runtime.KeepAlive в window.go (КРИТИЧНО — Windows)
+
+**Файл:** `internal/window/window.go:121-136`
+
+Локальная переменная `dark uint32` передаётся как `unsafe.Pointer` в Win32 syscall без
+`runtime.KeepAlive`. GC может собрать её до завершения системного вызова.
+
+```go
+// БЫЛО:
+dark := uint32(1)
+dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+
+// СТАЛО:
+dark := uint32(1)
+dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+runtime.KeepAlive(dark)
+```
+
+Проверить **все** вызовы в `window.go` с `unsafe.Pointer` к локальным переменным.
+
+---
+
+### Ж16. Missing runtime.KeepAlive в main.go (КРИТИЧНО — Windows)
+
+**Файлы:** `cmd/proxy-client/main.go:815-817`, `cmd/proxy-client/main.go:841`
+
+```go
+// main.go:815 — QueryFullProcessImageNameW:
+buf := make([]uint16, size)
+// ... после Call добавить:
+runtime.KeepAlive(buf)
+
+// main.go:841 — CreateMutexW:
+namePtr, _ := windows.UTF16PtrFromString(mutexName)
+procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(namePtr)))
+runtime.KeepAlive(namePtr) // ← добавить
+```
+
+---
+
+### Ж17. Integer overflow в eventlog.go (СЕРЬЁЗНО)
+
+**Файл:** `internal/eventlog/eventlog.go:64`
+
+`counter int` переполняется после ~2.1 млрд событий (на практике — недели непрерывной
+работы с очень шумными логами). После переполнения ID становятся отрицательными и ломают
+бинарный поиск в `GetSince()`.
+
+```go
+// БЫЛО:
+type EventLog struct {
+    counter int
+    ...
+}
+
+// СТАЛО:
+type EventLog struct {
+    counter int64 // никогда не переполнится
+    ...
+}
+```
+
+---
+
+### Ж18. Race в checkAndRestore: time.Now() вне lock (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/proxy/manager.go:213-216`
+
+После `m.mu.Unlock()` значение `m.pausedUntil` может быть изменено другой горутиной
+до вызова `time.Now().Before(m.pausedUntil)`. Читать поле нужно под локом.
+
+```go
+// СТАЛО:
+m.mu.Lock()
+pausedUntil := m.pausedUntil // снять значение под локом
+m.mu.Unlock()
+
+if !pausedUntil.IsZero() && time.Now().Before(pausedUntil) {
+    return
+}
+```
+
+---
+
+### Ж19. Silent failure: engine.go версионный файл (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/engine/engine.go:330`
+
+```go
+// БЫЛО:
+_ = fileutil.WriteAtomic(versionFile, []byte(version), 0644)
+
+// СТАЛО:
+if err := fileutil.WriteAtomic(versionFile, []byte(version), 0644); err != nil {
+    m.logger.Warn("не удалось сохранить версию sing-box: %v", err)
+}
+```
+
+---
+
+### Ж20. Missing Cache-Control на /api/status и /api/health (НЕЗНАЧИТЕЛЬНО)
+
+**Файл:** `internal/api/server.go:258-265`
+
+Браузеры и промежуточные прокси могут кэшировать эти ответы. Добавить явный запрет кэширования:
+
+```go
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+    // ... существующий код ...
+}
+```
+
+---
+
+### Фаза 0 — Критичные баги (исправить до всего остального)
+
+| Приоритет | Задача | Файлы |
+|-----------|--------|-------|
+| 🔴 0.1 | Е1 Path Traversal в backup restore | `backup_handlers.go:188` |
+| 🔴 0.2 | Е2 Command Injection в PowerShell | `main.go:112` |
+| 🔴 0.3 | Е3 Игнорирование ошибок json.Marshal | `backup_handlers.go:35`, `tun_handlers.go:42` + другие |
+| 🔴 0.4 | Ж1 Race: diff вне lock в tun_handlers | `tun_handlers.go:865` |
+| 🔴 0.5 | Ж15 Missing KeepAlive в window.go | `window/window.go:121-136` |
+| 🔴 0.6 | Ж16 Missing KeepAlive в main.go | `main.go:815`, `main.go:841` |
+| 🟠 0.7 | Е4 Race condition в profile_handlers | `profile_handlers.go:69` |
+| 🟠 0.8 | Е5 Goroutine leak в Server.Start() | `server.go:308` |
+| 🟠 0.9 | Е6 Mutex + goroutine launch deadlock | `proxy/manager.go:136` |
+| 🟠 0.10 | Ж2 Panic → deadlock orphanCh | `app.go:310` |
+| 🟠 0.11 | Ж3 Nil panic SecretKeyUpdatedFn | `app.go:369` |
+| 🟠 0.12 | Ж4 DNS Leak логика инвертирована | `diag_handlers.go:485` |
+| 🟠 0.13 | Ж5 IPv6 loopback bypass SSRF | `servers_handlers.go:773` |
+| 🟠 0.14 | Ж6 Медиана — overflow int64 | `servers_handlers.go:662` |
+| 🟠 0.15 | Ж9 Gzip-бомба подписки | `servers_handlers.go:878` |
+| 🟠 0.16 | Ж17 Integer overflow eventlog | `eventlog/eventlog.go:64` |
 
 ### Фаза 1 — Быстрые победы (1–2 часа каждое, максимальный эффект)
 
@@ -1599,6 +2266,20 @@ BlockTelemetry bool `json:"block_telemetry"` // default: false (opt-in)
 | 🟡 10 | Г3 Leak Test | новый хендлер |
 | 🟡 11 | Д3 Tray health color | `tray.go`, `icon.go`, `app.go` |
 | 🟡 12 | Д8 Telemetry blocking | `singbox_builder.go` |
+| 🟡 13 | Е7 Channel write без select | `app.go:306` |
+| 🟡 14 | Е8 Недостижимый case int | `backup_handlers.go:147` |
+| 🟡 15 | Е9 Error wrapping с %w | весь `internal/` (~83 места) |
+| 🟡 16 | Е10 Унификация Close patterns | `geosite_handlers.go`, `backup_handlers.go` |
+| 🟡 17 | Ж7 Silent JSON encode error | `server.go:310` |
+| 🟡 18 | Ж8 LimitReader truncation silent | `diag_handlers.go:356` |
+| 🟡 19 | Ж10 Race SetOnUpdated вне mutex | `server.go:194` |
+| 🟡 20 | Ж11 noProxyTransport idle leak | `servers_handlers.go:809` |
+| 🟡 21 | Ж12 context leak в Wait() goroutine | `tun_handlers.go:1221` |
+| 🟡 22 | Ж13 Symlink attack backup WriteAtomic | `backup_handlers.go:206` |
+| 🟡 23 | Ж14 Case-sensitive path cache | `app.go:874` |
+| 🟡 24 | Ж18 Race pausedUntil вне lock | `proxy/manager.go:213` |
+| 🟡 25 | Ж19 Silent engine version write | `engine/engine.go:330` |
+| 🟡 26 | Ж20 Missing Cache-Control status | `server.go:258` |
 
 ### Фаза 2 — Средней сложности (полдня каждое)
 
@@ -1668,3 +2349,33 @@ BlockTelemetry bool `json:"block_telemetry"` // default: false (opt-in)
 | Д6 | Connection history | Мониторинг | `internal/connhistory/*` | `app.go` |
 | Д7 | Memory watchdog | Мониторинг | — | `manager.go`, `app.go` |
 | Д8 | Telemetry blocking | Мониторинг | — | `singbox_builder.go` |
+| Е1 | Path Traversal backup | Баги | — | `backup_handlers.go:188` |
+| Е2 | Command Injection PS | Баги | — | `main.go:112` |
+| Е3 | json.Marshal errors | Баги | — | `backup_handlers.go:35`, `tun_handlers.go:42` + др. |
+| Е4 | Race в profile | Баги | — | `profile_handlers.go:69` |
+| Е5 | Goroutine leak Start | Баги | — | `server.go:308` |
+| Е6 | Mutex deadlock risk | Баги | — | `proxy/manager.go:136` |
+| Е7 | Channel без select | Качество | — | `app.go:306` |
+| Е8 | Unreachable case int | Качество | — | `backup_handlers.go:147` |
+| Е9 | Error wrapping %w | Качество | — | весь `internal/` |
+| Е10 | Close patterns | Качество | — | `geosite_handlers.go`, `backup_handlers.go` |
+| Ж1 | Race diff вне lock | Баги | — | `tun_handlers.go:865` |
+| Ж2 | Panic→deadlock orphanCh | Баги | — | `app.go:310` |
+| Ж3 | Nil panic SecretKeyUpdatedFn | Баги | — | `app.go:369` |
+| Ж4 | DNS Leak логика инвертирована | Баги | — | `diag_handlers.go:485` |
+| Ж5 | IPv6 loopback bypass SSRF | Безопасность | — | `servers_handlers.go:773` |
+| Ж6 | Медиана overflow int64 | Баги | — | `servers_handlers.go:662` |
+| Ж7 | Silent JSON encode error | Качество | — | `server.go:310` |
+| Ж8 | LimitReader truncation silent | Качество | — | `diag_handlers.go:356` |
+| Ж9 | Gzip-бомба подписки | Безопасность | — | `servers_handlers.go:878` |
+| Ж10 | Race SetOnUpdated вне mutex | Баги | — | `server.go:194` |
+| Ж11 | noProxyTransport idle leak | Качество | — | `servers_handlers.go:809` |
+| Ж12 | Context leak в Wait() goroutine | Баги | — | `tun_handlers.go:1221` |
+| Ж13 | Symlink attack backup | Безопасность | — | `backup_handlers.go:206` |
+| Ж14 | Case-sensitive path cache | Баги | — | `app.go:874` |
+| Ж15 | Missing KeepAlive window.go | Windows | — | `window/window.go:121-136` |
+| Ж16 | Missing KeepAlive main.go | Windows | — | `main.go:815`, `main.go:841` |
+| Ж17 | Integer overflow eventlog | Баги | — | `eventlog/eventlog.go:64` |
+| Ж18 | Race pausedUntil вне lock | Баги | — | `proxy/manager.go:213` |
+| Ж19 | Silent engine version write | Качество | — | `engine/engine.go:330` |
+| Ж20 | Missing Cache-Control status | Качество | — | `server.go:258` |
