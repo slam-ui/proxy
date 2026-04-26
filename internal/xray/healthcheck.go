@@ -1,7 +1,6 @@
 package xray
 
 import (
-	"regexp"
 	"sync"
 	"time"
 )
@@ -29,20 +28,6 @@ type HealthChecker struct {
 	thresholdCount int           // число ошибок в окне для триггера алерта (default 5)
 	lastAlertTime  time.Time
 	alertCooldown  time.Duration // не алертим чаще чем раз в X секунд
-}
-
-// ErrorPattern represents a pattern to extract connection errors from sing-box logs
-var connectionErrorPatterns = []struct {
-	pattern   *regexp.Regexp
-	errorType string
-}{
-	{regexp.MustCompile(`wsarecv:.*A connection attempt failed because the connected party did not properly respond`), "timeout"},
-	{regexp.MustCompile(`i/o timeout`), "timeout"},
-	{regexp.MustCompile(`dial tcp.*: i/o timeout`), "dial_timeout"},
-	{regexp.MustCompile(`bind:.*An operation on a socket could not be performed`), "bind_error"},
-	{regexp.MustCompile(`connection: open connection.*using outbound/vless.*: (wsarecv|dial|timeout)`), "vless_error"},
-	{regexp.MustCompile(`ERROR.*connection.*outbound/vless`), "vless_connection"},
-	{regexp.MustCompile(`broken pipe|connection reset`), "connection_reset"},
 }
 
 // NewHealthChecker creates a new health checker with default configuration.
