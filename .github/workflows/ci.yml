@@ -155,14 +155,13 @@ jobs:
       - name: Fuzz ${{ matrix.target }}
         run: go test -run=^$ -fuzz=${{ matrix.target }} -fuzztime=30s ${{ matrix.pkg }}
 
-  # ── 5. LINT: staticcheck (Windows target, pre-built binary) ─────────────────
+  # ── 5. LINT: staticcheck (Windows target) ───────────────────────────────────
+  # GOOS must NOT be set at job level: it causes go install to produce a Windows
+  # binary (.exe) that cannot run on the Linux runner (exit 127).
+  # Install the tool first (native Linux binary), then analyse with GOOS=windows.
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    env:
-      GOOS: windows
-      GOARCH: amd64
-      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -171,12 +170,20 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - uses: dominikh/staticcheck-action@v1
-        with:
-          version: "2025.1.1"
-          install-go: false
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+
+      - name: Run staticcheck (Windows target)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: staticcheck ./...
 
   # ── 6. SECURITY: gosec + govulncheck in one job ──────────────────────────────
+  # GOOS must NOT be set at job level: it causes go install to produce a Windows
+  # binary (.exe) that cannot run on the Linux runner (exit 127).
+  # Set GOOS=windows only in the individual analysis steps.
   security:
     name: Security Scan
     runs-on: ubuntu-latest
@@ -184,10 +191,6 @@ jobs:
       security-events: write
       actions: read
       contents: read
-    env:
-      GOOS: windows
-      GOARCH: amd64
-      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -196,8 +199,12 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - name: Run gosec
+      - name: Run gosec (Windows target)
         uses: securego/gosec@v2.21.4
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
         with:
           args: >-
             -no-fail -exclude=G304,G306
@@ -208,13 +215,26 @@ jobs:
         with:
           sarif_file: gosec.sarif
 
-      - name: Run govulncheck
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.3
+
+      - name: Run govulncheck (Windows target)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.3
           govulncheck -json ./... > govulncheck.json 2>&1 || true
           python3 - <<'EOF'
-          import json, sys
-          data = [json.loads(l) for l in open("govulncheck.json") if l.strip()]
+          import json
+          data = []
+          for l in open("govulncheck.json"):
+              if not l.strip():
+                  continue
+              try:
+                  data.append(json.loads(l))
+              except json.JSONDecodeError:
+                  pass
           vulns = [d for d in data if "finding" in d]
           print(f"Vulnerability findings: {len(vulns)}")
           for v in vulns:
@@ -284,13 +304,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ── 9. LICENSE CHECK ─────────────────────────────────────────────────────────
+  # GOOS must NOT be set at job level: go install would produce go-licenses.exe
+  # which cannot run on Linux (exit 127).
   license-check:
     name: License Check
     runs-on: ubuntu-latest
-    env:
-      GOOS: windows
-      GOARCH: amd64
-      CGO_ENABLED: '0'
     steps:
       - uses: actions/checkout@v4
 
@@ -299,9 +317,15 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - name: Check licenses
+      - name: Install go-licenses
+        run: go install github.com/google/go-licenses@v1.6.0
+
+      - name: Check licenses (Windows target)
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
         run: |
-          go install github.com/google/go-licenses@v1.6.0
           go-licenses check ./... \
             --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0
 
