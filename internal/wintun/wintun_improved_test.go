@@ -665,7 +665,7 @@ func TestAdaptiveGap_FullLifecycle(t *testing.T) {
 
 	// Increase several times
 	for i := 0; i < 5; i++ {
-		gap = IncreaseAdaptiveGap(gapFile)
+		_ = IncreaseAdaptiveGap(gapFile)
 	}
 
 	// Should have increased
