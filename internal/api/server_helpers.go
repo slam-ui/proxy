@@ -9,6 +9,9 @@ import (
 const (
 	defaultMutationRatePerSecond = 5
 	maxRequestBodyBytes          = 2 << 20 // 2 MB
+	maxBackupFileBytes           = 5 << 20 // 5 MB
+	maxMultipartOverheadBytes    = 32 << 10
+	maxBackupRequestBodyBytes    = maxBackupFileBytes + maxMultipartOverheadBytes
 	quitSignalDelay              = 100 * time.Millisecond
 	slowRequestThreshold         = 200 * time.Millisecond
 )
@@ -28,6 +31,15 @@ func isRequestBodyLimitedMethod(method string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func maxRequestBytesForPath(path string) int64 {
+	switch path {
+	case "/api/backup/import", "/api/backup/restore":
+		return maxBackupRequestBodyBytes
+	default:
+		return maxRequestBodyBytes
 	}
 }
 

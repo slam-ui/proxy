@@ -27,6 +27,7 @@ import (
 	"proxyclient/internal/api"
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/autorun"
+	"proxyclient/internal/clipboard"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/killswitch"
@@ -471,10 +472,7 @@ func run(output io.Writer) error {
 			if addr == "" {
 				return
 			}
-			cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-				"Set-Clipboard -Value '"+strings.ReplaceAll(addr, "'", "''")+"'")
-			cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
-			_ = cmd.Run()
+			_ = clipboard.Write(addr)
 		},
 		OnEnable: func() {
 			if app.apiServer.IsWarming() {

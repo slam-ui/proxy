@@ -581,6 +581,8 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 
 // ── Zip extraction ────────────────────────────────────────────────────────────
 
+const maxExtractedSingBoxExeSize = 256 * 1024 * 1024
+
 func extractExeFromZip(data []byte, destPath string) error {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -596,6 +598,9 @@ func extractExeFromZip(data []byte, destPath string) error {
 }
 
 func extractFile(f *zip.File, destPath string) error {
+	if f.UncompressedSize64 > maxExtractedSingBoxExeSize {
+		return fmt.Errorf("sing-box.exe слишком большой: %dB", f.UncompressedSize64)
+	}
 	rc, err := f.Open()
 	if err != nil {
 		return err
@@ -620,12 +625,21 @@ func extractFile(f *zip.File, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("не удалось создать временный файл %s: %w", tmp, err)
 	}
-	if _, err := io.Copy(out, rc); err != nil {
-		out.Close()
-		os.Remove(tmp)
+	n, err := io.Copy(out, io.LimitReader(rc, maxExtractedSingBoxExeSize+1))
+	if err != nil {
+		_ = out.Close()
+		_ = os.Remove(tmp)
 		return fmt.Errorf("ошибка записи: %w", err)
 	}
-	out.Close()
+	if n > maxExtractedSingBoxExeSize {
+		_ = out.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("sing-box.exe слишком большой: %s", fmtBytes(n))
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("ошибка закрытия временного файла: %w", err)
+	}
 
 	// Удаляем старый если есть, переименовываем
 	_ = os.Remove(absDest)

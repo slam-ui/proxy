@@ -50,6 +50,7 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 	// B-8: Архивируем необходимые файлы
 	filesToBackup := []string{
 		"servers.json",
+		"data/settings.json",
 		"data/routing.json",
 	}
 
@@ -108,20 +109,20 @@ func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
 // handleBackupRestore POST /api/backup/restore — восстановить конфиги из ZIP
 func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	// B-8: Ограничиваем размер 5MB
-	const maxSize = 5 * 1024 * 1024
+	const maxSize = maxBackupFileBytes
 
 	// Сначала проверяем Content-Length (быстрый ранний выход).
-	if r.ContentLength > maxSize {
+	if r.ContentLength > maxBackupRequestBodyBytes {
 		http.Error(w, "File too large (max 5MB)", http.StatusRequestEntityTooLarge)
 		return
 	}
 
 	// MaxBytesReader ограничивает тело запроса даже если Content-Length не задан.
 	// +32KB — запас на multipart-заголовки и boundary.
-	r.Body = http.MaxBytesReader(w, r.Body, maxSize+32*1024)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBackupRequestBodyBytes)
 
 	// B-8: Парсим multipart form
-	if err := r.ParseMultipartForm(maxSize); err != nil {
+	if err := r.ParseMultipartForm(maxSize); err != nil { // #nosec G120 -- body is capped by MaxBytesReader above.
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			http.Error(w, "File too large (max 5MB)", http.StatusRequestEntityTooLarge)

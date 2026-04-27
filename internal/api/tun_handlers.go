@@ -1442,7 +1442,9 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		// Загрузка через <input type="file">
-		if err := r.ParseMultipartForm(1 << 20); err != nil { // 1 MB max
+		const maxImportBytes = 1 << 20
+		r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes+maxMultipartOverheadBytes)
+		if err := r.ParseMultipartForm(maxImportBytes); err != nil { // #nosec G120 -- body is capped by MaxBytesReader above.
 			h.server.respondError(w, http.StatusBadRequest, "failed to parse form")
 			return
 		}
@@ -1453,9 +1455,13 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.Close()
 		var err2 error
-		raw, err2 = io.ReadAll(f)
+		raw, err2 = io.ReadAll(io.LimitReader(f, maxImportBytes+1))
 		if err2 != nil {
 			h.server.respondError(w, http.StatusBadRequest, "failed to read file")
+			return
+		}
+		if len(raw) > maxImportBytes {
+			h.server.respondError(w, http.StatusRequestEntityTooLarge, "file too large")
 			return
 		}
 	} else {
