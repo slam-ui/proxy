@@ -42,3 +42,24 @@ func TestRulesManualEditorModalUsesExistingJsonFunctions(t *testing.T) {
 		}
 	}
 }
+
+func TestBackupUIUsesCanonicalRestoreEndpoint(t *testing.T) {
+	data, err := staticFiles.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatalf("read embedded index.html: %v", err)
+	}
+	html := string(data)
+
+	for _, required := range []string{
+		`window.location.href = API + '/backup';`,
+		`fd.append('overwrite', 'true');`,
+		`fetch(API + '/backup/restore'`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("index.html missing %q", required)
+		}
+	}
+	if strings.Contains(html, `API + '/backup/import'`) || strings.Contains(html, `API + '/backup/export'`) {
+		t.Fatal("backup UI must not use deprecated backup/import or backup/export endpoints")
+	}
+}

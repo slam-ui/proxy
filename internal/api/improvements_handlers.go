@@ -1,8 +1,6 @@
 package api
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -11,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,7 +18,6 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/connhistory"
 	"proxyclient/internal/crashreport"
-	"proxyclient/internal/fileutil"
 	"proxyclient/internal/speedtest"
 	"proxyclient/internal/trafficstats"
 )
@@ -158,111 +154,12 @@ func (s *Server) handleBuiltinProfiles(w http.ResponseWriter, _ *http.Request) {
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{"profiles": builtinProfiles})
 }
 
-func (s *Server) handleExportConfig(w http.ResponseWriter, _ *http.Request) {
-	buf := &bytes.Buffer{}
-	zw := zip.NewWriter(buf)
-	include := []string{"data/servers.json", "data/settings.json", "data/routing.json"}
-	if profiles, err := filepath.Glob("data/profiles/*.json"); err == nil {
-		include = append(include, profiles...)
-	}
-	for _, path := range include {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		name := filepath.ToSlash(path)
-		f, err := zw.Create(name)
-		if err != nil {
-			continue
-		}
-		if _, err := f.Write(data); err != nil {
-			_ = zw.Close()
-			s.respondError(w, http.StatusInternalServerError, "zip write error")
-			return
-		}
-	}
-	if err := zw.Close(); err != nil {
-		s.respondError(w, http.StatusInternalServerError, "zip close error")
-		return
-	}
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=safesky-backup-%s.zip", time.Now().Format("2006-01-02")))
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		s.logger.Warn("handleExportConfig: write response: %v", err)
-	}
+func (s *Server) handleExportConfig(w http.ResponseWriter, r *http.Request) {
+	s.handleBackup(w, r)
 }
 
 func (s *Server) handleImportConfig(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 5<<20)
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		s.respondError(w, http.StatusBadRequest, "invalid upload: "+err.Error())
-		return
-	}
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		s.respondError(w, http.StatusBadRequest, "file is required")
-		return
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, (5<<20)+1))
-	if err != nil || len(data) > 5<<20 {
-		s.respondError(w, http.StatusRequestEntityTooLarge, "file too large")
-		return
-	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		s.respondError(w, http.StatusBadRequest, "invalid zip")
-		return
-	}
-	workDir, _ := filepath.Abs(".")
-	allowed := map[string]bool{
-		"data/servers.json":  true,
-		"data/settings.json": true,
-		"data/routing.json":  true,
-	}
-	restored, skipped := 0, 0
-	for _, zf := range zr.File {
-		name := filepath.ToSlash(filepath.Clean(zf.Name))
-		if strings.Contains(name, "secret.key") || (!allowed[name] && !strings.HasPrefix(name, "data/profiles/")) {
-			skipped++
-			continue
-		}
-		if strings.Contains(name, "..") || filepath.IsAbs(name) {
-			skipped++
-			continue
-		}
-		dest := filepath.Join(workDir, filepath.FromSlash(name))
-		absDest, err := filepath.Abs(dest)
-		if err != nil || !strings.HasPrefix(absDest, workDir+string(filepath.Separator)) {
-			skipped++
-			continue
-		}
-		if info, err := os.Lstat(absDest); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			skipped++
-			continue
-		}
-		rc, err := zf.Open()
-		if err != nil {
-			skipped++
-			continue
-		}
-		content, readErr := io.ReadAll(io.LimitReader(rc, (10<<20)+1))
-		_ = rc.Close()
-		if readErr != nil || len(content) > 10<<20 {
-			skipped++
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(absDest), 0755); err != nil {
-			skipped++
-			continue
-		}
-		if err := fileutil.WriteAtomic(absDest, content, 0644); err != nil {
-			skipped++
-			continue
-		}
-		restored++
-	}
-	s.respondJSON(w, http.StatusOK, map[string]interface{}{"restored": restored, "skipped": skipped})
+	s.handleBackupRestore(w, r)
 }
 
 func (s *Server) handleImportRules(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -132,7 +133,16 @@ func switchClashMode(ctx context.Context, log logger.Logger, mode string) {
 		}
 		return
 	}
-	resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if log != nil {
+			log.Debug("Clash API вернул %d при смене режима на %q", resp.StatusCode, mode)
+		}
+		return
+	}
 	if log != nil {
 		log.Info("TUN режим переключён: %s", mode)
 	}

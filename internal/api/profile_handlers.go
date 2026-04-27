@@ -183,7 +183,11 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// BUG FIX: os.WriteFile не атомарен — при крэше профиль будет повреждён.
 	// fileutil.WriteAtomic пишет во временный файл, затем атомарно переименовывает.
-	path := filepath.Join(profilesDir, filename)
+	path, err := profilePath(filename)
+	if err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "недопустимое имя профиля")
+		return
+	}
 	if err := fileutil.WriteAtomic(path, data, 0644); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, "write error: "+err.Error())
 		return
@@ -262,7 +266,11 @@ func (h *ProfileHandlers) handleDelete(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	path := filepath.Join(profilesDir, sanitizeFilename(name)+".json")
+	path, err := profilePath(sanitizeFilename(name) + ".json")
+	if err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "недопустимое имя профиля")
+		return
+	}
 	if err := os.Remove(path); err != nil {
 		h.server.respondError(w, http.StatusNotFound, "профиль не найден")
 		return
@@ -271,7 +279,11 @@ func (h *ProfileHandlers) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func loadProfile(filename string) (*Profile, error) {
-	data, err := os.ReadFile(filepath.Join(profilesDir, filename))
+	path, err := profilePath(filename)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -280,6 +292,13 @@ func loadProfile(filename string) (*Profile, error) {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func profilePath(filename string) (string, error) {
+	if filename == "" || filename != filepath.Base(filename) || !strings.HasSuffix(filename, ".json") {
+		return "", errors.New("invalid profile filename")
+	}
+	return filepath.Join(profilesDir, filename), nil
 }
 
 // sanitizeFilename убирает из имени символы опасные для файловой системы

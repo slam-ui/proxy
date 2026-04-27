@@ -3,6 +3,7 @@ package api
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"proxyclient/internal/logger"
 )
 
 func makeBackupZip(t *testing.T, files map[string][]byte) []byte {
@@ -112,5 +115,62 @@ func TestHandleBackupRestore_ZipSlipEntrySkipped(t *testing.T) {
 	}
 	if skipped, _ := resp["skipped"].(float64); skipped < 1 {
 		t.Fatalf("skipped = %v, want at least 1", resp["skipped"])
+	}
+}
+
+func TestBackupRestoreRoute_AllowsFiveMegabyteUploads(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer os.Chdir(old)
+
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	srv.SetupFeatureRoutes(context.Background())
+	srv.FinalizeRoutes()
+
+	meta, _ := json.Marshal(map[string]int{"schema_version": 1})
+	largeProfile := make([]byte, 3<<20)
+	var x uint32 = 1
+	for i := range largeProfile {
+		x = x*1664525 + 1013904223
+		largeProfile[i] = byte(x >> 24)
+	}
+	zipData := makeBackupZip(t, map[string][]byte{
+		"backup_meta.json":  meta,
+		"profiles/big.json": largeProfile,
+	})
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	if err := mw.WriteField("overwrite", "true"); err != nil {
+		t.Fatalf("WriteField overwrite: %v", err)
+	}
+	part, err := mw.CreateFormFile("file", "backup.zip")
+	if err != nil {
+		t.Fatalf("CreateFormFile: %v", err)
+	}
+	if _, err := part.Write(zipData); err != nil {
+		t.Fatalf("Write zip: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("multipart close: %v", err)
+	}
+	if body.Len() <= maxRequestBodyBytes || body.Len() >= maxBackupRequestBodyBytes {
+		t.Fatalf("test body size %d must be between default and backup limits", body.Len())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/backup/restore", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/backup/restore = %d, want 200: %s", w.Code, w.Body.String())
 	}
 }

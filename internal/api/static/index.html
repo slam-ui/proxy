@@ -4079,7 +4079,7 @@ async function downloadGeosite() {
 }
 
 function downloadBackup() {
-  window.location.href = API + '/backup/export';
+  window.location.href = API + '/backup';
 }
 
 async function restoreBackup(input) {
@@ -4087,9 +4087,10 @@ async function restoreBackup(input) {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
+  fd.append('overwrite', 'true');
   OpTimer.start('restore', 'Восстановление конфигурации...', 10000);
   try {
-    const r = await fetch(API + '/backup/import', {method:'POST', body: fd});
+    const r = await fetch(API + '/backup/restore', {method:'POST', body: fd});
     if (!r.ok) throw new Error(await r.text());
     showToast('Конфигурация восстановлена', 'on');
     OpTimer.done('restore', 'Конфигурация восстановлена');

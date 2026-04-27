@@ -643,7 +643,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 func (s *Server) maxBodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isRequestBodyLimitedMethod(r.Method) {
-			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytesForPath(r.URL.Path))
 		}
 		next.ServeHTTP(w, r)
 	})

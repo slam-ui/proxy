@@ -884,6 +884,31 @@ func TestSwitchClashMode_Timeout_CompletesWithin2500ms(t *testing.T) {
 	}
 }
 
+func TestSwitchClashMode_Non2xxDoesNotLogSuccess(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("fail"))
+	}))
+	defer ts.Close()
+
+	oldURL := clashAPIURL
+	clashAPIURL = ts.URL
+	defer func() { clashAPIURL = oldURL }()
+
+	var logBuf strings.Builder
+	testLogger := &captureLogger{buf: &logBuf}
+
+	switchClashMode(context.Background(), testLogger, "rule")
+
+	logs := logBuf.String()
+	if strings.Contains(logs, "TUN режим переключён") {
+		t.Fatalf("non-2xx response logged success: %s", logs)
+	}
+	if !strings.Contains(logs, "500") {
+		t.Fatalf("non-2xx response was not logged with status: %s", logs)
+	}
+}
+
 // A-5: panic в хендлере → в лог записывается строка "Stack:".
 func TestRecoveryMiddleware_PanicLogsStack(t *testing.T) {
 	var logBuf strings.Builder
@@ -913,16 +938,20 @@ func TestRecoveryMiddleware_PanicLogsStack(t *testing.T) {
 	}
 }
 
-// captureLogger захватывает Error-сообщения в строку для тестирования.
+// captureLogger захватывает сообщения в строку для тестирования.
 type captureLogger struct {
 	buf *strings.Builder
 	mu  sync.Mutex
 }
 
-func (l *captureLogger) Debug(f string, a ...interface{}) {}
-func (l *captureLogger) Info(f string, a ...interface{})  {}
-func (l *captureLogger) Warn(f string, a ...interface{})  {}
+func (l *captureLogger) Debug(f string, a ...interface{}) { l.write(f, a...) }
+func (l *captureLogger) Info(f string, a ...interface{})  { l.write(f, a...) }
+func (l *captureLogger) Warn(f string, a ...interface{})  { l.write(f, a...) }
 func (l *captureLogger) Error(f string, a ...interface{}) {
+	l.write(f, a...)
+}
+
+func (l *captureLogger) write(f string, a ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.buf.WriteString(fmt.Sprintf(f, a...))
