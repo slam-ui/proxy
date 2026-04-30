@@ -157,12 +157,12 @@ func buildTooltip(enabled bool) string {
 	warmingMu.Unlock()
 
 	if warming {
-		return "SafeSky — Запуск..."
+		return "SafeSky — туннель запускается"
 	}
 	if !enabled {
-		return "SafeSky — Выключен"
+		return "SafeSky — туннель выключен"
 	}
-	tip := "SafeSky — Включён"
+	tip := "SafeSky — туннель включён"
 	healthMu.Lock()
 	state := healthState
 	healthMu.Unlock()

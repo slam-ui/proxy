@@ -145,22 +145,22 @@ const (
 	idSrvBase  = 2000
 
 	// ── Color palette (COLORREF = 0x00BBGGRR) ──
-	// Тёмная тема SafeSky
-	clrBg            = 0x001e0d0d // #0d0d1e — глубокий тёмно-синий фон
-	clrBgHover       = 0x00351a1a // #1a1a35 — подсветка при наведении
-	clrBgAccentHover = 0x0050201a // #1a2050 — акцентная подсветка
-	clrBgDangerHover = 0x00182a35 // #352a18 — подсветка "Выход"
-	clrText          = 0x00e4d4d0 // #d0d4e4 — основной текст
-	clrTextDim       = 0x00644a4a // #4a4a64 — неактивный текст
-	clrAccent        = 0x00ff8c6c // #6c8cff — акцентный синий
-	clrDanger        = 0x005555ff // #ff5555 — красный для "Выход"
-	clrSep           = 0x00301a1a // #1a1a30 — разделитель
-	clrCheckBar      = 0x00ff8c6c // #6c8cff — полоска активного элемента
+	// SafeSky UI palette: #111218 surface, #38c8ff accent, #2de89a active.
+	clrBg            = 0x00181211 // #111218
+	clrBgHover       = 0x0030231a // #1a2330
+	clrBgAccentHover = 0x00423118 // #183142
+	clrBgDangerHover = 0x00282133 // #332128
+	clrText          = 0x00fff6ec // #ecf6ff
+	clrTextDim       = 0x00c8b49f // #9fb4c8
+	clrAccent        = 0x00ffc838 // #38c8ff
+	clrDanger        = 0x007450ff // #ff5074
+	clrSep           = 0x00463223 // #233246
+	clrCheckBar      = 0x009ae82d // #2de89a
 
 	// Размеры меню
-	menuItemHeight = 32
+	menuItemHeight = 34
 	menuSepHeight  = 12
-	menuItemWidth  = 280
+	menuItemWidth  = 300
 	menuPadLeft    = 16
 	menuPadRight   = 16
 	menuBarWidth   = 3
@@ -322,8 +322,8 @@ func win32Run(onReady func(), onExit func()) {
 	wmTaskbarCreated, _, _ = pRegisterWindowMessage.Call(uintptr(unsafe.Pointer(taskbarCreatedStr)))
 	runtime.KeepAlive(taskbarCreatedStr)
 
-	copyUTF16(&win32tooltipOn, "SafeSky — Включён")
-	copyUTF16(&win32tooltipOff, "SafeSky — Выключен")
+	copyUTF16(&win32tooltipOn, "SafeSky — туннель включён")
+	copyUTF16(&win32tooltipOff, "SafeSky — туннель выключен")
 
 	className, _ := windows.UTF16PtrFromString("SafeSkyTrayWnd")
 	hInstance, _, _ := pGetModuleHandle.Call(0)
@@ -426,7 +426,7 @@ func win32SetIconForHealth(enabled bool, state HealthState) {
 	}
 	nid := buildNID(win32hwnd, h, win32tooltipOff)
 	if enabled {
-		copyUTF16(&nid.SzTip, "SafeSky — Включён")
+		copyUTF16(&nid.SzTip, "SafeSky — туннель включён")
 	}
 	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
@@ -540,28 +540,28 @@ func showTrayMenu(hwnd uintptr) {
 
 	// ── Элементы меню ──
 
-	addOD(hMenu, odItem{kind: odAccent, text: "SafeSky", id: idOpen, enabled: true})
+	addOD(hMenu, odItem{kind: odAccent, text: "Открыть SafeSky", id: idOpen, enabled: true})
 	addODSep(hMenu)
 
 	// Статус подключения
 	if isWarming {
-		addOD(hMenu, odItem{kind: odNormal, text: "Запуск...", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: "Туннель запускается", id: 0, enabled: false})
 	} else if disableEnabled {
-		addOD(hMenu, odItem{kind: odNormal, text: "Подключено", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: "Туннель включён", id: 0, enabled: false})
 	} else {
-		addOD(hMenu, odItem{kind: odNormal, text: "Отключено", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: "Туннель выключен", id: 0, enabled: false})
 	}
 	addODSep(hMenu)
 
 	if copyAddr != "" {
-		addOD(hMenu, odItem{kind: odNormal, text: "Копировать адрес", subtext: copyAddr, id: idCopyAddr, enabled: true})
+		addOD(hMenu, odItem{kind: odNormal, text: "Скопировать локальный адрес", subtext: copyAddr, id: idCopyAddr, enabled: true})
 	} else {
-		addOD(hMenu, odItem{kind: odNormal, text: "Копировать адрес", id: idCopyAddr, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: "Локальный адрес недоступен", id: idCopyAddr, enabled: false})
 	}
 	addODSep(hMenu)
 
-	addOD(hMenu, odItem{kind: odNormal, text: "Включить прокси", id: idEnable, enabled: enableEnabled && !isWarming})
-	addOD(hMenu, odItem{kind: odNormal, text: "Выключить прокси", id: idDisable, enabled: disableEnabled && !isWarming})
+	addOD(hMenu, odItem{kind: odNormal, text: "Подключить туннель", id: idEnable, enabled: enableEnabled && !isWarming})
+	addOD(hMenu, odItem{kind: odNormal, text: "Отключить туннель", id: idDisable, enabled: disableEnabled && !isWarming})
 
 	// Подменю серверов
 	if len(servers) > 0 {
@@ -582,12 +582,12 @@ func showTrayMenu(hwnd uintptr) {
 					checked: srv.Active,
 				})
 			}
-			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: "Серверы", enabled: true, popup: true})
+			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: "Сменить сервер", enabled: true, popup: true})
 		}
 	}
 
 	addODSep(hMenu)
-	addOD(hMenu, odItem{kind: odDanger, text: "Выход", id: idQuit, enabled: true})
+	addOD(hMenu, odItem{kind: odDanger, text: "Выйти из SafeSky", id: idQuit, enabled: true})
 
 	// Показываем меню
 	var pt point

@@ -44,11 +44,13 @@ func (s *Server) enableSystemProxy() error {
 	if err := s.config.ProxyManager.Enable(defaultProxyConfig()); err != nil {
 		return err
 	}
+	s.config.ProxyManager.ResumeGuard()
 	s.markProxyEnabledAt(time.Now())
 	return nil
 }
 
 func (s *Server) disableSystemProxy() error {
+	s.config.ProxyManager.PauseGuard(3 * time.Second)
 	if err := s.config.ProxyManager.Disable(); err != nil {
 		return err
 	}

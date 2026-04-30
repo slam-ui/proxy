@@ -124,7 +124,7 @@ func TestSetProxyAddr(t *testing.T) {
 // TestBuildTooltip_Disabled проверяет тултип в выключенном состоянии.
 func TestBuildTooltip_Disabled(t *testing.T) {
 	got := buildTooltip(false)
-	if got != "SafeSky — Выключен" {
+	if got != "SafeSky — туннель выключен" {
 		t.Errorf("buildTooltip(false)=%q", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestBuildTooltip_EnabledWithActiveServer(t *testing.T) {
 	})
 
 	got := buildTooltip(true)
-	want := "SafeSky — Включён  FR-2"
+	want := "SafeSky — туннель включён  FR-2"
 	if got != want {
 		t.Errorf("buildTooltip(true)=%q, ожидалось %q", got, want)
 	}

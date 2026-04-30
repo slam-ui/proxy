@@ -1,0 +1,33 @@
+/* ── #15 Media queries ── */
+@media (max-height: 600px) {
+  .orb-stage{width:46px!important;height:46px!important}
+  .chart-card{display:none!important}
+}
+@media (max-width: 380px) {
+  .ni-lbl{display:none!important}
+}
+@media (max-width: 430px) {
+  .header{padding-left:12px;padding-right:10px;gap:8px}
+  .logo{gap:7px}
+  .logo-name{font-size:13px;letter-spacing:0.12em}
+  .logo-ver{display:none}
+  .hbtn{padding:5px 8px;font-size:8px}
+  #diagBtn{display:none}
+  #srvBtn{max-width:76px}
+  .wctrl{gap:3px;margin-left:2px}
+  .wbtn{width:24px;height:24px;border-radius:7px}
+  .chart-top{padding:9px 10px 3px;gap:8px}
+  .chart-ttl{letter-spacing:0.08em}
+  .chart-nums{gap:8px;flex-shrink:0}
+  .cn-val{font-size:11.5px}
+  .cn-unit{font-size:7.5px}
+  .stats{gap:6px;padding-left:8px;padding-right:8px}
+  .stat{padding:8px 8px}
+  .stat-lbl{font-size:7.2px;letter-spacing:0.06em}
+  .stat-val{font-size:13px}
+  .stat-sub{font-size:7.5px}
+  .conn-card{margin-left:8px;margin-right:8px}
+}
+@media (max-height: 500px) {
+  .splist{grid-template-columns:1fr!important}
+}

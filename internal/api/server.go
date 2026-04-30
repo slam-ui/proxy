@@ -273,9 +273,11 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
 	SetupImprovementRoutes(s)
+	SetupClientFeatureRoutes(s, ctx)
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
 	if s.config.SecretKeyPath != "" {
 		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
+		s.serversHandlers.StartSmartFailover(ctx)
 	}
 
 	api := s.router.PathPrefix("/api").Subrouter()
@@ -298,6 +300,11 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/traffic/by-process")
 	s.addSilentPath("/api/stats/total")
 	s.addSilentPath("/api/connections/history")
+	s.addSilentPath("/api/connections/inspect")
+	s.addSilentPath("/api/security/dns-guard/check")
+	s.addSilentPath("/api/security/network")
+	s.addSilentPath("/api/security/traffic-budget")
+	s.addSilentPath("/api/servers/failover")
 }
 
 func (s *Server) FinalizeRoutes() {

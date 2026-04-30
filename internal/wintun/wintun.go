@@ -425,6 +425,15 @@ func StartupCleanupNeeded(ctx context.Context, log logger.Logger, ifName string)
 	ensureWintunDriverRunning(ctx, log)
 
 	kernelBusy := !kernelObjectFree(ifName)
+	// Confirm "free": wintun driver may take a few hundred ms after reaching SCM RUNNING
+	// to re-register saved adapters. WintunOpenAdapter returns NULL during that window
+	// even though WintunCreateAdapter will later fail with ERROR_ALREADY_EXISTS.
+	if !kernelBusy {
+		if !SleepCtx(ctx, 300*time.Millisecond) {
+			return false
+		}
+		kernelBusy = !kernelObjectFree(ifName)
+	}
 
 	ifaceCtx, ifaceCancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	interfaceExists := InterfaceExistsCtx(ifaceCtx, ifName)
@@ -542,20 +551,23 @@ func InterfaceExists(ifName string) bool {
 }
 
 func NetAdapterExists(ifName string) bool {
+	// Get-NetAdapter checks by adapter name directly — more reliable than FriendlyName
+	// (wintun sets adapter name via WintunCreateAdapter; FriendlyName is the tunnel type).
 	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`(Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+ifName+`*' -or $_.FriendlyName -like '*wintun*' } | Measure-Object).Count -gt 0`)
+		`(Get-NetAdapter -Name '`+ifName+`' -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0`)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == "True"
 }
 
 func NetAdapterExistsCtx(ctx context.Context, ifName string) bool {
+	// Get-NetAdapter checks by adapter name directly — more reliable than FriendlyName
+	// (wintun sets adapter name via WintunCreateAdapter; FriendlyName is the tunnel type).
 	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`(Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+ifName+`*' -or $_.FriendlyName -like '*wintun*' } | Measure-Object).Count -gt 0`)
+		`(Get-NetAdapter -Name '`+ifName+`' -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0`)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
-	// BUG FIX: добавляем WaitDelay как в InterfaceExistsCtx. PowerShell запускает дочерние
-	// процессы которые держат pipe-хэндлы открытыми после kill. Без WaitDelay CombinedOutput()
-	// блокируется ожидая EOF от pipe даже после отмены ctx — горутина зависает навсегда.
+	// WaitDelay: PowerShell spawns child processes that hold pipe handles open after kill.
+	// Without WaitDelay CombinedOutput() blocks waiting for EOF even after ctx cancel.
 	cmd.WaitDelay = 50 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == "True"
@@ -614,7 +626,7 @@ func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
 	// Обе команды безопасны если интерфейс уже удалён (no-op, ошибки игнорируются).
 	run("netsh", "interface", "ip", "delete", "interface", tunInterfaceName)
 	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`Get-PnpDevice | Where-Object { $_.FriendlyName -like '*`+tunInterfaceName+`*' -or $_.FriendlyName -like '*wintun*' } | ForEach-Object { pnputil /remove-device $_.InstanceId 2>$null }`)
+		`Get-NetAdapter -Name '`+tunInterfaceName+`' -ErrorAction SilentlyContinue | ForEach-Object { $dev = Get-PnpDevice -FriendlyName $_.InterfaceDescription -ErrorAction SilentlyContinue; if ($dev) { pnputil /remove-device $dev.InstanceId 2>$null } }`)
 
 	// BUG FIX: Post-cleanup verification — перезапускаем wintun драйвер и проверяем
 	// что адаптер действительно удалён.

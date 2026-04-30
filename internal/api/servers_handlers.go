@@ -80,7 +80,10 @@ func SetupServerRoutes(s *Server, secretKeyPath string) *ServersHandlers {
 	api.HandleFunc("/servers/{id}/qr", h.handleQR).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/{id}/latency-history", h.handleLatencyHistory).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/ping-all", h.handlePingAll).Methods("GET", "OPTIONS")
-	api.HandleFunc("/servers/auto-connect", h.handleAutoConnect).Methods("POST", "OPTIONS")         // B-4
+	api.HandleFunc("/servers/auto-connect", h.handleAutoConnect).Methods("POST", "OPTIONS") // B-4
+	api.HandleFunc("/servers/failover", h.handleFailoverStatus).Methods("GET", "OPTIONS")
+	api.HandleFunc("/servers/failover/settings", h.handleFailoverSettings).Methods("GET", "OPTIONS")
+	api.HandleFunc("/servers/failover/settings", h.handleSetFailoverSettings).Methods("POST", "OPTIONS")
 	api.HandleFunc("/servers/import-clipboard", h.handleImportClipboard).Methods("POST", "OPTIONS") // B-6
 	api.HandleFunc("/servers/fetch-url", h.handleFetchURL).Methods("POST", "OPTIONS")               // C-5
 	api.HandleFunc("/servers/{id}/refresh", h.handleRefresh).Methods("POST", "OPTIONS")             // C-5
