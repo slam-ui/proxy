@@ -80,15 +80,44 @@ func TestInterfaceExists_ReturnsFalse_ForNonExistent(t *testing.T) {
 // ── NetAdapterExists Tests ────────────────────────────────────────────────────────
 
 func TestNetAdapterExists_ReturnsFalse_ForNonExistent(t *testing.T) {
-	// NetAdapterExists queries PnP for wintun/WireGuard/sing-tun devices globally.
-	// If the system has any such adapter, the result is true regardless of the name passed.
-	// Skip when real wintun/WireGuard/sing-tun adapters are present.
+	// NetAdapterExists checks by adapter name, including hidden adapters.
+	// Skip only if the probe name unexpectedly exists on the developer machine.
 	if NetAdapterExists("__probe_nonexistent_xyz__") {
-		t.Skip("system has wintun/WireGuard/sing-tun adapters installed; test not meaningful")
+		t.Skip("probe adapter unexpectedly exists; test not meaningful")
 	}
 	result := NetAdapterExists("NonExistentAdapter12345")
 	if result {
 		t.Error("NetAdapterExists should return false for non-existent adapter")
+	}
+}
+
+func TestNetAdapterExistsCommand_IncludesHiddenAdapters(t *testing.T) {
+	cmd := netAdapterExistsCommand("tun0")
+	if !strings.Contains(cmd, "-IncludeHidden") {
+		t.Fatalf("net adapter probe must include hidden adapters, got %q", cmd)
+	}
+}
+
+func TestNetAdapterExistsCommand_QuotesInterfaceName(t *testing.T) {
+	cmd := netAdapterExistsCommand("tun'0; Stop-Computer")
+	if !strings.Contains(cmd, "'tun''0; Stop-Computer'") {
+		t.Fatalf("interface name must be PowerShell single-quoted, got %q", cmd)
+	}
+	if strings.Contains(cmd, "'tun'0") {
+		t.Fatalf("interface name contains an unescaped quote, got %q", cmd)
+	}
+}
+
+func TestSingTunDeviceCommands_TargetOnlySingTunWintunNodes(t *testing.T) {
+	existsCmd := singTunDeviceExistsCommand()
+	removeCmd := removeSingTunDevicesCommand()
+	for _, cmd := range []string{existsCmd, removeCmd} {
+		if !strings.Contains(cmd, "SWD\\WINTUN\\*") {
+			t.Fatalf("command must filter Wintun PnP instance IDs, got %q", cmd)
+		}
+		if !strings.Contains(cmd, "sing-tun Tunnel") {
+			t.Fatalf("command must be scoped to sing-tun Tunnel devices, got %q", cmd)
+		}
 	}
 }
 

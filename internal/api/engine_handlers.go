@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -14,7 +16,10 @@ func (s *Server) handleEngineVersion(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ExecPath string `json:"exec_path"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
 	if req.ExecPath == "" {
 		req.ExecPath = "./sing-box.exe"
 	}
@@ -77,7 +82,10 @@ func (s *Server) handleEngineDownload(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ExecPath string `json:"exec_path"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
 	if req.ExecPath == "" {
 		req.ExecPath = "./sing-box.exe"
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -259,7 +260,7 @@ func TestFetchVLESSFromURL_PlainText(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	got, err := fetchVLESSFromURL(ts.URL)
+	got, err := fetchVLESSFromURLWithClient(ts.URL, newSubscriptionHTTPClient(http.DefaultTransport))
 	if err != nil {
 		t.Fatalf("fetchVLESSFromURL: %v", err)
 	}
@@ -278,12 +279,33 @@ func TestFetchVLESSFromURL_Base64(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	got, err := fetchVLESSFromURL(ts.URL)
+	got, err := fetchVLESSFromURLWithClient(ts.URL, newSubscriptionHTTPClient(http.DefaultTransport))
 	if err != nil {
 		t.Fatalf("fetchVLESSFromURL (base64): %v", err)
 	}
 	if got != vlessLine {
 		t.Errorf("got %q, want %q", got, vlessLine)
+	}
+}
+
+func TestBase64DecodeSubscription_RawURL(t *testing.T) {
+	const vlessLine = "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@sub.example.com:443?type=tcp#Sub"
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(vlessLine + "\n"))
+
+	got, err := base64DecodeSubscription(encoded)
+	if err != nil {
+		t.Fatalf("base64DecodeSubscription raw URL: %v", err)
+	}
+	if got != vlessLine+"\n" {
+		t.Fatalf("decoded = %q, want %q", got, vlessLine+"\n")
+	}
+}
+
+func TestFindFirstVLESS_StripsBOM(t *testing.T) {
+	const vlessLine = "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@sub.example.com:443?type=tcp#Sub"
+	got := findFirstVLESS("\ufeff" + vlessLine + "\n")
+	if got != vlessLine {
+		t.Fatalf("findFirstVLESS = %q, want %q", got, vlessLine)
 	}
 }
 
@@ -294,9 +316,34 @@ func TestFetchVLESSFromURL_NoVLESS(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := fetchVLESSFromURL(ts.URL)
+	_, err := fetchVLESSFromURLWithClient(ts.URL, newSubscriptionHTTPClient(http.DefaultTransport))
 	if err == nil {
 		t.Fatal("ожидалась ошибка, но получено nil")
+	}
+}
+
+func TestFetchVLESSFromURLWithClient_BlocksPrivateRedirect(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://127.0.0.1/admin", http.StatusFound)
+	}))
+	defer ts.Close()
+
+	_, err := fetchVLESSFromURLWithClient(ts.URL, newSubscriptionHTTPClient(http.DefaultTransport))
+	if err == nil {
+		t.Fatal("expected redirect to private address to be rejected")
+	}
+}
+
+func TestSafeSubscriptionDialContext_BlocksResolvedLocalhost(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := safeSubscriptionDialContext(ctx, "tcp", "localhost:80")
+	if err == nil {
+		t.Fatal("expected localhost resolution to be rejected")
+	}
+	if !strings.Contains(err.Error(), "private/local") {
+		t.Fatalf("error = %v, want private/local rejection", err)
 	}
 }
 

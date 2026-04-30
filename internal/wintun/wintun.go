@@ -320,8 +320,12 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		// Решение: дочерний ctx наследует отмену родителя И ограничен 100ms.
 		// При нормальной работе netsh отвечает за <5ms; 100ms — жёсткий потолок.
 		fastCtx, fastCancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		fastFree := kernelObjectFree(ifName) && !InterfaceExistsCtx(fastCtx, ifName)
+		interfaceExists := InterfaceExistsCtx(fastCtx, ifName)
 		fastCancel()
+		fastDeviceCtx, fastDeviceCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+		wintunDeviceExists := singTunDeviceExistsForInterfaceCtx(fastDeviceCtx, ifName)
+		fastDeviceCancel()
+		fastFree := kernelObjectFree(ifName) && !interfaceExists && !wintunDeviceExists
 		if fastFree {
 			return
 		}
@@ -396,7 +400,13 @@ func PollUntilFree(ctx context.Context, log logger.Logger, ifName string) {
 		if ctx.Err() != nil {
 			return
 		}
-		if kernelObjectFree(ifName) && !NetAdapterExistsCtx(ctx, ifName) {
+		netCtx, netCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+		netAdapterExists := NetAdapterExistsCtx(netCtx, ifName)
+		netCancel()
+		deviceCtx, deviceCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+		wintunDeviceExists := singTunDeviceExistsForInterfaceCtx(deviceCtx, ifName)
+		deviceCancel()
+		if kernelObjectFree(ifName) && !netAdapterExists && !wintunDeviceExists {
 			confirmCount++
 			if confirmCount >= confirmRequired {
 				settle := ReadSettleDelay()
@@ -440,13 +450,17 @@ func StartupCleanupNeeded(ctx context.Context, log logger.Logger, ifName string)
 	ifaceCancel()
 
 	pnpCtx, pnpCancel := context.WithTimeout(ctx, 700*time.Millisecond)
-	pnpExists := NetAdapterExistsCtx(pnpCtx, ifName)
+	netAdapterExists := NetAdapterExistsCtx(pnpCtx, ifName)
 	pnpCancel()
 
-	if kernelBusy || interfaceExists || pnpExists {
+	deviceCtx, deviceCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	wintunDeviceExists := singTunDeviceExistsForInterfaceCtx(deviceCtx, ifName)
+	deviceCancel()
+
+	if kernelBusy || interfaceExists || netAdapterExists || wintunDeviceExists {
 		if log != nil {
-			log.Info("wintun: startup cleanup нужен (kernel_busy=%v, interface=%v, pnp=%v)",
-				kernelBusy, interfaceExists, pnpExists)
+			log.Info("wintun: startup cleanup нужен (kernel_busy=%v, interface=%v, net_adapter=%v, pnp_device=%v)",
+				kernelBusy, interfaceExists, netAdapterExists, wintunDeviceExists)
 		}
 		return true
 	}
@@ -550,27 +564,73 @@ func InterfaceExists(ifName string) bool {
 	return InterfaceExistsCtx(ctx, ifName)
 }
 
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func netAdapterExistsCommand(ifName string) string {
+	return "(Get-NetAdapter -Name " + psQuote(ifName) + " -IncludeHidden -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0"
+}
+
+func singTunDeviceExistsCommand() string {
+	return "(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'SWD\\WINTUN\\*' -and $_.FriendlyName -eq 'sing-tun Tunnel' } | Measure-Object).Count -gt 0"
+}
+
+func removeSingTunDevicesCommand() string {
+	return "$devices = Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'SWD\\WINTUN\\*' -and $_.FriendlyName -eq 'sing-tun Tunnel' }; foreach ($dev in $devices) { pnputil /remove-device $dev.InstanceId 2>$null | Out-Null }"
+}
+
 func NetAdapterExists(ifName string) bool {
-	// Get-NetAdapter checks by adapter name directly — more reliable than FriendlyName
-	// (wintun sets adapter name via WintunCreateAdapter; FriendlyName is the tunnel type).
+	// Get-NetAdapter checks by adapter name directly. IncludeHidden is required because
+	// stale Wintun nodes can be hidden/disabled while WintunCreateAdapter still sees
+	// the same device name and fails with ERROR_ALREADY_EXISTS.
 	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`(Get-NetAdapter -Name '`+ifName+`' -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0`)
+		netAdapterExistsCommand(ifName))
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == "True"
 }
 
 func NetAdapterExistsCtx(ctx context.Context, ifName string) bool {
-	// Get-NetAdapter checks by adapter name directly — more reliable than FriendlyName
-	// (wintun sets adapter name via WintunCreateAdapter; FriendlyName is the tunnel type).
+	// Get-NetAdapter checks by adapter name directly. IncludeHidden is required because
+	// stale Wintun nodes can be hidden/disabled while WintunCreateAdapter still sees
+	// the same device name and fails with ERROR_ALREADY_EXISTS.
 	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`(Get-NetAdapter -Name '`+ifName+`' -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0`)
+		netAdapterExistsCommand(ifName))
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
 	// WaitDelay: PowerShell spawns child processes that hold pipe handles open after kill.
 	// Without WaitDelay CombinedOutput() blocks waiting for EOF even after ctx cancel.
 	cmd.WaitDelay = 50 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	return err == nil && strings.TrimSpace(string(out)) == "True"
+}
+
+func singTunDeviceExistsCtx(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		singTunDeviceExistsCommand())
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	cmd.WaitDelay = 50 * time.Millisecond
+	out, err := cmd.CombinedOutput()
+	return err == nil && strings.TrimSpace(string(out)) == "True"
+}
+
+func singTunDeviceExistsForInterfaceCtx(ctx context.Context, ifName string) bool {
+	if ifName != tunInterfaceName {
+		return false
+	}
+	return singTunDeviceExistsCtx(ctx)
+}
+
+func removeSingTunDevices(ctx context.Context, log logger.Logger) {
+	cmd := exec.CommandContext(ctx, "powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
+		removeSingTunDevicesCommand())
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	cmd.WaitDelay = 50 * time.Millisecond
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if log != nil {
+			log.Info("wintun: cleanup sing-tun PnP devices: %v (%s)", err, strings.TrimSpace(string(out)))
+		}
+	}
 }
 
 func RemoveStaleTunAdapter(log logger.Logger) {
@@ -580,8 +640,12 @@ func RemoveStaleTunAdapter(log logger.Logger) {
 func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
 	repairStaleDriver(ctx, log)
 	run := func(n string, a ...string) {
-		c := exec.Command(n, a...)
+		if ctx.Err() != nil {
+			return
+		}
+		c := exec.CommandContext(ctx, n, a...)
 		c.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		c.WaitDelay = 1 * time.Second
 		_ = c.Run()
 	}
 	run("taskkill", "/F", "/IM", "sing-box.exe", "/T")
@@ -626,7 +690,8 @@ func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
 	// Обе команды безопасны если интерфейс уже удалён (no-op, ошибки игнорируются).
 	run("netsh", "interface", "ip", "delete", "interface", tunInterfaceName)
 	run("powershell", "-WindowStyle", "Hidden", "-NonInteractive", "-Command",
-		`Get-NetAdapter -Name '`+tunInterfaceName+`' -ErrorAction SilentlyContinue | ForEach-Object { $dev = Get-PnpDevice -FriendlyName $_.InterfaceDescription -ErrorAction SilentlyContinue; if ($dev) { pnputil /remove-device $dev.InstanceId 2>$null } }`)
+		`Get-NetAdapter -Name '`+tunInterfaceName+`' -IncludeHidden -ErrorAction SilentlyContinue | ForEach-Object { $dev = Get-PnpDevice -FriendlyName $_.InterfaceDescription -ErrorAction SilentlyContinue; if ($dev) { pnputil /remove-device $dev.InstanceId 2>$null } }`)
+	removeSingTunDevices(ctx, log)
 
 	// BUG FIX: Post-cleanup verification — перезапускаем wintun драйвер и проверяем
 	// что адаптер действительно удалён.
@@ -665,6 +730,7 @@ func RemoveStaleTunAdapterCtx(ctx context.Context, log logger.Logger) {
 func repairStaleDriver(ctx context.Context, log logger.Logger) {
 	cmd := exec.CommandContext(ctx, "sc", "query", "wintun")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	cmd.WaitDelay = 1 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return // сервис не зарегистрирован — ничего делать не нужно
@@ -674,7 +740,10 @@ func repairStaleDriver(ctx context.Context, log logger.Logger) {
 	if !strings.Contains(string(out), "STOP_PENDING") {
 		return
 	}
-	_ = exec.CommandContext(ctx, "sc", "delete", "wintun").Run()
+	delCmd := exec.CommandContext(ctx, "sc", "delete", "wintun")
+	delCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	delCmd.WaitDelay = 1 * time.Second
+	_ = delCmd.Run()
 	log.Info("wintun: stale driver registration removed (was STOP_PENDING)")
 	// Ждём пока SCM подтвердит удаление (обычно < 1с).
 	for i := 0; i < 10; i++ {
@@ -683,6 +752,7 @@ func repairStaleDriver(ctx context.Context, log logger.Logger) {
 		}
 		chk := exec.CommandContext(ctx, "sc", "query", "wintun")
 		chk.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		chk.WaitDelay = 1 * time.Second
 		if _, e := chk.Output(); e != nil {
 			break // сервис исчез из SCM
 		}
@@ -700,6 +770,7 @@ func ensureWintunDriverRunning(ctx context.Context, log logger.Logger) {
 	// Проверяем текущее состояние
 	checkCmd := exec.CommandContext(ctx, "sc", "query", "wintun")
 	checkCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	checkCmd.WaitDelay = 1 * time.Second
 	out, err := checkCmd.CombinedOutput()
 	if err != nil {
 		// Сервис не зарегистрирован — sing-box установит при старте
@@ -712,6 +783,7 @@ func ensureWintunDriverRunning(ctx context.Context, log logger.Logger) {
 	// Запускаем
 	startCmd := exec.CommandContext(ctx, "sc", "start", "wintun")
 	startCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+	startCmd.WaitDelay = 1 * time.Second
 	_ = startCmd.Run()
 
 	// Ждём до 2с для перехода в RUNNING
@@ -721,6 +793,7 @@ func ensureWintunDriverRunning(ctx context.Context, log logger.Logger) {
 		}
 		qCmd := exec.CommandContext(ctx, "sc", "query", "wintun")
 		qCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		qCmd.WaitDelay = 1 * time.Second
 		qOut, qErr := qCmd.CombinedOutput()
 		if qErr == nil && strings.Contains(string(qOut), "RUNNING") {
 			log.Info("wintun: драйвер запущен для корректного зондирования kernel-объекта")

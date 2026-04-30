@@ -158,6 +158,18 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 			"имя профиля должно быть 1–64 символа (буквы, цифры, пробел, _ -)")
 		return
 	}
+	if req.Routing.DefaultAction == "" {
+		req.Routing.DefaultAction = config.ActionProxy
+	}
+	if !isValidAction(req.Routing.DefaultAction) {
+		h.server.respondError(w, http.StatusBadRequest, "default_action: proxy | direct | block")
+		return
+	}
+	if err := normalizeRoutingRules(req.Routing.Rules); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	config.SanitizeRoutingConfig(&req.Routing)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -194,7 +206,7 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 	}
 	h.server.respondJSON(w, http.StatusOK, MessageResponse{
 		Success: true,
-		Message: fmt.Sprintf("профиль %q сохранён (%d правил)", req.Name, len(req.Routing.Rules)),
+		Message: fmt.Sprintf("профиль %q сохранён (%d правил)", req.Name, len(p.Routing.Rules)),
 	})
 }
 

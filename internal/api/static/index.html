@@ -395,22 +395,80 @@
       <div class="page-header">
         <div class="page-title-group">
           <div class="page-kicker">Журнал</div>
-          <h2>События клиента</h2>
-          <p>Запуск, перезапуск, ошибки маршрутизации и служебные события SafeSky.</p>
+          <h2>Логи и события</h2>
+          <p>Живой поток событий клиента, фильтры по уровню и быстрый разбор предупреждений.</p>
         </div>
         <div class="page-hero-stats">
+          <div><strong id="logHeroTotal">0</strong><span>событий</span></div>
+          <div><strong id="logHeroErrors">0</strong><span>ошибок</span></div>
           <div><strong id="logHeroMode">AUTO</strong><span>прокрутка</span></div>
-          <div><strong id="logHeroAnomalies">0</strong><span>аномалий</span></div>
-          <div><strong id="logHeroSaved">0</strong><span>снимков</span></div>
         </div>
       </div>
     </div>
     <div class="subpage-sheet log-sheet">
-      <div class="log-layout">
-        <aside class="log-side">
+      <div class="log-workbench">
+        <section class="log-console">
+          <div class="log-commandbar">
+            <div class="log-search-shell">
+              <span class="log-search-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+              </span>
+              <input class="pg-inp log-filter" id="logFilter" placeholder="поиск по тексту, домену, IP или процессу" oninput="filterLogs()">
+              <button class="log-filter-clear" onclick="clearLogFilter()" title="Очистить фильтр" aria-label="Очистить фильтр">×</button>
+            </div>
+            <input type="hidden" id="logLevelFilter" value="all">
+            <div class="log-level-tabs" role="tablist" aria-label="Фильтр уровня логов">
+              <button class="log-level-btn active" data-level="all" onclick="setLogLevelFilter('all')">Все</button>
+              <button class="log-level-btn" data-level="E" onclick="setLogLevelFilter('E')">Ошибки</button>
+              <button class="log-level-btn" data-level="W" onclick="setLogLevelFilter('W')">Warn</button>
+              <button class="log-level-btn" data-level="I" onclick="setLogLevelFilter('I')">Info</button>
+              <button class="log-level-btn" data-level="D" onclick="setLogLevelFilter('D')">Debug</button>
+            </div>
+            <div class="log-actions">
+              <button class="pg-btn log-auto" id="logAutoBtn" onclick="toggleLogAuto()" title="Автопрокрутка">
+                <span class="log-auto-dot"></span><span id="logAutoText">Авто</span>
+              </button>
+              <button class="pg-btn" onclick="exportLogs()">Экспорт</button>
+              <button class="pg-btn danger" onclick="clearLogs()">Очистить</button>
+            </div>
+          </div>
+          <div class="log-console-head">
+            <span>Время</span>
+            <span>Уровень</span>
+            <span>Событие</span>
+          </div>
+          <div class="log-wrap" id="logWrap">
+            <div class="log-empty">ожидание событий...</div>
+          </div>
+        </section>
+        <aside class="log-inspector">
+          <div class="log-status-card">
+            <div class="log-card-head">
+              <div>
+                <div class="log-panel-title">Поток</div>
+                <div class="log-panel-sub">Источник, счетчики и текущий фильтр</div>
+              </div>
+              <span class="log-stream-pill" id="logStreamState">IDLE</span>
+            </div>
+            <div class="log-summary-grid">
+              <div class="log-summary-cell"><b id="logVisibleCount">0</b><span>видно</span></div>
+              <div class="log-summary-cell warn"><b id="logWarnCount">0</b><span>warn</span></div>
+              <div class="log-summary-cell err"><b id="logErrorCount">0</b><span>error</span></div>
+              <div class="log-summary-cell"><b id="logDebugCount">0</b><span>debug</span></div>
+            </div>
+            <div class="log-meter">
+              <div class="log-meter-row"><span>Последнее событие</span><b id="logLastEvent">—</b></div>
+              <div class="log-meter-row"><span>Снимков</span><b id="logHeroSaved">0</b></div>
+              <div class="log-meter-row"><span>Аномалий</span><b id="logHeroAnomalies">0</b></div>
+            </div>
+          </div>
           <div class="log-panel">
-            <div class="log-panel-title">Аномалии</div>
-            <div class="log-panel-sub">Ошибки и предупреждения, которые стоит сохранить перед очисткой журнала.</div>
+            <div class="log-card-head">
+              <div>
+                <div class="log-panel-title">Аномалии</div>
+                <div class="log-panel-sub">Ошибки и предупреждения до очистки журнала</div>
+              </div>
+            </div>
             <div class="log-panel-actions">
               <button class="pg-btn acc" onclick="saveAnomalySnapshot()">Сохранить</button>
               <button class="pg-btn" onclick="exportAnomalies()">JSON</button>
@@ -420,24 +478,6 @@
             </div>
           </div>
         </aside>
-        <section class="log-main">
-          <div class="log-toolbar log-tools">
-            <input class="pg-inp log-filter" id="logFilter" placeholder="Фильтр по тексту..." oninput="filterLogs()">
-            <select class="pg-inp log-level-filter" id="logLevelFilter" onchange="filterLogs()">
-              <option value="all">Все уровни</option>
-              <option value="E">Ошибки</option>
-              <option value="W">Предупреждения</option>
-              <option value="I">Информация</option>
-              <option value="D">Отладка</option>
-            </select>
-            <button class="pg-btn danger" onclick="clearLogs()">Очистить</button>
-            <button class="pg-btn" id="logAutoBtn" onclick="toggleLogAuto()">Авто</button>
-            <button class="pg-btn" onclick="exportLogs()">Экспорт</button>
-          </div>
-          <div class="log-wrap" id="logWrap">
-            <div class="log-empty">ожидание событий...</div>
-          </div>
-        </section>
       </div>
     </div><!-- /subpage-sheet -->
   </div>

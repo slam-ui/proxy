@@ -174,6 +174,7 @@ func normalizeAppSettings(settings *AppSettings) {
 }
 
 func SaveAppSettings(path string, settings AppSettings) error {
+	normalizeAppSettings(&settings)
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err

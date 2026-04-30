@@ -408,6 +408,25 @@ func TestEngineDownload_AlreadyRunning_Returns409(t *testing.T) {
 	}
 }
 
+func TestEngineDownload_InvalidJSON_Returns400(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	SetupEngineRoutes(srv)
+	srv.FinalizeRoutes()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/engine/download", strings.NewReader("{bad json"))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("invalid JSON download = %d, want 400", w.Code)
+	}
+}
+
 // ─── /api/status: расширенные сценарии ────────────────────────────────────────
 
 func TestHandleStatus_Restarting_ShowsWarmingTrue(t *testing.T) {

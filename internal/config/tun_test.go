@@ -46,6 +46,13 @@ func TestDetectRuleType(t *testing.T) {
 	}
 }
 
+func TestNormalizeRuleValue_StripsUppercaseScheme(t *testing.T) {
+	got := NormalizeRuleValue("HTTPS://Example.COM/path?q=1")
+	if got != "example.com" {
+		t.Fatalf("NormalizeRuleValue uppercase scheme = %q, want example.com", got)
+	}
+}
+
 // ─── LoadRoutingConfig ─────────────────────────────────────────────────────
 
 func TestLoadRoutingConfig_FileNotFound_ReturnsDefault(t *testing.T) {
@@ -170,6 +177,31 @@ func TestSaveRoutingConfig_RoundTrip_PreservesOrder(t *testing.T) {
 			t.Errorf("Rules[%d]: got {%s %s}, want {%s %s}",
 				i, r.Value, r.Action, rules[i].Value, rules[i].Action)
 		}
+	}
+}
+
+func TestSaveRoutingConfig_SanitizesInvalidActions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "routing.json")
+	cfg := &RoutingConfig{
+		DefaultAction: "INVALID",
+		Rules: []RoutingRule{
+			{Value: "example.com", Type: RuleTypeDomain, Action: "DROP"},
+		},
+	}
+
+	if err := SaveRoutingConfig(path, cfg); err != nil {
+		t.Fatalf("SaveRoutingConfig failed: %v", err)
+	}
+
+	loaded, err := LoadRoutingConfig(path)
+	if err != nil {
+		t.Fatalf("LoadRoutingConfig failed: %v", err)
+	}
+	if loaded.DefaultAction != ActionProxy {
+		t.Errorf("DefaultAction = %q, want proxy", loaded.DefaultAction)
+	}
+	if loaded.Rules[0].Action != ActionProxy {
+		t.Errorf("rule action = %q, want proxy", loaded.Rules[0].Action)
 	}
 }
 

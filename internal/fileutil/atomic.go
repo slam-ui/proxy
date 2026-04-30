@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 	"unsafe"
 
@@ -70,6 +71,8 @@ func WriteAtomic(dst string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("fileutil.WriteAtomic: encode tmp: %w", err)
 	}
+	defer runtime.KeepAlive(dstPtr)
+	defer runtime.KeepAlive(tmpPtr)
 
 	// ФИКС: Добавляем цикл повторных попыток для MoveFileExW.
 	// На Windows файлы часто блокируются антивирусами или другими потоками на доли секунды.

@@ -496,6 +496,28 @@ func TestSanitizeRoutingConfig_InvalidDefaultAction_NoPanic(t *testing.T) {
 		Rules:         []RoutingRule{},
 	}
 	SanitizeRoutingConfig(cfg)
+	if cfg.DefaultAction != ActionProxy {
+		t.Errorf("invalid DefaultAction должен исправляться в proxy, got %q", cfg.DefaultAction)
+	}
+}
+
+func TestSanitizeRoutingConfig_InvalidRuleAction_DefaultsToProxy(t *testing.T) {
+	cfg := &RoutingConfig{
+		DefaultAction: ActionDirect,
+		Rules: []RoutingRule{
+			{Value: "example.com", Type: RuleTypeDomain, Action: "DROP"},
+			{Value: "telegram.exe", Type: RuleTypeProcess, Action: ActionBlock},
+		},
+	}
+
+	SanitizeRoutingConfig(cfg)
+
+	if cfg.Rules[0].Action != ActionProxy {
+		t.Errorf("invalid rule action должен исправляться в proxy, got %q", cfg.Rules[0].Action)
+	}
+	if cfg.Rules[1].Action != ActionBlock {
+		t.Errorf("valid rule action должен сохраняться, got %q", cfg.Rules[1].Action)
+	}
 }
 
 // ── GenerateSingBoxConfig: nil routing не паникует ───────────────────────

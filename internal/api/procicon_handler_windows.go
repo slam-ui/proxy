@@ -12,6 +12,7 @@ import (
 	"image/color"
 	"image/png"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -167,6 +168,7 @@ func extractExeIconPNG(exePath string) ([]byte, error) {
 		uintptr(unsafe.Sizeof(fi)),
 		flags,
 	)
+	runtime.KeepAlive(pathPtr)
 	if ret == 0 || fi.HIcon == 0 {
 		return nil, nil
 	}
@@ -199,13 +201,17 @@ func extractExeIconPNG(exePath string) ([]byte, error) {
 		uintptr(unsafe.Pointer(&pvBits)),
 		0, 0,
 	)
+	runtime.KeepAlive(&bi)
 	if hBmp == 0 {
 		return nil, nil
 	}
 	defer pDeleteObject.Call(hBmp)
 
 	// 4. Выбираем bitmap в DC
-	pSelectObject.Call(hDC, hBmp)
+	oldObj, _, _ := pSelectObject.Call(hDC, hBmp)
+	if oldObj != 0 {
+		defer pSelectObject.Call(hDC, oldObj)
+	}
 
 	// 5. Рисуем иконку в DC
 	pDrawIconEx.Call(

@@ -4,6 +4,7 @@ package wintun
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -54,6 +55,7 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 	if err != nil {
 		return false
 	}
+	defer runtime.KeepAlive(ptr)
 
 	// Сначала открываем адаптер
 	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
@@ -127,6 +129,7 @@ func kernelObjectFree(ifName string) bool {
 	cachedMu.Unlock()
 
 	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	runtime.KeepAlive(ptr)
 	if r0 == 0 {
 		// NULL → kernel-объект не существует → свободен
 		return true

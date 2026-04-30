@@ -7,6 +7,67 @@ let logSSE = null;
 let logPollInterval = null;
 let logAnomalies = [];
 const LOG_ANOMALY_STORAGE_KEY = 'safesky.log.anomalySnapshots.v1';
+const LOG_MAX_LINES = 800;
+let logCounts = { total: 0, I: 0, W: 0, E: 0, D: 0 };
+let logStreamMode = 'IDLE';
+
+function _setText(id, value) {
+  const el = $id(id);
+  if (el) el.textContent = value;
+}
+
+function _formatLogTime(ts) {
+  const raw = String(ts || '');
+  if (!raw) {
+    return new Date().toLocaleTimeString('ru-RU', { hour12: false });
+  }
+  if (raw.includes('T') && raw.length >= 19) return raw.slice(11, 19);
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d.toLocaleTimeString('ru-RU', { hour12: false });
+  return raw.slice(0, 19);
+}
+
+function setLogStreamState(mode) {
+  logStreamMode = mode || 'IDLE';
+  const el = $id('logStreamState');
+  if (!el) return;
+  el.textContent = logStreamMode;
+  el.className = 'log-stream-pill ' + logStreamMode.toLowerCase();
+}
+
+function _currentLogLevelFilter() {
+  return $id('logLevelFilter')?.value || 'all';
+}
+
+function _logMatchesFilters(line) {
+  const f = $id('logFilter')?.value.toLowerCase().trim() || '';
+  const level = _currentLogLevelFilter();
+  const msgOk = !f || (line.dataset.search || line.dataset.msg || '').includes(f);
+  const lvlOk = level === 'all' || line.dataset.level === level;
+  return msgOk && lvlOk;
+}
+
+function _applyLogVisibility(line) {
+  const show = _logMatchesFilters(line);
+  line.style.display = show ? '' : 'none';
+  return show;
+}
+
+function _visibleLogCount() {
+  return logLines.reduce((n, line) => n + (line.style.display === 'none' ? 0 : 1), 0);
+}
+
+function renderLogMetrics() {
+  _setText('logHeroTotal', String(logCounts.total));
+  _setText('logHeroErrors', String(logCounts.E || 0));
+  _setText('logWarnCount', String(logCounts.W || 0));
+  _setText('logErrorCount', String(logCounts.E || 0));
+  _setText('logDebugCount', String(logCounts.D || 0));
+  _setText('logVisibleCount', String(_visibleLogCount()));
+  _setText('logHeroMode', logAutoScroll ? 'AUTO' : 'PAUSE');
+  _setText('logHeroAnomalies', String(logAnomalies.length));
+  _setText('logHeroSaved', String(_savedAnomalySnapshots().length));
+}
 
 function stopLogStream() {
   logSSE?.close();
@@ -16,6 +77,7 @@ function stopLogStream() {
     clearInterval(logPollInterval);
     logPollInterval = null;
   }
+  setLogStreamState('IDLE');
 }
 
 function startLogStream() {
@@ -23,14 +85,20 @@ function startLogStream() {
   logSSE?.close();
   logSSE = null;
   logStreaming = true;
+  setLogStreamState('SSE');
   const startPolling = () => {
+    if (!logStreaming) return;
+    setLogStreamState('POLL');
     if (logPollInterval === null) {
+      pollLogs();
       logPollInterval = setInterval(pollLogs, 2000);
     }
   };
   try {
     logSSE = new EventSource(API + '/events');
+    logSSE.onopen = () => setLogStreamState('SSE');
     logSSE.onmessage = e => {
+      if (!logStreaming) return;
       try {
         const ev = JSON.parse(e.data);
         pushLog(ev.time || new Date().toISOString(), ev.level || 'I', ev.message || e.data);
@@ -39,6 +107,7 @@ function startLogStream() {
       }
     };
     logSSE.onerror = () => {
+      if (!logStreaming) return;
       logSSE?.close();
       logSSE = null;
       startPolling();
@@ -53,13 +122,16 @@ async function pollLogs() {
   try {
     const r = await fetch(API + '/events?since=' + lastLogId);
     if (!r.ok) return;
+    setLogStreamState('POLL');
     const data = await r.json();
     const events = Array.isArray(data) ? data : (data.events || []);
     if (data.latest_id != null) lastLogId = data.latest_id;
     events.forEach(ev => {
       pushLog(ev.time || '', ev.level || 'I', ev.message || JSON.stringify(ev));
     });
-  } catch(_) {}
+  } catch(_) {
+    if (logStreaming) setLogStreamState('ERR');
+  }
 }
 
 function _highlightLogMsg(msg) {
@@ -189,11 +261,8 @@ function _rememberAnomaly(ts, lvlChar, rawMsg, cleanMsg) {
 }
 
 function renderAnomalyList() {
-  const hero = $id('logHeroAnomalies');
-  if (hero) hero.textContent = String(logAnomalies.length);
   const saved = _savedAnomalySnapshots();
-  const savedHero = $id('logHeroSaved');
-  if (savedHero) savedHero.textContent = String(saved.length);
+  renderLogMetrics();
   const el = $id('logAnomalyList');
   if (!el) return;
 
@@ -230,28 +299,34 @@ function pushLog(ts, level, msg) {
   if (!wrap) return;
   if (wrap.querySelector('.log-empty')) wrap.innerHTML = '';
 
-  const lvlChar = (level[0] || 'I').toUpperCase();
-  const timeStr = ts ? ts.slice(11, 19) : '';
-  const filter  = $id('logFilter')?.value?.toLowerCase() || '';
-  const levelFilter = $id('logLevelFilter')?.value || 'all';
-  const clean = _cleanLogMsg(msg);
+  const rawLvlChar = (String(level || 'I')[0] || 'I').toUpperCase();
+  const lvlChar = ['E', 'W', 'I', 'D'].includes(rawLvlChar) ? rawLvlChar : 'I';
+  const timeStr = _formatLogTime(ts);
+  const raw = String(msg || '');
+  const clean = _cleanLogMsg(raw);
 
   if (_isRoutineHttpLog(lvlChar, clean)) return;
+  logCounts.total++;
+  logCounts[lvlChar] = (logCounts[lvlChar] || 0) + 1;
+  _setText('logLastEvent', timeStr || 'сейчас');
 
   // Дедупликация: если ключ совпадает — только обновляем счётчик
-  const key = lvlChar + ':' + _normalizeLogKey(msg);
+  const key = lvlChar + ':' + _normalizeLogKey(clean);
   if (key === _lastLogKey && _lastLogEl) {
-    _rememberAnomaly(ts, lvlChar, msg, clean);
+    _rememberAnomaly(ts, lvlChar, raw, clean);
     _lastLogCnt++;
-    let badge = _lastLogEl.querySelector('.log-dup');
+    const body = _lastLogEl.querySelector('.log-body') || _lastLogEl;
+    let badge = body.querySelector('.log-dup');
     if (!badge) {
       badge = document.createElement('span');
       badge.className = 'log-dup' + (lvlChar === 'W' ? ' warn' : '');
-      _lastLogEl.querySelector('.log-msg')?.after(badge);
+      body.appendChild(badge);
     }
     badge.textContent = '×' + (_lastLogCnt + 1);
     const tsEl = _lastLogEl.querySelector('.log-ts');
     if (tsEl) tsEl.textContent = timeStr;
+    _applyLogVisibility(_lastLogEl);
+    renderLogMetrics();
     if (logAutoScroll) wrap.scrollTop = wrap.scrollHeight;
     return;
   }
@@ -259,60 +334,81 @@ function pushLog(ts, level, msg) {
   _lastLogKey = key;
   _lastLogCnt = 0;
 
-  _rememberAnomaly(ts, lvlChar, msg, clean);
+  _rememberAnomaly(ts, lvlChar, raw, clean);
   const line  = document.createElement('div');
   line.className = 'log-line level-' + lvlChar;
-  line.dataset.msg = msg;
+  line.dataset.msg = raw;
+  line.dataset.search = (raw + ' ' + clean).toLowerCase();
   line.dataset.level = lvlChar;
 
   // Длинные сообщения (>120 символов): показываем свёрнутыми, разворачиваем по клику
   const msgCls = clean.length > 120 ? 'log-msg clamp' : 'log-msg';
   const clickable = clean.length > 120 ? ' onclick="this.classList.toggle(\'open\')" title="Нажмите чтобы развернуть"' : '';
-  line.innerHTML = `<span class="log-ts">${esc(timeStr)}</span><span class="log-lvl ${lvlChar}">${esc(lvlChar)}</span><span class="${msgCls}"${clickable}>${_formatLogMsg(clean)}</span>`;
+  line.innerHTML = `<span class="log-ts">${esc(timeStr)}</span><span class="log-lvl ${lvlChar}">${esc(lvlChar)}</span><span class="log-body"><span class="${msgCls}"${clickable}>${_formatLogMsg(clean)}</span></span>`;
 
-  if ((filter && !msg.toLowerCase().includes(filter)) ||
-      (levelFilter !== 'all' && lvlChar !== levelFilter)) {
-    line.style.display = 'none';
-  }
+  _applyLogVisibility(line);
   logLines.push(line);
-  if (logLines.length > 500) { logLines.shift(); wrap.removeChild(wrap.firstChild); }
+  if (logLines.length > LOG_MAX_LINES) {
+    const removed = logLines.shift();
+    removed?.remove();
+  }
   wrap.appendChild(line);
   _lastLogEl = line;
+  renderLogMetrics();
   if (logAutoScroll) wrap.scrollTop = wrap.scrollHeight;
 }
 
 function filterLogs() {
-  const f = $id('logFilter')?.value.toLowerCase() || '';
-  const level = $id('logLevelFilter')?.value || 'all';
-  logLines.forEach(l => {
-    const msgOk = !f || (l.dataset.msg||'').toLowerCase().includes(f);
-    const lvlOk = level === 'all' || l.dataset.level === level;
-    l.style.display = msgOk && lvlOk ? '' : 'none';
+  logLines.forEach(_applyLogVisibility);
+  const clearBtn = document.querySelector('.log-filter-clear');
+  if (clearBtn) clearBtn.classList.toggle('active', !!($id('logFilter')?.value || '').trim());
+  renderLogMetrics();
+}
+
+function clearLogFilter() {
+  const input = $id('logFilter');
+  if (input) input.value = '';
+  filterLogs();
+}
+
+function setLogLevelFilter(level) {
+  const input = $id('logLevelFilter');
+  if (input) input.value = level || 'all';
+  document.querySelectorAll('.log-level-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.level === (level || 'all'));
   });
+  filterLogs();
 }
 
 async function clearLogs() {
   try { await fetch(API + '/events/clear', {method:'POST'}); } catch(_) {}
   logLines = [];
   logAnomalies = [];
+  logCounts = { total: 0, I: 0, W: 0, E: 0, D: 0 };
+  lastLogId = 0;
   _lastLogKey = ''; _lastLogEl = null; _lastLogCnt = 0;
-  $id('logWrap').innerHTML = '<div class="log-empty">лог очищен</div>';
+  const wrap = $id('logWrap');
+  if (wrap) wrap.innerHTML = '<div class="log-empty">лог очищен</div>';
+  _setText('logLastEvent', '—');
   renderAnomalyList();
 }
 
 function toggleLogAuto() {
   logAutoScroll = !logAutoScroll;
-  $id('logAutoBtn').textContent = logAutoScroll ? 'Авто' : 'Пауза';
-  $id('logAutoBtn').classList.toggle('paused', !logAutoScroll);
-  if ($id('logHeroMode')) $id('logHeroMode').textContent = logAutoScroll ? 'AUTO' : 'PAUSE';
+  const btn = $id('logAutoBtn');
+  const label = $id('logAutoText');
+  if (label) label.textContent = logAutoScroll ? 'Авто' : 'Пауза';
+  btn?.classList.toggle('paused', !logAutoScroll);
+  renderLogMetrics();
 }
 
 function exportLogs() {
   const lines = logLines.map(l => {
     const ts  = l.querySelector('.log-ts')?.textContent || '';
     const lvl = l.querySelector('.log-lvl')?.textContent || '';
+    const dup = l.querySelector('.log-dup')?.textContent || '';
     const msg = l.dataset.msg || '';
-    return `[${ts}] ${lvl} ${msg}`;
+    return `[${ts}] ${lvl}${dup ? ' ' + dup : ''} ${msg}`;
   }).join('\n');
   const blob = new Blob([lines], { type: 'text/plain' });
   const url  = URL.createObjectURL(blob);
