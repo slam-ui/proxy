@@ -25,8 +25,10 @@ var (
 var (
 	user32                = windows.NewLazyDLL("user32.dll")
 	dwmAPI                = windows.NewLazyDLL("dwmapi.dll")
+	gdi32dll              = windows.NewLazySystemDLL("gdi32.dll")
 	kernel32dll           = windows.NewLazyDLL("kernel32.dll")
 	setWindowPos          = user32.NewProc("SetWindowPos")
+	setWindowRgn          = user32.NewProc("SetWindowRgn")
 	getWindowRect         = user32.NewProc("GetWindowRect")
 	postMessageW          = user32.NewProc("PostMessageW")
 	sendMessageW          = user32.NewProc("SendMessageW")
@@ -43,6 +45,8 @@ var (
 	isIconic              = user32.NewProc("IsIconic")
 	loadImageW            = user32.NewProc("LoadImageW")
 	pGetModuleHandle      = kernel32dll.NewProc("GetModuleHandleW")
+	createRoundRectRgn    = gdi32dll.NewProc("CreateRoundRectRgn")
+	deleteObject          = gdi32dll.NewProc("DeleteObject")
 )
 
 const (
@@ -62,6 +66,9 @@ const (
 	wmClose            = 0x0010
 	wmNcLButtonDown    = 0x00A1
 	htCaption          = 2
+	htLeft             = 10
+	htTop              = 12
+	htTopLeft          = 13
 	scMinimize         = 0xF020
 	scMaximize         = 0xF030
 	scRestore          = 0xF120
@@ -269,6 +276,8 @@ const (
 	uiDefaultH = 864 // 780 + 20*2 + ~44 (учёт DPI-rounded border + taskbar breathing room)
 	uiMinW     = 440 // жёсткий минимум — не меньше карточки
 	uiMinH     = 820 // жёсткий минимум по высоте
+
+	windowCornerRadius = 32
 )
 
 // windowState хранит позицию и размер окна.
@@ -327,6 +336,42 @@ func isZoomed(hwnd uintptr) bool {
 	wp[0] = uint32(unsafe.Sizeof(wp))
 	getWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp[0])))
 	return wp[2] == showStateMaximized
+}
+
+func applyRoundedWindowRegion(hwnd uintptr) {
+	if hwnd == 0 {
+		return
+	}
+	if isZoomed(hwnd) {
+		setWindowRgn.Call(hwnd, 0, 1)
+		return
+	}
+	var r [4]int32
+	ret, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
+	if ret == 0 {
+		return
+	}
+	w := r[2] - r[0]
+	h := r[3] - r[1]
+	if w <= 0 || h <= 0 {
+		return
+	}
+	hrgn, _, _ := createRoundRectRgn.Call(
+		0,
+		0,
+		uintptr(w+1),
+		uintptr(h+1),
+		windowCornerRadius,
+		windowCornerRadius,
+	)
+	if hrgn == 0 {
+		return
+	}
+	ok, _, _ := setWindowRgn.Call(hwnd, hrgn, 1)
+	if ok == 0 {
+		deleteObject.Call(hrgn)
+	}
+	runtime.KeepAlive(r)
 }
 
 // BringToFront переводит главное окно на передний план.
@@ -455,6 +500,7 @@ func Open(url string) {
 		} else {
 			w.SetSize(uiDefaultW, uiDefaultH, webview2.HintNone)
 		}
+		applyRoundedWindowRegion(rootHwnd)
 
 		// Горутина периодически сохраняет позицию пока окно живо.
 		// Это гарантирует актуальное состояние независимо от способа закрытия:
@@ -472,6 +518,7 @@ func Open(url string) {
 					if s, ok := readRect(rootHwnd); ok {
 						writeState(s)
 					}
+					applyRoundedWindowRegion(rootHwnd)
 				}
 			}
 		}()
@@ -495,6 +542,13 @@ func Open(url string) {
 			releaseCapture.Call()
 			postMessageW.Call(rootHwnd, wmNcLButtonDown, htCaption, 0)
 		})
+		w.Bind("windowResize", func(ht int) {
+			// Инициирует изменение размера окна через WM_NCLBUTTONDOWN.
+			// WebView2 перекрывает клиентскую область поверх resize-зон WS_THICKFRAME
+			// на левом и верхнем краях — JS-оверлеи перехватывают эти клики и маршрутизируют сюда.
+			releaseCapture.Call()
+			postMessageW.Call(rootHwnd, wmNcLButtonDown, uintptr(ht), 0)
+		})
 		w.Bind("windowMinimize", func() {
 			postMessageW.Call(rootHwnd, wmSysCommand, scMinimize, 0)
 		})
@@ -504,6 +558,9 @@ func Open(url string) {
 			} else {
 				postMessageW.Call(rootHwnd, wmSysCommand, scMaximize, 0)
 			}
+			time.AfterFunc(150*time.Millisecond, func() {
+				applyRoundedWindowRegion(rootHwnd)
+			})
 		})
 
 		w.Navigate(url)

@@ -1,0 +1,179 @@
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+*{letter-spacing:0!important}
+:root{
+  --bg:#070713;
+  --s1:#0c0c1d;
+  --s2:#10102a;
+  --s3:#15153a;
+  --g0:rgba(255,255,255,0.055);
+  --g1:rgba(255,255,255,0.09);
+  --g2:rgba(255,255,255,0.14);
+  --on:#2de89a;
+  --on2:rgba(45,232,154,0.18);
+  --on3:rgba(45,232,154,0.08);
+  --acc:#38c8ff;
+  --acc2:rgba(56,200,255,0.16);
+  --acc3:rgba(56,200,255,0.08);
+  --off:#ff5074;
+  --off2:rgba(255,80,116,0.16);
+  --warn:#ffbb2e;
+  --text:#eaf2ff;
+  --dim:rgba(221,232,255,0.72);
+  --muted:rgba(221,232,255,0.52);
+  --hairline:rgba(255,255,255,0.10);
+  --hairline2:rgba(255,255,255,0.18);
+  --grid:rgba(255,255,255,0.02);
+  --body-g1:rgba(56,200,255,0.04);
+  --body-g2:rgba(45,232,154,0.03);
+  --font:'Inter','Segoe UI','Arial',sans-serif;
+  --mono:'JetBrains Mono','Consolas','Courier New',monospace;
+  --r:10px;--r-lg:16px;--r-xl:22px;
+}
+html,body{
+  width:100%;height:100%;
+  background:var(--bg);
+  font-family:var(--font);-webkit-font-smoothing:antialiased;color:var(--text);
+  overflow:hidden;
+}
+body{
+  background:
+    radial-gradient(ellipse 80% 60% at 30% 20%,var(--body-g1) 0%,transparent 60%),
+    radial-gradient(ellipse 60% 50% at 70% 80%,var(--body-g2) 0%,transparent 60%),
+    var(--bg);
+}
+
+/* ── Light theme overrides ── */
+html[data-theme="light"] body{
+  background:var(--bg);
+}
+html[data-theme="light"] .app::before{
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:32px 32px;
+  opacity:0.5;
+}
+html[data-theme="light"] .srv-panel{
+  background:rgba(245,247,251,0.97);
+  backdrop-filter:blur(20px);
+}
+html[data-theme="light"] .nav{
+  background:rgba(245,247,251,0.96);
+  border-radius:18px;
+  margin:0 14px 14px;
+  border:0.5px solid rgba(15,23,42,0.12);
+  box-shadow:0 8px 24px rgba(15,23,42,0.10),inset 0 1px 0 rgba(255,255,255,0.8);
+}
+html[data-theme="light"] .nav-wrap{
+  background:transparent;
+}
+html[data-theme="light"] .hero-eyebrow{color:rgba(30,41,59,0.8)}
+html[data-theme="light"] .hero-dots{color:rgba(30,41,59,0.6)}
+html[data-theme="light"] .home-sheet,html[data-theme="light"] .stats{background:#f1f5f9}
+html[data-theme="light"] .conn-card{background:#f8fafc}
+html[data-theme="light"] .toast{
+  background:rgba(15,23,42,0.9);
+  color:#f1f5f9;
+}
+html[data-theme="light"] .add-rule-modal{
+  background:var(--s1);
+  border-color:var(--hairline2);
+}
+html[data-theme="light"] .add-rule-modal-ov{
+  background:rgba(100,116,139,0.35);
+}
+
+/* ═══ APP SHELL ═══ */
+.app{
+  width:100%;height:100vh;
+  background:linear-gradient(160deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%);
+  border:none;
+  border-radius:0;
+  overflow:hidden;
+  display:flex;flex-direction:column;
+  position:relative;
+  animation:mount 0.4s cubic-bezier(0.22,1,0.36,1) both;
+}
+@keyframes mount{from{opacity:0}to{opacity:1}}
+
+.app::before{
+  content:'';position:absolute;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:32px 32px;
+}
+
+.bg-aura{
+  position:absolute;inset:0;z-index:0;pointer-events:none;
+  transition:background 1.4s ease;
+}
+.bg-aura.on{background:radial-gradient(ellipse 90% 35% at 50% 0%,rgba(45,232,154,0.12) 0%,transparent 100%)}
+.bg-aura.off{background:radial-gradient(ellipse 90% 35% at 50% 0%,rgba(255,80,116,0.10) 0%,transparent 100%)}
+.bg-aura.warm{background:radial-gradient(ellipse 90% 35% at 50% 0%,rgba(255,187,46,0.12) 0%,transparent 100%)}
+
+.layer{position:relative;z-index:1}
+
+/* ═══ HEADER ═══ */
+.header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:clamp(12px,2.2vh,22px) clamp(14px,2.5vw,24px) 0;flex-shrink:0;
+}
+.logo{display:flex;align-items:center;gap:9px;min-width:0;flex-shrink:1}
+.logo-gem{
+  width:30px;height:30px;border-radius:9px;
+  background:#2f6df2;
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;font-weight:700;color:#020714;letter-spacing:-0.5px;
+  box-shadow:0 0 16px rgba(47,109,242,0.42);
+}
+.app-logo{
+  border-radius:26%;
+  overflow:hidden;
+  background:#2f6df2;
+  box-shadow:0 0 16px rgba(47,109,242,0.42),inset 0 1px 0 rgba(255,255,255,0.18);
+}
+.app-logo svg{width:100%;height:100%;display:block}
+.logo-name{font-size:14px;font-weight:700;letter-spacing:0.18em;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.logo-ver{font-size:8px;color:var(--muted);font-family:var(--mono);align-self:flex-end;margin-bottom:1px;margin-left:2px}
+.hbtn{
+  background:var(--g0);border:0.5px solid var(--hairline);
+  border-radius:8px;padding:5px 10px;
+  font-size:9px;font-family:var(--font);letter-spacing:0.08em;
+  color:var(--muted);cursor:pointer;transition:all 0.2s;
+}
+.hbtn:hover{background:var(--g1);color:var(--text);border-color:var(--hairline2)}
+.hbtn:disabled{opacity:0.4;cursor:not-allowed}
+.header-r{display:flex;gap:6px;align-items:center;min-width:0;justify-content:flex-end}
+#srvBtn{max-width:96px;overflow:hidden;text-overflow:ellipsis}
+
+/* ── Window drag region ── */
+.header{-webkit-app-region:drag;app-region:drag}
+.header *{-webkit-app-region:no-drag;app-region:no-drag}
+
+/* ── Window control buttons ── */
+.wctrl{
+  display:flex;align-items:center;gap:4px;
+  margin-left:4px;
+}
+.wbtn{
+  width:26px;height:26px;border-radius:8px;
+  background:var(--g0);border:0.5px solid var(--hairline);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;transition:all 0.18s;color:var(--muted);
+  font-size:10px;line-height:1;
+  -webkit-app-region:no-drag;app-region:no-drag;
+}
+.wbtn:hover{background:var(--g2);border-color:var(--hairline2);color:var(--text)}
+.wbtn.close:hover{background:rgba(255,80,116,0.18);border-color:rgba(255,80,116,0.35);color:var(--off)}
+
+/* Warm indicator */
+.warm-dot{
+  width:7px;height:7px;border-radius:50%;
+  background:var(--warn);
+  box-shadow:0 0 8px var(--warn);
+  animation:wdot 1.2s ease-in-out infinite;
+  display:none;
+}
+.warm-dot.vis{display:block}
+@keyframes wdot{0%,100%{opacity:1}50%{opacity:0.3}}

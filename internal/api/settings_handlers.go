@@ -41,13 +41,17 @@ func SetupSettingsRoutes(s *Server) {
 // to change without rebuilding routing rules.
 func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ReconnectIntervalMin *int             `json:"reconnect_interval_min"`
-		KeepaliveEnabled     *bool            `json:"keepalive_enabled"`
-		KeepaliveIntervalSec *int             `json:"keepalive_interval_sec"`
-		Schedule             *config.Schedule `json:"schedule"`
-		MemoryLimitMB        *uint64          `json:"memory_limit_mb"`
-		StartProxyOnLaunch   *bool            `json:"start_proxy_on_launch"`
-		ManualSingBoxConfig  *bool            `json:"manual_singbox_config"`
+		ReconnectIntervalMin *int                              `json:"reconnect_interval_min"`
+		KeepaliveEnabled     *bool                             `json:"keepalive_enabled"`
+		KeepaliveIntervalSec *int                              `json:"keepalive_interval_sec"`
+		Schedule             *config.Schedule                  `json:"schedule"`
+		MemoryLimitMB        *uint64                           `json:"memory_limit_mb"`
+		StartProxyOnLaunch   *bool                             `json:"start_proxy_on_launch"`
+		ManualSingBoxConfig  *bool                             `json:"manual_singbox_config"`
+		SmartFailover        *config.SmartFailoverSettings     `json:"smart_failover"`
+		DNSGuard             *config.DNSGuardSettings          `json:"dns_guard"`
+		NetworkProtection    *config.NetworkProtectionSettings `json:"network_protection"`
+		TrafficBudget        *config.TrafficBudgetSettings     `json:"traffic_budget"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		h.server.respondError(w, http.StatusBadRequest, "invalid body")
@@ -88,6 +92,18 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	if body.ManualSingBoxConfig != nil {
 		settings.ManualSingBoxConfig = *body.ManualSingBoxConfig
 	}
+	if body.SmartFailover != nil {
+		settings.SmartFailover = *body.SmartFailover
+	}
+	if body.DNSGuard != nil {
+		settings.DNSGuard = *body.DNSGuard
+	}
+	if body.NetworkProtection != nil {
+		settings.NetworkProtection = *body.NetworkProtection
+	}
+	if body.TrafficBudget != nil {
+		settings.TrafficBudget = *body.TrafficBudget
+	}
 	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -103,16 +119,20 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 
 // SettingsResponse — состояние всех настроек приложения.
 type SettingsResponse struct {
-	Autorun              bool            `json:"autorun"`               // включён ли автозапуск при входе в Windows
-	KillSwitch           bool            `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
-	ProxyGuard           bool            `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
-	StartProxyOnLaunch   bool            `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
-	ReconnectIntervalMin int             `json:"reconnect_interval_min"`
-	KeepaliveEnabled     bool            `json:"keepalive_enabled"`
-	KeepaliveIntervalSec int             `json:"keepalive_interval_sec"`
-	Schedule             config.Schedule `json:"schedule"`
-	MemoryLimitMB        uint64          `json:"memory_limit_mb"`
-	ManualSingBoxConfig  bool            `json:"manual_singbox_config"`
+	Autorun              bool                             `json:"autorun"`               // включён ли автозапуск при входе в Windows
+	KillSwitch           bool                             `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
+	ProxyGuard           bool                             `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
+	StartProxyOnLaunch   bool                             `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
+	ReconnectIntervalMin int                              `json:"reconnect_interval_min"`
+	KeepaliveEnabled     bool                             `json:"keepalive_enabled"`
+	KeepaliveIntervalSec int                              `json:"keepalive_interval_sec"`
+	Schedule             config.Schedule                  `json:"schedule"`
+	MemoryLimitMB        uint64                           `json:"memory_limit_mb"`
+	ManualSingBoxConfig  bool                             `json:"manual_singbox_config"`
+	SmartFailover        config.SmartFailoverSettings     `json:"smart_failover"`
+	DNSGuard             config.DNSGuardSettings          `json:"dns_guard"`
+	NetworkProtection    config.NetworkProtectionSettings `json:"network_protection"`
+	TrafficBudget        config.TrafficBudgetSettings     `json:"traffic_budget"`
 }
 
 // handleGetSettings GET /api/settings
@@ -133,6 +153,10 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		Schedule:             appSettings.Schedule,
 		MemoryLimitMB:        appSettings.MemoryLimitMB,
 		ManualSingBoxConfig:  appSettings.ManualSingBoxConfig,
+		SmartFailover:        appSettings.SmartFailover,
+		DNSGuard:             appSettings.DNSGuard,
+		NetworkProtection:    appSettings.NetworkProtection,
+		TrafficBudget:        appSettings.TrafficBudget,
 	})
 }
 
