@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -199,6 +198,9 @@ func parseImportedRules(format, content string, action config.RuleAction) ([]con
 	if action == "" {
 		action = config.ActionProxy
 	}
+	if !config.IsValidRuleAction(action) {
+		return nil, fmt.Errorf("action: proxy | direct | block")
+	}
 	var lines []string
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "text":
@@ -211,11 +213,11 @@ func parseImportedRules(format, content string, action config.RuleAction) ([]con
 			}
 		}
 	case "gfwlist":
-		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(content))
+		decoded, err := base64DecodeSubscription(content)
 		if err != nil {
 			return nil, err
 		}
-		lines = strings.Split(string(decoded), "\n")
+		lines = strings.Split(decoded, "\n")
 	default:
 		return nil, fmt.Errorf("unsupported format")
 	}

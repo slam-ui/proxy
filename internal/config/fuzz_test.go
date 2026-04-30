@@ -38,6 +38,7 @@ func FuzzNormalizeRuleValue(f *testing.F) {
 		// URL-префиксы которые должны сниматься
 		"https://google.com",
 		"http://example.com",
+		"HTTPS://Example.COM/path?query=1",
 		"https://google.com/path?query=1",
 		"//example.com",
 		// IPv6
@@ -380,9 +381,9 @@ func FuzzSanitizeRoutingConfig(f *testing.F) {
 		cfg := &RoutingConfig{
 			DefaultAction: RuleAction(defAction),
 			Rules: []RoutingRule{
-				{Value: v1, Type: RuleType(t1), Action: ActionProxy},
-				{Value: v2, Type: RuleType(t2), Action: ActionDirect},
-				{Value: v3, Type: RuleType(t3), Action: ActionBlock},
+				{Value: v1, Type: RuleType(t1), Action: RuleAction(defAction)},
+				{Value: v2, Type: RuleType(t2), Action: RuleAction(t1)},
+				{Value: v3, Type: RuleType(t3), Action: RuleAction(t2)},
 			},
 		}
 
@@ -399,6 +400,13 @@ func FuzzSanitizeRoutingConfig(f *testing.F) {
 				t.Errorf("SanitizeRoutingConfig: правило[%d] Value=%q имеет невалидный тип %q",
 					i, rule.Value, rule.Type)
 			}
+			if !IsValidRuleAction(rule.Action) {
+				t.Errorf("SanitizeRoutingConfig: правило[%d] Value=%q имеет невалидное действие %q",
+					i, rule.Value, rule.Action)
+			}
+		}
+		if !IsValidRuleAction(cfg.DefaultAction) {
+			t.Errorf("SanitizeRoutingConfig: DefaultAction=%q невалиден", cfg.DefaultAction)
 		}
 	})
 }

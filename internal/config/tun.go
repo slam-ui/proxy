@@ -172,8 +172,13 @@ func NormalizeRuleValue(val string) string {
 		return lower
 	}
 
-	val = strings.TrimPrefix(val, "https://")
-	val = strings.TrimPrefix(val, "http://")
+	lower = strings.ToLower(val)
+	switch {
+	case strings.HasPrefix(lower, "https://"):
+		val = val[len("https://"):]
+	case strings.HasPrefix(lower, "http://"):
+		val = val[len("http://"):]
+	}
 	val = strings.TrimPrefix(val, "//")
 
 	// Не трогаем CIDR-нотацию (10.0.0.0/8, 2001:db8::/32) —
@@ -215,9 +220,15 @@ func NormalizeRuleValue(val string) string {
 // нормализует значения (убирает URL-схемы, порты, пути из domain-правил).
 // Вызывается при загрузке — автоматически мигрирует старые правила.
 func SanitizeRoutingConfig(cfg *RoutingConfig) {
+	if cfg == nil {
+		return
+	}
 	validTypes := map[RuleType]bool{
 		RuleTypeProcess: true, RuleTypeDomain: true,
 		RuleTypeIP: true, RuleTypeGeosite: true,
+	}
+	if !IsValidRuleAction(cfg.DefaultAction) {
+		cfg.DefaultAction = ActionProxy
 	}
 	for i := range cfg.Rules {
 		rule := &cfg.Rules[i]
@@ -246,12 +257,27 @@ func SanitizeRoutingConfig(cfg *RoutingConfig) {
 		if rule.Type == RuleTypeGeosite && detectedFromOriginal == RuleTypeProcess {
 			rule.Type = RuleTypeProcess
 		}
+		if !IsValidRuleAction(rule.Action) {
+			rule.Action = ActionProxy
+		}
+	}
+}
+
+func IsValidRuleAction(action RuleAction) bool {
+	switch action {
+	case ActionProxy, ActionDirect, ActionBlock:
+		return true
+	default:
+		return false
 	}
 }
 
 // SaveRoutingConfig атомарно сохраняет конфиг: пишет во временный файл,
 // затем переименовывает — защита от порчи при аварийном завершении
 func SaveRoutingConfig(path string, cfg *RoutingConfig) error {
+	if cfg != nil {
+		SanitizeRoutingConfig(cfg)
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err

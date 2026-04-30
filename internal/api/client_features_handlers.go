@@ -545,14 +545,26 @@ func (s *Server) handleTrafficBudgetSet(w http.ResponseWriter, r *http.Request) 
 }
 
 func budgetPct(bytes int64, limitMB int64) int {
-	if limitMB <= 0 {
+	if limitMB <= 0 || bytes <= 0 {
 		return 0
 	}
-	return int((bytes * 100) / (limitMB * 1024 * 1024))
+	limitBytes := budgetLimitBytes(limitMB)
+	whole := (bytes / limitBytes) * 100
+	fraction := ((bytes % limitBytes) * 100) / limitBytes
+	return int(whole + fraction)
 }
 
 func budgetExceeded(bytes int64, limitMB int64) bool {
-	return limitMB > 0 && bytes >= limitMB*1024*1024
+	return limitMB > 0 && bytes >= budgetLimitBytes(limitMB)
+}
+
+func budgetLimitBytes(limitMB int64) int64 {
+	const bytesPerMB int64 = 1024 * 1024
+	const maxInt64 = int64(1<<63 - 1)
+	if limitMB > maxInt64/bytesPerMB {
+		return maxInt64
+	}
+	return limitMB * bytesPerMB
 }
 
 func (s *Server) handleIntegrityCheck(w http.ResponseWriter, _ *http.Request) {

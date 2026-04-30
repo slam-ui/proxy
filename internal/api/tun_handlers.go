@@ -131,7 +131,7 @@ func waitForSingBoxReady(ctx context.Context, log logger.Logger) error {
 // BUG FIX #18: валидация action дублировалась в 4 местах (handleAddRule,
 // handleBulkReplaceRules, handleSetDefault, handleImport). Вынесена в функцию.
 func isValidAction(a config.RuleAction) bool {
-	return a == config.ActionProxy || a == config.ActionDirect || a == config.ActionBlock
+	return config.IsValidRuleAction(a)
 }
 
 // applyState хранит состояние последнего применения правил

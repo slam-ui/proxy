@@ -500,6 +500,78 @@ func TestProfiles_SaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestProfiles_SaveNormalizesRouting(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(old)
+
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	SetupProfileRoutes(srv)
+	srv.FinalizeRoutes()
+
+	payload := map[string]interface{}{
+		"name": "Normalize",
+		"routing": config.RoutingConfig{
+			Rules: []config.RoutingRule{
+				{Value: "HTTPS://Example.COM/path?q=1", Type: "unknown", Action: config.ActionDirect},
+			},
+		},
+	}
+	w := postJSON(t, srv.router, "/api/profiles", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/profiles = %d, body: %s", w.Code, w.Body)
+	}
+
+	w = getJSON(t, srv.router, "/api/profiles/Normalize")
+	var p Profile
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatalf("decode profile: %v", err)
+	}
+	if p.Routing.DefaultAction != config.ActionProxy {
+		t.Errorf("DefaultAction = %q, want proxy", p.Routing.DefaultAction)
+	}
+	if len(p.Routing.Rules) != 1 {
+		t.Fatalf("rules len = %d, want 1", len(p.Routing.Rules))
+	}
+	rule := p.Routing.Rules[0]
+	if rule.Value != "example.com" || rule.Type != config.RuleTypeDomain || rule.Action != config.ActionDirect {
+		t.Fatalf("rule after save = %+v, want normalized domain/direct", rule)
+	}
+}
+
+func TestProfiles_SaveInvalidRoutingReturns400(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(old)
+
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	SetupProfileRoutes(srv)
+	srv.FinalizeRoutes()
+
+	w := postJSON(t, srv.router, "/api/profiles", map[string]interface{}{
+		"name": "Bad",
+		"routing": config.RoutingConfig{
+			DefaultAction: config.ActionProxy,
+			Rules: []config.RoutingRule{
+				{Value: "example.com", Type: config.RuleTypeDomain, Action: "invalid"},
+			},
+		},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid profile routing = %d, want 400; body: %s", w.Code, w.Body)
+	}
+}
+
 func TestProfiles_ApplyReplacesTunRules(t *testing.T) {
 	srv, _, cleanup := buildTunServer(t)
 	defer cleanup()

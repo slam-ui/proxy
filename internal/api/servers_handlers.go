@@ -26,12 +26,40 @@ import (
 // noProxyTransport — HTTP транспорт без системного прокси.
 // C-5: используется при загрузке subscription URL чтобы обойти возможные петли.
 var noProxyTransport = &http.Transport{
-	Proxy:              nil,
-	DisableCompression: true,
-	DialContext: (&net.Dialer{
-		Timeout: 10 * time.Second,
-	}).DialContext,
+	Proxy:               nil,
+	DisableCompression:  true,
+	DialContext:         safeSubscriptionDialContext,
 	TLSHandshakeTimeout: 10 * time.Second,
+}
+
+func safeSubscriptionDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	var lastErr error
+	for _, resolved := range ips {
+		ip := resolved.IP
+		if isPrivateOrLoopback(ip) {
+			lastErr = fmt.Errorf("subscription host resolved to private/local address %s", ip)
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("subscription host has no usable address")
 }
 
 func (h *ServersHandlers) AutoConnect() {
@@ -851,15 +879,38 @@ func isPrivateOrLoopback(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		ip = ip4
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsUnspecified()
 }
 
 // fetchVLESSFromURL загружает URL и возвращает первый найденный VLESS URI.
 // Порядок разбора: 1) построчный поиск vless://, 2) Base64-decode (V2ray subscription).
 func fetchVLESSFromURL(rawURL string) (string, error) {
-	client := &http.Client{
+	return fetchVLESSFromURLWithClient(rawURL, newSubscriptionHTTPClient(noProxyTransport))
+}
+
+func newSubscriptionHTTPClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
 		Timeout:   15 * time.Second,
-		Transport: noProxyTransport,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("слишком много redirect")
+			}
+			if err := validateSubscriptionURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect запрещён: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+func fetchVLESSFromURLWithClient(rawURL string, client *http.Client) (string, error) {
+	if client == nil {
+		client = newSubscriptionHTTPClient(noProxyTransport)
 	}
 	resp, err := client.Get(rawURL)
 	if err != nil {
@@ -895,7 +946,7 @@ func fetchVLESSFromURL(rawURL string) (string, error) {
 // findFirstVLESS возвращает первую строку начинающуюся с vless://, или "".
 func findFirstVLESS(content string) string {
 	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
 		if strings.HasPrefix(line, "vless://") {
 			return line
 		}
@@ -911,6 +962,7 @@ func base64DecodeSubscription(content string) (string, error) {
 		base64.StdEncoding,
 		base64.URLEncoding,
 		base64.RawStdEncoding,
+		base64.RawURLEncoding,
 	} {
 		if b, err := enc.DecodeString(content); err == nil {
 			return string(b), nil

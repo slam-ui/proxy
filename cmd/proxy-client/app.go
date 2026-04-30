@@ -883,27 +883,36 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		}
 
 		// ОПТИМИЗАЦИЯ: при чистом завершении (CleanShutdownFile) пропускаем
-		// RemoveStaleTunAdapter (taskkill + sc stop + pnputil + reg delete) — ~3-5с.
-		// PollUntilFree сразу вернётся (путь 0: gap=0, settle=0).
-		// При грязном старте (краш, kill -9) — полная очистка как раньше.
-		_, cleanShutdown := os.Stat(wintun.CleanShutdownFile)
-		dirtyStart := cleanShutdown != nil
-		if cleanShutdown != nil {
-			if _, stopErr := os.Stat(wintun.StopFile); os.IsNotExist(stopErr) &&
-				!wintun.StartupCleanupNeeded(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName) {
-				dirtyStart = false
-			} else {
-				// CleanShutdownFile нет → грязный старт — нужна полная очистка
-				// ForceDeleteAdapter вызывается внутри RemoveStaleTunAdapter ДО sc stop wintun.
-				// После sc stop wintun.dll не может связаться с драйвером → WintunOpenAdapter
-				// возвращает NULL не потому что адаптер свободен, а потому что драйвер выгружен.
-				// Повторный вызов ForceDeleteAdapter здесь давал ложный true → FastDeleteFile →
-				// PollUntilFree использовал 3с settle вместо 60с gap → sing-box стартовал пока
-				// stale kernel-объект ещё жив → FATAL "Cannot create a file when that file already exists".
-				wintun.RemoveStaleTunAdapterCtx(a.lifecycleCtx, a.mainLogger)
+		// RemoveStaleTunAdapter (taskkill + sc stop + pnputil + reg delete) — ~3-5с,
+		// но только если StartupCleanupNeeded не видит hidden/orphan Wintun-хвосты.
+		// Иначе clean-маркер мог остаться от старой версии, а stale SWD\WINTUN device
+		// всё равно приведёт к FATAL "Cannot create a file when that file already exists".
+		_, cleanErr := os.Stat(wintun.CleanShutdownFile)
+		cleanShutdown := cleanErr == nil
+		stopExists := false
+		if _, stopErr := os.Stat(wintun.StopFile); stopErr == nil {
+			stopExists = true
+		}
+		cleanupNeeded := stopExists || wintun.StartupCleanupNeeded(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+		dirtyStart := cleanupNeeded
+		if cleanupNeeded {
+			if cleanShutdown {
+				a.mainLogger.Warn("wintun: clean shutdown marker есть, но найден stale адаптер — выполняем полную очистку")
 			}
-		} else {
+			// Записываем свежий stop timestamp: PollUntilFree и UI ETA должны считать ожидание
+			// от текущей очистки, а не от старого/отсутствующего маркера.
+			wintun.RecordStop()
+			// ForceDeleteAdapter вызывается внутри RemoveStaleTunAdapter ДО sc stop wintun.
+			// После sc stop wintun.dll не может связаться с драйвером → WintunOpenAdapter
+			// возвращает NULL не потому что адаптер свободен, а потому что драйвер выгружен.
+			// Повторный вызов ForceDeleteAdapter здесь давал ложный true → FastDeleteFile →
+			// PollUntilFree использовал 3с settle вместо 60с gap → sing-box стартовал пока
+			// stale kernel-объект ещё жив → FATAL "Cannot create a file when that file already exists".
+			wintun.RemoveStaleTunAdapterCtx(a.lifecycleCtx, a.mainLogger)
+		} else if cleanShutdown {
 			a.mainLogger.Info("wintun: чистое завершение — пропускаем RemoveStaleTunAdapter")
+		} else {
+			dirtyStart = false
 		}
 		wintun.PollUntilFree(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
 		sendWintunReady(startupPrepResult{dirtyStart: dirtyStart})
