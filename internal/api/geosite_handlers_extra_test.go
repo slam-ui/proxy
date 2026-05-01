@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"proxyclient/internal/config"
@@ -74,5 +75,38 @@ func TestGeositeList_UsesSRSHeaderInsteadOfSize(t *testing.T) {
 	}
 	if item := items["localbad"]; item.Available {
 		t.Fatalf("localbad item = %+v, want unavailable HTML", item)
+	}
+}
+
+func TestHandleGeositeDownloadRejectsUnknownFields(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/geosite/download", strings.NewReader(`{"name":"youtube","unexpected":true}`))
+	w := httptest.NewRecorder()
+	srv.handleGeositeDownload(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleGeositeDownloadRejectsOversizedBody(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+
+	body := `{"name":"` + strings.Repeat("a", maxGeositeDownloadRequestBytes) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/geosite/download", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleGeositeDownload(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
 }
