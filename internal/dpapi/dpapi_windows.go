@@ -33,9 +33,10 @@ func freeBlob(blob *dataBlob, zero bool) {
 		return
 	}
 	if zero && blob.cbData > 0 {
-		clear(unsafe.Slice(blob.pbData, blob.cbData))
+		plain := unsafe.Slice(blob.pbData, blob.cbData) // #nosec G103 -- DPAPI returned this native buffer; clear it before LocalFree.
+		clear(plain)
 	}
-	windows.LocalFree(windows.Handle(unsafe.Pointer(blob.pbData)))
+	_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(blob.pbData))) // #nosec G103 -- pointer is the DPAPI LocalAlloc buffer.
 }
 
 func Encrypt(data []byte) ([]byte, error) {
