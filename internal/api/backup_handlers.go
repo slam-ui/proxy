@@ -196,7 +196,11 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 	restored := 0
 	skipped := 0
 	overwrite := r.FormValue("overwrite") == "true"
+	restoredRouting := false
+	applyRestoredRouting := false
+	routingRestoreName := filepath.Clean(filepath.Join(config.DataDir, "routing.json"))
 
+	s.routingOpMu.Lock()
 	for _, file := range zr.File {
 		if file.FileInfo().IsDir() {
 			continue
@@ -267,25 +271,33 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 
 		if err := fileutil.WriteAtomic(absDestPath, data, 0644); err == nil {
 			restored++
+			if filepath.Clean(cleanName) == routingRestoreName {
+				restoredRouting = true
+			}
 		}
 	}
 
 	// CHANGE-16: После восстановления файлов перезагружаем in-memory routing из disk
 	// и применяем конфиг — иначе tunHandlers продолжает работать со старыми правилами.
 	// Условие: tunHandlers инициализирован (TUN запущен) и routing.json был среди файлов.
-	if s.tunHandlers != nil {
+	if s.tunHandlers != nil && restoredRouting {
 		routingPath := config.DataDir + "/routing.json"
 		if newRouting, err := config.LoadRoutingConfig(routingPath); err == nil {
 			s.tunHandlers.mu.Lock()
 			s.tunHandlers.routing = newRouting
 			s.tunHandlers.mu.Unlock()
-			if applyErr := s.tunHandlers.TriggerApply(); applyErr != nil {
-				s.logger.Warn("handleBackupRestore: TriggerApply: %v", applyErr)
-			} else {
-				s.logger.Info("handleBackupRestore: routing перезагружен и применён из восстановлённого backup")
-			}
+			applyRestoredRouting = true
 		} else {
 			s.logger.Warn("handleBackupRestore: не удалось загрузить routing после restore: %v", err)
+		}
+	}
+	s.routingOpMu.Unlock()
+
+	if applyRestoredRouting {
+		if applyErr := s.tunHandlers.TriggerApply(); applyErr != nil {
+			s.logger.Warn("handleBackupRestore: TriggerApply: %v", applyErr)
+		} else {
+			s.logger.Info("handleBackupRestore: routing перезагружен и применён из восстановлённого backup")
 		}
 	}
 

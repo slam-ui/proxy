@@ -95,6 +95,7 @@ type Server struct {
 	config       Config
 	configMu     sync.RWMutex
 	proxyOpMu    sync.Mutex
+	routingOpMu  sync.Mutex
 	router       *mux.Router
 	httpServer   *http.Server
 	logger       logger.Logger
@@ -281,8 +282,8 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	}
 
 	api := s.router.PathPrefix("/api").Subrouter()
-	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET")
-	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST")
+	api.HandleFunc("/geosite", s.handleGeositeList).Methods("GET", "OPTIONS")
+	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST", "OPTIONS")
 	api.HandleFunc("/singbox-config", s.handleGetSingBoxConfig).Methods("GET", "OPTIONS")
 	api.HandleFunc("/singbox-config", s.handleSetSingBoxConfig).Methods("POST", "OPTIONS")
 	// B-8: Backup и restore endpoints

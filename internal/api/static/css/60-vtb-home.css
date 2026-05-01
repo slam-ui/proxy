@@ -128,7 +128,11 @@ body{
   font-size:16px;line-height:1.25;font-weight:600;
   color:rgba(255,255,255,0.88);margin-bottom:13px;
 }
-.hero-status-row{display:flex;align-items:center;gap:14px;flex-wrap:nowrap}
+.hero-status-row{
+  display:flex;align-items:center;gap:14px;flex-wrap:nowrap;
+  width:fit-content;max-width:100%;align-self:flex-start;
+  outline:0!important;box-shadow:none!important;
+}
 .hero-dots{margin-top:15px;font-size:18px;line-height:1;color:#fff;letter-spacing:0!important}
 .srv-pill{
   width:min(100%,420px);
@@ -148,16 +152,25 @@ body{
 .srv-meta{color:rgba(255,255,255,0.66)}
 /* ── Power button = app icon next to status text ── */
 .orb-stage{
-  width:52px;height:52px;padding:0;border-radius:16px;
-  background:rgba(255,255,255,0.16);border:1px solid rgba(255,255,255,0.14);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,0.14),0 8px 22px rgba(12,20,75,0.22);
+  --orb-radius:16px;
+  width:52px;height:52px;padding:0;border-radius:var(--orb-radius);
+  appearance:none;-webkit-appearance:none;
+  background:rgba(255,255,255,0.16);border:0!important;outline:0!important;
+  color:#fff;font:inherit;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.14);
   backdrop-filter:blur(18px);cursor:pointer;
   display:flex;align-items:center;justify-content:center;flex-shrink:0;
-  transition:background 0.2s,transform 0.15s;
+  overflow:visible;background-clip:padding-box;
+  transition:background 0.2s,box-shadow 0.2s;
   -webkit-tap-highlight-color:transparent;
 }
-.orb-stage:hover{background:rgba(255,255,255,0.22);transform:scale(1.06)}
-.orb-stage:active{transform:scale(0.94)!important}
+.orb-stage:hover{background:rgba(255,255,255,0.22);transform:none}
+.orb-stage:focus{outline:0}
+.orb-stage:focus-visible{
+  outline:0!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.14);
+}
+.orb-stage:active{transform:none!important}
 .orb-halo,.orb-halo2,.orb-halo3{display:none}
 .orb{
   inset:0;border-radius:0;background:transparent;border:0;
@@ -230,7 +243,7 @@ body{
 }
 .chart-card{
   display:block;
-  min-height:168px;
+  min-height:190px;
   margin:0 clamp(28px,5vw,42px) 22px;
   border:0;
   border-radius:28px;
@@ -240,7 +253,8 @@ body{
   box-shadow:0 18px 42px rgba(28,21,128,0.24);
 }
 .chart-card::before{
-  content:'%';
+  content:none;
+  display:none;
   position:absolute;
   right:24px;
   top:28px;
@@ -252,7 +266,8 @@ body{
   text-shadow:0 10px 20px rgba(24,38,130,0.28);
 }
 .chart-card::after{
-  content:'TUN';
+  content:none;
+  display:none;
   position:absolute;
   right:28px;
   bottom:26px;
@@ -308,8 +323,8 @@ body{
 canvas#sc{
   position:relative;
   z-index:2;
-  height:72px;
-  margin-top:4px;
+  height:96px;
+  margin-top:6px;
   opacity:1;
 }
 .stats{

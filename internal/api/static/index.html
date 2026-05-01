@@ -136,7 +136,7 @@
     <div class="hero-info">
       <div class="hero-eyebrow">Туннель SafeSky</div>
       <div class="hero-status-row">
-        <div class="orb-stage off" id="orbStage" onclick="toggle()">
+        <button class="orb-stage off" id="orbStage" type="button" onclick="toggle()" aria-label="Включить или отключить туннель">
           <div class="orb">
             <svg class="power-logo-svg" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M49 124C66 84 99 61 128 61s62 23 79 63" fill="none" stroke="#fff" stroke-width="34" stroke-linecap="butt"/>
@@ -144,7 +144,7 @@
               <circle cx="128" cy="178" r="18" fill="#fff"/>
             </svg>
           </div>
-        </div>
+        </button>
         <div class="status-lbl off" id="slbl">ОТКЛЮЧЁН</div>
       </div>
       <div class="srv-pill" onclick="toggleSrv()">
@@ -206,7 +206,7 @@
   <!-- ── Speed Chart ── -->
   <div class="chart-card layer">
     <div class="chart-top">
-      <div class="chart-ttl">Скорость трафика</div>
+      <div class="chart-ttl">Трафик</div>
       <div class="chart-nums">
         <div class="cn-item">
           <span class="cn-dir">↑</span>
@@ -218,6 +218,7 @@
           <span class="cn-val d" id="dnv">0.0</span>
           <span class="cn-unit" id="dnUnit">MB/s</span>
         </div>
+        <div class="cn-item cn-peak" id="chartPeak">пик 0 B/s</div>
       </div>
     </div>
     <canvas id="sc"></canvas>

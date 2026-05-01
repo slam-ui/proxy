@@ -56,11 +56,21 @@ var (
 	procCreateMutexW = kern32.NewProc("CreateMutexW")
 	// БАГ-3: для получения полного пути к процессу (фильтр по директории).
 	procQueryFullProcessImageName = kern32.NewProc("QueryFullProcessImageNameW")
+
+	user32DPI                         = windows.NewLazySystemDLL("user32.dll")
+	shcoreDPI                         = windows.NewLazySystemDLL("shcore.dll")
+	procSetProcessDpiAwarenessContext = user32DPI.NewProc("SetProcessDpiAwarenessContext")
+	procSetProcessDPIAware            = user32DPI.NewProc("SetProcessDPIAware")
+	procSetProcessDpiAwareness        = shcoreDPI.NewProc("SetProcessDpiAwareness")
 )
 
 const (
 	logFile         = "safesky.log" // FIX 34: переименован с proxy-client.log
 	shutdownTimeout = 10 * time.Second
+
+	dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+	processPerMonitorDPIAware            = uintptr(2)  // PROCESS_PER_MONITOR_DPI_AWARE
+	hresultAccessDenied                  = uintptr(0x80070005)
 )
 
 type preflightAddr struct{ name, addr string }
@@ -99,7 +109,19 @@ func openLogFile() (*os.File, error) {
 	return f, nil
 }
 
+func configureDPIAwareness() {
+	if ret, _, err := procSetProcessDpiAwarenessContext.Call(dpiAwarenessContextPerMonitorAwareV2); ret != 0 || err == windows.ERROR_ACCESS_DENIED {
+		return
+	}
+	if ret, _, _ := procSetProcessDpiAwareness.Call(processPerMonitorDPIAware); ret == 0 || ret == hresultAccessDenied {
+		return
+	}
+	procSetProcessDPIAware.Call()
+}
+
 func main() {
+	configureDPIAwareness()
+
 	if exe, err := os.Executable(); err == nil {
 		_ = os.Chdir(filepath.Dir(exe))
 	}

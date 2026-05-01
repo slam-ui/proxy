@@ -550,12 +550,23 @@ func downloadWithProgress(ctx context.Context, url string, onProgress func(downl
 	}
 
 	total := resp.ContentLength
+	if total > maxSingBoxZipBytes {
+		return nil, fmt.Errorf("архив sing-box слишком большой: %s", fmtBytes(total))
+	}
 	var buf bytes.Buffer
-	buf.Grow(int(max64(total, 8*1024*1024)))
+	grow := total
+	if grow <= 0 || grow > 8*1024*1024 {
+		grow = 8 * 1024 * 1024
+	}
+	buf.Grow(int(grow))
 
 	reader := &progressReader{r: resp.Body, total: total, onProgress: onProgress}
-	if _, err := io.Copy(&buf, reader); err != nil {
+	n, err := io.Copy(&buf, io.LimitReader(reader, maxSingBoxZipBytes+1))
+	if err != nil {
 		return nil, fmt.Errorf("ошибка чтения: %w", err)
+	}
+	if n > maxSingBoxZipBytes {
+		return nil, fmt.Errorf("архив sing-box слишком большой: %s", fmtBytes(n))
 	}
 	return buf.Bytes(), nil
 }
@@ -582,6 +593,7 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 // ── Zip extraction ────────────────────────────────────────────────────────────
 
 const maxExtractedSingBoxExeSize = 256 * 1024 * 1024
+const maxSingBoxZipBytes = 128 * 1024 * 1024
 
 func extractExeFromZip(data []byte, destPath string) error {
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))

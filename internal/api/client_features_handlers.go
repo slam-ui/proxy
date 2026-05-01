@@ -102,6 +102,21 @@ func (s *Server) replaceRoutingSnapshot(next *config.RoutingConfig) error {
 	return nil
 }
 
+func (s *Server) mutateRoutingSnapshot(mutator func(*config.RoutingConfig) (bool, error)) error {
+	s.routingOpMu.Lock()
+	defer s.routingOpMu.Unlock()
+
+	routing := s.currentRoutingSnapshot()
+	changed, err := mutator(routing)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	return s.replaceRoutingSnapshot(routing)
+}
+
 func (s *Server) handleRuleAnalyze(w http.ResponseWriter, _ *http.Request) {
 	routing := s.currentRoutingSnapshot()
 	findings := analyzeRoutingRules(routing)
@@ -113,18 +128,21 @@ func (s *Server) handleRuleAnalyze(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleRuleAnalyzeFix(w http.ResponseWriter, _ *http.Request) {
-	routing := s.currentRoutingSnapshot()
-	before := len(routing.Rules)
-	routing.Rules = fixRoutingRules(routing.Rules)
-	smartSortRoutingRules(routing.Rules)
-	if err := s.replaceRoutingSnapshot(routing); err != nil {
+	var before, after int
+	if err := s.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+		before = len(routing.Rules)
+		routing.Rules = fixRoutingRules(routing.Rules)
+		smartSortRoutingRules(routing.Rules)
+		after = len(routing.Rules)
+		return true, nil
+	}); err != nil {
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"before":  before,
-		"after":   len(routing.Rules),
+		"after":   after,
 	})
 }
 
@@ -309,14 +327,15 @@ func (s *Server) handleConnectionRule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) addRoutingRule(rule config.RoutingRule) error {
-	routing := s.currentRoutingSnapshot()
-	for _, existing := range routing.Rules {
-		if existing.Value == rule.Value && existing.Type == rule.Type && existing.Action == rule.Action {
-			return nil
+	return s.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+		for _, existing := range routing.Rules {
+			if existing.Value == rule.Value && existing.Type == rule.Type && existing.Action == rule.Action {
+				return false, nil
+			}
 		}
-	}
-	routing.Rules = append(routing.Rules, rule)
-	return s.replaceRoutingSnapshot(routing)
+		routing.Rules = append(routing.Rules, rule)
+		return true, nil
+	})
 }
 
 func (s *Server) handleTemporaryRulesList(w http.ResponseWriter, _ *http.Request) {
@@ -340,19 +359,20 @@ func (s *Server) handleTemporaryRuleAdd(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) handleTemporaryRuleDelete(w http.ResponseWriter, r *http.Request) {
 	value := config.NormalizeRuleValue(mux.Vars(r)["value"])
-	routing := s.currentRoutingSnapshot()
-	next := routing.Rules[:0]
 	removed := 0
-	for _, rule := range routing.Rules {
-		_, temporary := temporaryRuleExpiry(rule)
-		if temporary && rule.Value == value {
-			removed++
-			continue
+	if err := s.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+		next := routing.Rules[:0]
+		for _, rule := range routing.Rules {
+			_, temporary := temporaryRuleExpiry(rule)
+			if temporary && rule.Value == value {
+				removed++
+				continue
+			}
+			next = append(next, rule)
 		}
-		next = append(next, rule)
-	}
-	routing.Rules = next
-	if err := s.replaceRoutingSnapshot(routing); err != nil {
+		routing.Rules = next
+		return removed > 0, nil
+	}); err != nil {
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -385,13 +405,15 @@ func (s *Server) startTemporaryRuleExpiry(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				routing := s.currentRoutingSnapshot()
-				next := fixRoutingRules(routing.Rules)
-				if len(next) != len(routing.Rules) {
-					routing.Rules = next
-					if err := s.replaceRoutingSnapshot(routing); err != nil {
-						s.logger.Warn("temporary rules cleanup: %v", err)
+				if err := s.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+					next := fixRoutingRules(routing.Rules)
+					if len(next) != len(routing.Rules) {
+						routing.Rules = next
+						return true, nil
 					}
+					return false, nil
+				}); err != nil {
+					s.logger.Warn("temporary rules cleanup: %v", err)
 				}
 			}
 		}

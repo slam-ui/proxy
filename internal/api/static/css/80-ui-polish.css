@@ -1,7 +1,7 @@
 /* Final UI polish: shared visual fixes after theme overrides. */
 :root{
   --nav-h:98px;
-  --window-radius:26px;
+  --window-radius:0px;
   --head-h:94px;
   --head-radius:30px;
   --head-underlap:30px;
@@ -18,10 +18,10 @@ html[data-theme="light"] body{
 }
 .app{
   border-radius:var(--window-radius);
-  clip-path:inset(0 round var(--window-radius));
+  clip-path:none;
 }
 .header.layer{
-  z-index:30;
+  z-index:260;
 }
 .header{
   min-height:var(--head-h);
@@ -259,6 +259,9 @@ html[data-theme="light"] .op-timer-icon{
 }
 
 .setup-ov{
+  inset:var(--head-h) 0 0 0;
+  z-index:120;
+  max-height:calc(100vh - var(--head-h));
   padding:24px;
   overflow-y:auto;
   justify-content:center;
@@ -268,7 +271,7 @@ html[data-theme="light"] .op-timer-icon{
 }
 .setup-card{
   width:min(560px,100%);
-  max-height:calc(100vh - 48px);
+  max-height:calc(100vh - var(--head-h) - 48px);
   padding:24px;
   border:1px solid rgba(255,255,255,0.12);
   border-radius:28px;
@@ -546,6 +549,11 @@ html[data-theme="light"] .page-hero-stats span{
   border:1px solid rgba(255,255,255,0.14);
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.12);
   backdrop-filter:blur(14px);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  text-align:center;
 }
 .page-hero-stats strong{
   display:block;
@@ -579,16 +587,49 @@ html[data-theme="light"] .home-sheet{
   background:#f1f5f9;
 }
 .chart-ttl::after{
-  content:'Исходящий и входящий поток в реальном времени';
+  content:none!important;
+  display:none!important;
 }
 .chart-card::after{
-  content:'СЕЙЧАС';
+  content:none;
+  display:none;
 }
 .chart-card{
+  min-height:214px;
+  position:relative;
+  overflow:hidden;
   background:
     radial-gradient(circle at 88% 24%,rgba(255,255,255,0.15),transparent 28%),
     linear-gradient(132deg,#245f9f 0%,#2b7fae 52%,#4f8d86 100%);
   box-shadow:0 18px 42px rgba(16,54,88,0.24);
+}
+.chart-top{
+  position:relative;
+  z-index:3;
+}
+.chart-ttl{
+  max-width:180px;
+}
+.chart-nums{
+  right:clamp(18px,4vw,28px);
+}
+.cn-peak{
+  color:rgba(255,255,255,0.72);
+  font:700 9px var(--mono);
+  letter-spacing:0!important;
+}
+canvas#sc{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  width:100%!important;
+  height:136px!important;
+  margin:0!important;
+  z-index:2;
+}
+#chartTooltip{
+  z-index:6;
 }
 html[data-theme="light"] .chart-card{
   background:
@@ -608,6 +649,9 @@ html[data-theme="light"] .cn-val.d{
 }
 html[data-theme="light"] .cn-item{
   background:rgba(15,23,42,0.055);
+}
+html[data-theme="light"] .cn-peak{
+  color:rgba(16,32,51,0.68);
 }
 html[data-theme="light"] .chart-card::before{
   color:rgba(15,23,42,0.08);
@@ -719,6 +763,59 @@ html[data-theme="light"] .chart-card::after{
 .srv-pill:focus-visible,
 .ni:focus-visible{
   box-shadow:0 0 0 3px var(--focus-ring-strong),inset 0 1px 0 rgba(255,255,255,0.14),0 12px 28px rgba(14,24,83,0.20);
+}
+.orb-stage:focus-visible{
+  outline:none!important;
+  border-radius:var(--orb-radius,16px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.14);
+}
+
+button.orb-stage,
+button.orb-stage:hover,
+button.orb-stage:focus,
+button.orb-stage:focus-visible,
+button.orb-stage:active{
+  appearance:none!important;
+  -webkit-appearance:none!important;
+  border:0!important;
+  outline:0!important;
+  box-shadow:none!important;
+  transform:none!important;
+  overflow:hidden!important;
+  background:rgba(255,255,255,0.17)!important;
+  background-image:none!important;
+  border-radius:var(--orb-radius,21px)!important;
+  background-clip:padding-box!important;
+  backdrop-filter:none!important;
+  filter:none!important;
+  transition:none!important;
+  -webkit-tap-highlight-color:transparent;
+}
+button.orb-stage:hover{
+  background:rgba(255,255,255,0.17)!important;
+}
+button.orb-stage::before,
+button.orb-stage::after,
+button.orb-stage .orb::before,
+button.orb-stage .orb::after{
+  content:none!important;
+  display:none!important;
+}
+button.orb-stage .orb{
+  border:0!important;
+  border-radius:inherit!important;
+  box-shadow:none!important;
+  background:transparent!important;
+  overflow:hidden!important;
+}
+button.orb-stage .power-logo-svg{
+  pointer-events:none;
+}
+.hero-status-row,
+.hero-status-row:hover,
+.hero-status-row:focus-within{
+  outline:0!important;
+  box-shadow:none!important;
 }
 
 .rule-action-btn,
@@ -838,19 +935,59 @@ html[data-theme="light"] :where(.hbtn,.wbtn,.quick-action,.orb-stage,.srv-pill,.
   border-color:rgba(22,119,210,0.24);
 }
 html[data-theme="light"] .orb-stage{
-  border-radius:18px;
+  border-radius:var(--orb-radius,18px);
   overflow:hidden;
 }
 html[data-theme="light"] .orb-stage:hover{
   background:rgba(255,255,255,0.96);
   border-color:rgba(22,119,210,0.22);
-  box-shadow:inset 0 1px 0 rgba(255,255,255,0.9),0 10px 24px rgba(22,119,210,0.16);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.9);
+  transform:none;
+}
+html[data-theme="light"] button.orb-stage,
+html[data-theme="light"] button.orb-stage:hover,
+html[data-theme="light"] button.orb-stage:focus,
+html[data-theme="light"] button.orb-stage:focus-visible,
+html[data-theme="light"] button.orb-stage:active{
+  border:0!important;
+  box-shadow:none!important;
+  background:rgba(255,255,255,0.86)!important;
 }
 html[data-theme="light"] .quick-action:hover,
 html[data-theme="light"] .srv-pill:hover,
 html[data-theme="light"] .hbtn:hover{
   border-color:rgba(22,119,210,0.22);
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.9),0 10px 24px rgba(22,119,210,0.12);
+}
+.quick-action,
+.quick-action:hover,
+.quick-action:focus,
+.quick-action:focus-visible,
+html[data-theme="light"] .quick-action,
+html[data-theme="light"] .quick-action:hover,
+html[data-theme="light"] .quick-action:focus,
+html[data-theme="light"] .quick-action:focus-visible{
+  box-shadow:none!important;
+  transform:none!important;
+  outline:0!important;
+  border:0!important;
+  background:rgba(255,255,255,0.16)!important;
+  background-image:none!important;
+  backdrop-filter:none!important;
+  filter:none!important;
+  transition:none!important;
+}
+.quick-action:hover,
+html[data-theme="light"] .quick-action:hover{
+  background:rgba(255,255,255,0.16)!important;
+}
+.quick-action::before,
+.quick-action::after{
+  content:none!important;
+  display:none!important;
+}
+html[data-theme="light"] button.orb-stage:hover{
+  background:rgba(255,255,255,0.86)!important;
 }
 html[data-theme="light"] .seg-btn,
 html[data-theme="light"] .theme-chip,
@@ -1230,6 +1367,13 @@ html[data-theme="light"] .log-snapshot-item{
 .ni{
   min-width:0;
 }
+.ni.active{
+  background:rgba(255,255,255,0.075);
+}
+.ni.active::after{
+  content:none!important;
+  display:none!important;
+}
 .ni-lbl{
   white-space:nowrap;
 }
@@ -1243,11 +1387,17 @@ html[data-theme="light"] .log-snapshot-item{
 }
 
 .srv-panel{
+  inset:var(--head-h) 0 0 0;
+  z-index:220;
+  max-height:calc(100vh - var(--head-h));
   background:
     radial-gradient(ellipse 90% 54% at 50% 0%,rgba(40,142,225,0.20),transparent 62%),
     linear-gradient(180deg,#111722 0%,#101116 100%);
   padding:26px clamp(18px,3vw,30px) calc(var(--nav-h) + 24px);
   border-radius:var(--window-radius);
+}
+#serverInfoModal{
+  z-index:360!important;
 }
 .sph{
   padding-bottom:14px;
@@ -1649,7 +1799,9 @@ html[data-theme="light"] .flag-placeholder{
   background:rgba(255,255,255,0.045);
   display:flex;
   flex-direction:column;
+  align-items:center;
   justify-content:center;
+  text-align:center;
   gap:3px;
 }
 .proc-stat-card b{
@@ -2018,11 +2170,15 @@ html[data-theme="light"] .proc-title-note{
 
 /* Logs page rebuild */
 .log-sheet{
-  min-height:calc(100% - 126px);
+  flex:1 1 auto;
+  min-height:0;
+  overflow:hidden;
 }
 .log-workbench{
   flex:1 1 auto;
+  height:clamp(360px, calc(100vh - var(--head-h) - var(--nav-h) - 118px), 620px);
   min-height:0;
+  overflow:hidden;
   display:grid;
   grid-template-columns:minmax(0,1fr) minmax(270px,318px);
   gap:12px;
@@ -2036,6 +2192,8 @@ html[data-theme="light"] .proc-title-note{
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.07);
 }
 .log-console{
+  height:100%;
+  max-height:100%;
   min-height:0;
   overflow:hidden;
   display:flex;
@@ -2349,8 +2507,11 @@ html[data-theme="light"] .proc-title-note{
   text-align:center;
 }
 .log-inspector{
+  height:100%;
+  max-height:100%;
   min-width:0;
   min-height:0;
+  overflow:hidden;
   display:flex;
   flex-direction:column;
   gap:12px;

@@ -4,23 +4,41 @@ const N = 90;
 let upBuf = new Array(N).fill(0);
 let dnBuf = new Array(N).fill(0);
 let chartMax = 1; // динамический максимум для нормализации
+let chartPeakBps = 0;
+
+function cleanBps(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function updateChartPeak(bps) {
+  const el = $id('chartPeak');
+  if (!el) return;
+  const peak = fmtSpeed(cleanBps(bps));
+  el.textContent = 'пик ' + peak.val + ' ' + peak.unit;
+}
 
 function pushChartData(upBps, dnBps) {
   // FIX #2: данные из API, а не рандом
   // FIX #2: если proxy выключен — показываем 0
   const isOn = state.running && state.enabled;
-  const up = isOn ? upBps : 0;
-  const dn = isOn ? dnBps : 0;
+  const up = isOn ? cleanBps(upBps) : 0;
+  const dn = isOn ? cleanBps(dnBps) : 0;
 
   upBuf.push(up); upBuf.shift();
   dnBuf.push(dn); dnBuf.shift();
 
   // Обновляем динамический максимум с небольшим запасом, чтобы пики не упирались в край.
-  const localMax = Math.max(...upBuf, ...dnBuf, 1024);
-  const targetMax = localMax * 1.18;
+  const cleanUp = upBuf.map(cleanBps);
+  const cleanDn = dnBuf.map(cleanBps);
+  chartPeakBps = Math.max(...cleanUp, ...cleanDn, 0);
+  const localMax = Math.max(chartPeakBps, 1024);
+  const targetMax = localMax * 1.12;
+  if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
   chartMax = targetMax > chartMax
     ? targetMax
     : chartMax * 0.97 + targetMax * 0.03;
+  updateChartPeak(chartPeakBps);
 
   // Обновляем числовые лейблы
   const { val: upVal, unit: upUnit } = fmtSpeed(up);
@@ -34,15 +52,39 @@ function pushChartData(upBps, dnBps) {
 (function initChart() {
   const c = $id('sc');
   const ctx = c.getContext('2d');
+  let canvasW = 1;
+  let canvasH = 1;
+  let canvasDpr = 1;
 
   function resize() {
-    const dpr = window.devicePixelRatio || 1;
     const r = c.getBoundingClientRect();
-    if (r.width === 0) return; // защита от нулевого размера
-    c.width  = Math.max(1, Math.round(r.width  * dpr));
-    c.height = Math.max(1, Math.round(r.height * dpr));
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.imageSmoothingEnabled = false;
+    if (r.width === 0 || r.height === 0) return false; // защита от нулевого размера
+
+    const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const cssW = Math.max(1, r.width);
+    const cssH = Math.max(1, r.height);
+    const pxW = Math.max(1, Math.ceil(cssW * dpr));
+    const pxH = Math.max(1, Math.ceil(cssH * dpr));
+
+    if (
+      c.width === pxW &&
+      c.height === pxH &&
+      Math.abs(canvasW - cssW) < 0.05 &&
+      Math.abs(canvasH - cssH) < 0.05 &&
+      Math.abs(canvasDpr - dpr) < 0.001
+    ) {
+      return false;
+    }
+
+    c.width = pxW;
+    c.height = pxH;
+    canvasW = cssW;
+    canvasH = cssH;
+    canvasDpr = dpr;
+    ctx.setTransform(pxW / cssW, 0, 0, pxH / cssH, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    return true;
   }
 
   let mouseX = -1;
@@ -56,7 +98,7 @@ function pushChartData(upBps, dnBps) {
 
   function normArr(buf) {
     const max = Math.max(chartMax || 1, 1024);
-    return buf.map(v => Math.max(0, Math.min(1, v / max)));
+    return buf.map(v => Math.max(0, Math.min(1, cleanBps(v) / max)));
   }
 
   function drawPath(points) {
@@ -75,23 +117,12 @@ function pushChartData(upBps, dnBps) {
       y: plot.bottom - v * plot.h
     }));
 
-    drawPath(points);
-    ctx.lineTo(plot.right, plot.bottom);
-    ctx.lineTo(plot.left, plot.bottom);
-    ctx.closePath();
-    const fill = ctx.createLinearGradient(0, plot.top, 0, plot.bottom);
-    fill.addColorStop(0, cfg.fillTop);
-    fill.addColorStop(0.62, cfg.fillMid);
-    fill.addColorStop(1, cfg.fillBottom);
-    ctx.fillStyle = fill;
-    ctx.fill();
-
     ctx.save();
     ctx.shadowColor = cfg.glow;
     ctx.shadowBlur = cfg.glowBlur;
     drawPath(points);
     ctx.strokeStyle = cfg.strokeSoft;
-    ctx.lineWidth = 5;
+    ctx.lineWidth = 3.2;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     ctx.stroke();
@@ -116,57 +147,21 @@ function pushChartData(upBps, dnBps) {
     }
   }
 
-  function drawGrid(plot, isLight) {
-    const line = isLight ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.14)';
-    const soft = isLight ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.08)';
-    [0, 0.5, 1].forEach((level, i) => {
-      const y = plot.top + plot.h * level;
-      ctx.strokeStyle = i === 1 ? line : soft;
-      ctx.lineWidth = i === 1 ? 0.8 : 0.6;
-      ctx.setLineDash(i === 1 ? [4, 5] : []);
-      ctx.beginPath();
-      ctx.moveTo(plot.left, y);
-      ctx.lineTo(plot.right, y);
-      ctx.stroke();
-    });
-    ctx.setLineDash([]);
-
-    if (plot.h > 36) {
-      const peak = fmtSpeed(chartMax || 1024);
-      ctx.fillStyle = isLight ? 'rgba(255,255,255,0.68)' : 'rgba(235,248,255,0.62)';
-      ctx.font = '600 9px ' + getComputedStyle(document.documentElement).getPropertyValue('--mono');
-      ctx.textBaseline = 'top';
-      ctx.fillText('пик ' + peak.val + ' ' + peak.unit, plot.left, plot.top);
-      ctx.textBaseline = 'bottom';
-      ctx.fillText('60с', plot.left, plot.bottom + 13);
-      ctx.textAlign = 'right';
-      ctx.fillText('сейчас', plot.right, plot.bottom + 13);
-      ctx.textAlign = 'left';
-    }
-  }
-
   function draw() {
-    const W = c.width  / (window.devicePixelRatio || 1);
-    const H = c.height / (window.devicePixelRatio || 1);
+    const W = canvasW;
+    const H = canvasH;
+    if (W <= 1 || H <= 1) return;
     ctx.clearRect(0, 0, W, H);
 
     const isLight = themeName() === 'light';
     const plot = {
-      left: 18,
-      right: Math.max(19, W - 18),
-      top: 8,
-      bottom: Math.max(30, H - 17)
+      left: 0,
+      right: W,
+      top: 14,
+      bottom: Math.max(24, H - 5)
     };
     plot.w = Math.max(1, plot.right - plot.left);
     plot.h = Math.max(1, plot.bottom - plot.top);
-
-    const bgG = ctx.createLinearGradient(0, 0, W, H);
-    bgG.addColorStop(0, isLight ? 'rgba(255,255,255,0.11)' : 'rgba(255,255,255,0.055)');
-    bgG.addColorStop(1, isLight ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.018)');
-    ctx.fillStyle = bgG;
-    ctx.fillRect(0, 0, W, H);
-
-    drawGrid(plot, isLight);
 
     const normUp = normArr(upBuf);
     const normDn = normArr(dnBuf);
@@ -178,11 +173,8 @@ function pushChartData(upBps, dnBps) {
     drawSeries(normDn, {
       stroke: dnColor,
       strokeSoft: dnSoft,
-      fillTop: isLight ? 'rgba(138,106,47,0.16)' : 'rgba(225,189,125,0.18)',
-      fillMid: isLight ? 'rgba(138,106,47,0.07)' : 'rgba(225,189,125,0.09)',
-      fillBottom: 'rgba(225,189,125,0)',
       glow: isLight ? 'rgba(138,106,47,0.18)' : 'rgba(225,189,125,0.22)',
-      glowBlur: isLight ? 3 : 5,
+      glowBlur: isLight ? 1.5 : 2.5,
       dot: dnColor,
       dotRing: 'rgba(255,255,255,0.88)'
     }, plot);
@@ -190,11 +182,8 @@ function pushChartData(upBps, dnBps) {
     drawSeries(normUp, {
       stroke: upColor,
       strokeSoft: upSoft,
-      fillTop: isLight ? 'rgba(47,111,159,0.15)' : 'rgba(168,200,220,0.18)',
-      fillMid: isLight ? 'rgba(47,111,159,0.06)' : 'rgba(168,200,220,0.08)',
-      fillBottom: 'rgba(168,200,220,0)',
       glow: isLight ? 'rgba(47,111,159,0.18)' : 'rgba(168,200,220,0.22)',
-      glowBlur: isLight ? 3 : 5,
+      glowBlur: isLight ? 1.5 : 2.5,
       dot: upColor,
       dotRing: 'rgba(255,255,255,0.88)'
     }, plot);
@@ -211,9 +200,9 @@ function pushChartData(upBps, dnBps) {
       ctx.beginPath(); ctx.moveTo(x, plot.top); ctx.lineTo(x, plot.bottom); ctx.stroke();
       ctx.setLineDash([]);
       // Tooltip content
-      const up = upBuf[idx], dn = dnBuf[idx];
+      const up = cleanBps(upBuf[idx]), dn = cleanBps(dnBuf[idx]);
       const secsAgo = (N - 1 - idx);
-      const timeLabel = secsAgo === 0 ? 'сейчас' : secsAgo + 'с назад';
+      const timeLabel = secsAgo === 0 ? '0с назад' : secsAgo + 'с назад';
       const { val: upV, unit: upU } = fmtSpeed(up);
       const { val: dnV, unit: dnU } = fmtSpeed(dn);
       const rect = c.getBoundingClientRect();
@@ -230,9 +219,14 @@ function pushChartData(upBps, dnBps) {
   }
 
   // FIX #3: resize только когда размер реально известен
-  new ResizeObserver(() => {
+  const chartResizeObserver = new ResizeObserver(() => {
     requestAnimationFrame(() => { resize(); draw(); });
-  }).observe(c.parentElement);
+  });
+  chartResizeObserver.observe(c);
+  if (c.parentElement) chartResizeObserver.observe(c.parentElement);
+  window.addEventListener('resize', () => {
+    requestAnimationFrame(() => { resize(); draw(); });
+  }, { passive: true });
 
   c.addEventListener('mousemove', e => {
     const rect = c.getBoundingClientRect();
@@ -251,6 +245,7 @@ function pushChartData(upBps, dnBps) {
     draw();
     // Цикл рисования — только draw(), данные приходят из pollStats()
     function frame() {
+      if (Math.abs((window.devicePixelRatio || 1) - canvasDpr) > 0.001) resize();
       draw();
       requestAnimationFrame(frame);
     }

@@ -893,7 +893,17 @@ func (a *App) startBackground(xrayCfg xray.Config, proxyConfig proxy.Config, api
 		if _, stopErr := os.Stat(wintun.StopFile); stopErr == nil {
 			stopExists = true
 		}
-		cleanupNeeded := stopExists || wintun.StartupCleanupNeeded(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+		cleanupNeeded := false
+		if cleanShutdown {
+			cleanupNeeded = stopExists || wintun.StartupCleanupNeeded(a.lifecycleCtx, a.mainLogger, config.TunInterfaceName)
+		} else {
+			// Если нет clean-маркера, прошлый процесс мог завершиться до записи StopFile.
+			// В этом состоянии быстрые probes иногда не видят stale SWD\WINTUN node сразу
+			// после запуска драйвера, а первый sing-box падает с ERROR_ALREADY_EXISTS.
+			// Полная контрольная очистка на старте дешевле, чем crash-recovery после FATAL.
+			cleanupNeeded = true
+			a.mainLogger.Info("wintun: clean shutdown marker отсутствует — выполняем контрольную очистку")
+		}
 		dirtyStart := cleanupNeeded
 		if cleanupNeeded {
 			if cleanShutdown {

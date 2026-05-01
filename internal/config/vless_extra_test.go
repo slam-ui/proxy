@@ -192,6 +192,24 @@ func TestParseVLESSKey_AntiDPIParams(t *testing.T) {
 	}
 }
 
+func TestParseVLESSKey_CommonParamAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aliases.key")
+	url := "vless://uuid@host.com:443?serverName=x.com&publicKey=k&shortId=s&fingerprint=chrome"
+	if err := os.WriteFile(path, []byte(url), 0644); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	p, err := parseVLESSKey(path)
+	if err != nil {
+		t.Fatalf("parseVLESSKey: %v", err)
+	}
+	if p.SNI != "x.com" || p.PublicKey != "k" || p.ShortID != "s" {
+		t.Fatalf("aliases not parsed: %+v", p)
+	}
+	if p.UTLSFingerprint() != "chrome" {
+		t.Fatalf("UTLSFingerprint = %q, want chrome", p.UTLSFingerprint())
+	}
+}
+
 func TestParseVLESSKey_FragmentDefaultOn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nofragment.key")
 	url := "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s"
