@@ -528,6 +528,22 @@ func TestDownloadWithProgress_ReturnsError_OnHTTPError(t *testing.T) {
 	}
 }
 
+func TestDownloadWithProgress_RejectsOversizedContentLength(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", maxSingBoxZipBytes+1))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	_, err := downloadWithProgress(context.Background(), ts.URL, nil)
+	if err == nil {
+		t.Fatal("expected oversized archive error")
+	}
+	if !strings.Contains(err.Error(), "слишком большой") {
+		t.Fatalf("error = %v, want size rejection", err)
+	}
+}
+
 func TestDownloadWithProgress_ReturnsData_OnSuccess(t *testing.T) {
 	content := []byte("downloaded content")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

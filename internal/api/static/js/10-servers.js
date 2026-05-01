@@ -275,11 +275,13 @@ function showSrvQR(e, id) {
   e.stopPropagation();
   const name = _serverNameById(id);
   const src = API + '/servers/' + encodeURIComponent(id) + '/qr';
+  closeSrv();
   openServerInfo(name || 'QR', `<img src="${src}" alt="QR" style="width:256px;height:256px;border-radius:8px;background:#fff;padding:8px">`);
 }
 async function showLatencyHistory(e, id) {
   e.stopPropagation();
   const name = _serverNameById(id);
+  closeSrv();
   openServerInfo(name || 'Latency', '<div class="pg-sub">загрузка...</div>');
   try {
     const r = await fetch(API + '/servers/' + encodeURIComponent(id) + '/latency-history');

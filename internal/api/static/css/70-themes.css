@@ -243,15 +243,15 @@ html[data-theme="light"] .toast{
   .status-lbl::before{margin-bottom:9px}
   .status-lbl::after{margin-top:9px}
   .srv-pill{min-height:52px}
-  .orb-stage{width:66px;height:66px;border-radius:21px}
+  .orb-stage{--orb-radius:21px;width:66px;height:66px;border-radius:var(--orb-radius)}
   .quick-actions{padding-bottom:12px}
   .quick-action{min-height:62px;padding-top:11px;padding-bottom:11px}
-  .chart-card{min-height:136px;margin-bottom:12px}
+  .chart-card{min-height:176px;margin-bottom:12px}
   .chart-card::before{font-size:54px;top:32px}
   .chart-top{padding-top:16px}
   .chart-ttl::after{margin-top:7px;font-size:12px}
   .chart-nums{right:104px;top:17px}
-  canvas#sc{height:42px;margin-top:4px}
+  canvas#sc{height:86px;margin-top:6px}
   .stats{padding-top:54px;padding-bottom:16px}
   .stat-val{width:58px;height:58px}
   .conn-hd{padding-top:20px}
@@ -265,7 +265,7 @@ html[data-theme="light"] .toast{
   .hero{padding:34px 28px 16px;min-height:150px}
   .status-lbl{font-size:26px}
   .status-lbl::before{font-size:14px}
-  .orb-stage{width:66px;height:66px;border-radius:21px}
+  .orb-stage{--orb-radius:21px;width:66px;height:66px;border-radius:var(--orb-radius)}
   .quick-actions{grid-template-columns:1fr 1fr;gap:10px}
   .quick-action{min-height:68px;padding:13px 14px;font-size:13px}
   .quick-copy small{display:none}

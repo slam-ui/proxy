@@ -494,6 +494,9 @@ func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.server.routingOpMu.Lock()
+	defer h.server.routingOpMu.Unlock()
+
 	h.mu.Lock()
 
 	for _, rule := range h.routing.Rules {
@@ -650,6 +653,9 @@ func (h *TunHandlers) replaceRoutingAndApply(incoming config.RoutingConfig) (int
 		return 0, "", err
 	}
 
+	h.server.routingOpMu.Lock()
+	defer h.server.routingOpMu.Unlock()
+
 	h.mu.Lock()
 	oldRouting := cloneRoutingConfig(h.routing)
 
@@ -757,6 +763,9 @@ func (h *TunHandlers) handleDeleteRule(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	value := strings.ToLower(vars["value"])
 
+	h.server.routingOpMu.Lock()
+	defer h.server.routingOpMu.Unlock()
+
 	h.mu.Lock()
 
 	newRules := make([]config.RoutingRule, 0, len(h.routing.Rules))
@@ -817,6 +826,9 @@ func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, "action: proxy | direct | block")
 		return
 	}
+
+	h.server.routingOpMu.Lock()
+	defer h.server.routingOpMu.Unlock()
 
 	h.mu.Lock()
 	oldAction := h.routing.DefaultAction
@@ -1511,6 +1523,9 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 		// Если GenerateSingBoxConfig вернула ошибку (нет secret.key и т.п.) — пропускаем валидацию
 	}
+
+	h.server.routingOpMu.Lock()
+	defer h.server.routingOpMu.Unlock()
 
 	h.mu.Lock()
 

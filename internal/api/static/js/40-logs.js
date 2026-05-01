@@ -126,7 +126,12 @@ async function pollLogs() {
     const data = await r.json();
     const events = Array.isArray(data) ? data : (data.events || []);
     if (data.latest_id != null) lastLogId = data.latest_id;
-    events.forEach(ev => {
+    events.slice().sort((a, b) => {
+      const ta = new Date(a.time || a.timestamp || 0).getTime();
+      const tb = new Date(b.time || b.timestamp || 0).getTime();
+      if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+      return Number(a.id || 0) - Number(b.id || 0);
+    }).forEach(ev => {
       pushLog(ev.time || '', ev.level || 'I', ev.message || JSON.stringify(ev));
     });
   } catch(_) {
@@ -327,7 +332,7 @@ function pushLog(ts, level, msg) {
     if (tsEl) tsEl.textContent = timeStr;
     _applyLogVisibility(_lastLogEl);
     renderLogMetrics();
-    if (logAutoScroll) wrap.scrollTop = wrap.scrollHeight;
+    if (logAutoScroll) wrap.scrollTop = 0;
     return;
   }
 
@@ -347,15 +352,15 @@ function pushLog(ts, level, msg) {
   line.innerHTML = `<span class="log-ts">${esc(timeStr)}</span><span class="log-lvl ${lvlChar}">${esc(lvlChar)}</span><span class="log-body"><span class="${msgCls}"${clickable}>${_formatLogMsg(clean)}</span></span>`;
 
   _applyLogVisibility(line);
-  logLines.push(line);
+  logLines.unshift(line);
   if (logLines.length > LOG_MAX_LINES) {
-    const removed = logLines.shift();
+    const removed = logLines.pop();
     removed?.remove();
   }
-  wrap.appendChild(line);
+  wrap.prepend(line);
   _lastLogEl = line;
   renderLogMetrics();
-  if (logAutoScroll) wrap.scrollTop = wrap.scrollHeight;
+  if (logAutoScroll) wrap.scrollTop = 0;
 }
 
 function filterLogs() {

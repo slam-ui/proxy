@@ -25,7 +25,6 @@ var (
 var (
 	user32                = windows.NewLazyDLL("user32.dll")
 	dwmAPI                = windows.NewLazyDLL("dwmapi.dll")
-	gdi32dll              = windows.NewLazySystemDLL("gdi32.dll")
 	kernel32dll           = windows.NewLazyDLL("kernel32.dll")
 	setWindowPos          = user32.NewProc("SetWindowPos")
 	setWindowRgn          = user32.NewProc("SetWindowRgn")
@@ -45,8 +44,6 @@ var (
 	isIconic              = user32.NewProc("IsIconic")
 	loadImageW            = user32.NewProc("LoadImageW")
 	pGetModuleHandle      = kernel32dll.NewProc("GetModuleHandleW")
-	createRoundRectRgn    = gdi32dll.NewProc("CreateRoundRectRgn")
-	deleteObject          = gdi32dll.NewProc("DeleteObject")
 )
 
 const (
@@ -80,7 +77,7 @@ const (
 	dwmwaTextColor          = 36
 	dwmwaBorderColor        = 34
 	dwmwaSystemBackdropType = 38 // Windows 11 22H2+: 2=Mica, 3=Acrylic, 4=Tabbed
-	dwmwaWindowCornerPref   = 33 // 2=ROUND, 3=ROUNDSMALL
+	dwmwaWindowCornerPref   = 33 // 1=DONOTROUND, 2=ROUND, 3=ROUNDSMALL
 )
 
 type dwmSystemBackdrop uint32
@@ -92,7 +89,20 @@ const (
 	backdropTabbed  dwmSystemBackdrop = 4
 )
 
+const dwmWindowCornerDoNotRound uint32 = 1
+
 func colorref(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
+
+func applySquareWindowCorners(hwnd uintptr) {
+	cornerPref := dwmWindowCornerDoNotRound
+	dwmSetAttr.Call(
+		hwnd,
+		dwmwaWindowCornerPref,
+		uintptr(unsafe.Pointer(&cornerPref)),
+		uintptr(unsafe.Sizeof(cornerPref)),
+	)
+	runtime.KeepAlive(cornerPref)
+}
 
 // setAppIcon загружает иконку из ресурсов .exe (ID=1, вставляется goversioninfo)
 // и устанавливает её на окно — обновляет иконку в панели задач и в titlebar.
@@ -137,9 +147,8 @@ func applyDarkTitle(hwnd uintptr) {
 	// Border: тёмная акцентная рамка
 	borderColor := colorref(0x2a, 0x2a, 0x40)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	// Скруглённые углы (Windows 11)
-	cornerPref := uint32(2) // DWMWCP_ROUND
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	// Прямые углы окна (Windows 11)
+	applySquareWindowCorners(hwnd)
 	// Пробуем Mica backdrop (Windows 11 22H2+) — при неудаче молча игнорируется
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
@@ -157,9 +166,8 @@ func applyLightTitle(hwnd uintptr) {
 	// Border: светлая рамка
 	borderColor := colorref(0xc8, 0xcc, 0xe0)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	// Скруглённые углы (Windows 11)
-	cornerPref := uint32(2) // DWMWCP_ROUND
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	// Прямые углы окна (Windows 11)
+	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
@@ -200,9 +208,8 @@ func applyAxiomTitle(hwnd uintptr) {
 	// Border: --s1 #0c0c1d (темнее фона, соответствует hairline)
 	borderColor := colorref(0x0c, 0x0c, 0x1d)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	// Скруглённые углы (Windows 11) — совпадает с border-radius:30px в CSS
-	cornerPref := uint32(2) // DWMWCP_ROUND
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	// Прямые углы окна (Windows 11)
+	applySquareWindowCorners(hwnd)
 	// Mica backdrop — прозрачность за окном, если поддерживается (Win 11 22H2+)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
@@ -220,8 +227,7 @@ func applyHackerTitle(hwnd uintptr) {
 	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	borderColor := colorref(0x0d, 0x22, 0x00)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	cornerPref := uint32(2)
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
+	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
@@ -239,9 +245,7 @@ func applyMidnightTitle(hwnd uintptr) {
 	borderColor := colorref(0x1a, 0x1a, 0x40)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	runtime.KeepAlive(borderColor)
-	cornerPref := uint32(2)
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
-	runtime.KeepAlive(cornerPref)
+	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 	runtime.KeepAlive(backdrop)
@@ -260,24 +264,19 @@ func applySepiaTitle(hwnd uintptr) {
 	borderColor := colorref(0x3a, 0x2e, 0x1e)
 	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	runtime.KeepAlive(borderColor)
-	cornerPref := uint32(2)
-	dwmSetAttr.Call(hwnd, dwmwaWindowCornerPref, uintptr(unsafe.Pointer(&cornerPref)), 4)
-	runtime.KeepAlive(cornerPref)
+	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
 	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 	runtime.KeepAlive(backdrop)
 }
 
-// Размеры окна под axiom-ui:
-//
-//	карточка 400×780, padding 20px с каждой стороны, тонкая рамка WS_THICKFRAME (~4px)
+// Размеры окна под axiom-ui: первый запуск открывается шире, чем мобильная карточка,
+// чтобы график, списки и панели сразу попадали в удобное соотношение сторон.
 const (
-	uiDefaultW = 448 // 400 + 20*2 + ~8 (рамка)
-	uiDefaultH = 864 // 780 + 20*2 + ~44 (учёт DPI-rounded border + taskbar breathing room)
-	uiMinW     = 440 // жёсткий минимум — не меньше карточки
-	uiMinH     = 820 // жёсткий минимум по высоте
-
-	windowCornerRadius = 32
+	uiDefaultW = 760
+	uiDefaultH = 900
+	uiMinW     = 560
+	uiMinH     = 700
 )
 
 // windowState хранит позицию и размер окна.
@@ -342,36 +341,7 @@ func applyRoundedWindowRegion(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	if isZoomed(hwnd) {
-		setWindowRgn.Call(hwnd, 0, 1)
-		return
-	}
-	var r [4]int32
-	ret, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
-	if ret == 0 {
-		return
-	}
-	w := r[2] - r[0]
-	h := r[3] - r[1]
-	if w <= 0 || h <= 0 {
-		return
-	}
-	hrgn, _, _ := createRoundRectRgn.Call(
-		0,
-		0,
-		uintptr(w+1),
-		uintptr(h+1),
-		windowCornerRadius,
-		windowCornerRadius,
-	)
-	if hrgn == 0 {
-		return
-	}
-	ok, _, _ := setWindowRgn.Call(hwnd, hrgn, 1)
-	if ok == 0 {
-		deleteObject.Call(hrgn)
-	}
-	runtime.KeepAlive(r)
+	setWindowRgn.Call(hwnd, 0, 1)
 }
 
 // BringToFront переводит главное окно на передний план.

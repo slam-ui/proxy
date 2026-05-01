@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
@@ -869,6 +872,194 @@ func TestBulkReplaceExportRoundTrip(t *testing.T) {
 	json.NewDecoder(wGet.Body).Decode(&result)
 	if len(result.Rules) != 4 {
 		t.Errorf("rules после import = %d, want 4", len(result.Rules))
+	}
+}
+
+func TestAddRoutingRuleConcurrentNoLostUpdate(t *testing.T) {
+	srv, h, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	const n = 24
+	started := make(chan struct{}, n)
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+
+	h.mu.Lock()
+	for i := 0; i < n; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			started <- struct{}{}
+			errs <- srv.addRoutingRule(config.RoutingRule{
+				Value:  fmt.Sprintf("concurrent-%02d.example", i),
+				Type:   config.RuleTypeDomain,
+				Action: config.ActionProxy,
+			})
+		}()
+	}
+	for i := 0; i < n; i++ {
+		<-started
+	}
+	h.mu.Unlock()
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("addRoutingRule returned error: %v", err)
+		}
+	}
+
+	w := getJSON(t, srv.router, "/api/tun/rules")
+	var resp RulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, rule := range resp.Rules {
+		seen[rule.Value] = true
+	}
+	for i := 0; i < n; i++ {
+		value := fmt.Sprintf("concurrent-%02d.example", i)
+		if !seen[value] {
+			t.Fatalf("lost concurrent routing update for %s; got %d rules: %+v", value, len(resp.Rules), resp.Rules)
+		}
+	}
+}
+
+func TestImportRulesUsesRoutingMutationLock(t *testing.T) {
+	srv, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	body := `{"format":"text","content":"locked-import.example","action":"proxy"}`
+	started := make(chan struct{})
+	done := make(chan int, 1)
+
+	srv.routingOpMu.Lock()
+	go func() {
+		close(started)
+		req := httptest.NewRequest(http.MethodPost, "/api/tun/rules/import", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		srv.handleImportRules(w, req)
+		done <- w.Code
+	}()
+	<-started
+
+	select {
+	case code := <-done:
+		srv.routingOpMu.Unlock()
+		t.Fatalf("handleImportRules completed with status %d while routingOpMu was held", code)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	srv.routingOpMu.Unlock()
+
+	select {
+	case code := <-done:
+		if code != http.StatusOK {
+			t.Fatalf("handleImportRules status = %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleImportRules stayed blocked after routingOpMu was released")
+	}
+
+	w := getJSON(t, srv.router, "/api/tun/rules")
+	var resp RulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules: %v", err)
+	}
+	for _, rule := range resp.Rules {
+		if rule.Value == "locked-import.example" {
+			return
+		}
+	}
+	t.Fatalf("imported rule was not persisted: %+v", resp.Rules)
+}
+
+func TestReplaceRoutingAndApplyUsesRoutingMutationLock(t *testing.T) {
+	srv, h, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	incoming := config.RoutingConfig{
+		DefaultAction: config.ActionProxy,
+		Rules: []config.RoutingRule{{
+			Value:  "bulk-lock.example",
+			Type:   config.RuleTypeDomain,
+			Action: config.ActionProxy,
+		}},
+	}
+	done := make(chan error, 1)
+	started := make(chan struct{})
+
+	srv.routingOpMu.Lock()
+	go func() {
+		close(started)
+		_, _, err := h.replaceRoutingAndApply(incoming)
+		done <- err
+	}()
+	<-started
+
+	select {
+	case err := <-done:
+		srv.routingOpMu.Unlock()
+		t.Fatalf("replaceRoutingAndApply completed while routingOpMu was held: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	srv.routingOpMu.Unlock()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("replaceRoutingAndApply error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("replaceRoutingAndApply stayed blocked after routingOpMu was released")
+	}
+}
+
+func TestAppProxyRoutesAllowOptionsPreflight(t *testing.T) {
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, context.Background())
+	srv.SetupAppProxyRoutes(nil, nil, nil)
+	srv.FinalizeRoutes()
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/apps/rules", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /api/apps/rules = %d, want 204; body: %s", w.Code, w.Body)
+	}
+	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:8080" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+}
+
+func TestGeositeRoutesAllowOptionsPreflight(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := NewServer(Config{
+		XRayManager:  &stubXray{},
+		ProxyManager: &stubProxy{},
+		Logger:       &logger.NoOpLogger{},
+	}, ctx)
+	srv.SetupFeatureRoutes(ctx)
+	srv.FinalizeRoutes()
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/geosite/download", nil)
+	req.Header.Set("Origin", "http://localhost:8080")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS /api/geosite/download = %d, want 204; body: %s", w.Code, w.Body)
 	}
 }
 

@@ -170,6 +170,17 @@ func ParseVLESSContent(content string) (*VLESSParams, error) {
 	return parseVLESSContentInternal(content)
 }
 
+func queryFirst(values url.Values, names ...string) string {
+	for _, name := range names {
+		for _, value := range values[name] {
+			if value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
 // parseVLESSContentInternal содержит реальную реализацию парсинга.
 func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 	// Убираем BOM (U+FEFF) — Блокнот Windows добавляет его при сохранении
@@ -216,16 +227,16 @@ func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 		Address:   parsedURL.Hostname(),
 		Port:      port,
 		UUID:      parsedURL.User.Username(),
-		SNI:       queryParams.Get("sni"),
-		PublicKey: queryParams.Get("pbk"),
-		ShortID:   queryParams.Get("sid"),
+		SNI:       queryFirst(queryParams, "sni", "serverName", "servername", "peer"),
+		PublicKey: queryFirst(queryParams, "pbk", "publicKey", "publickey"),
+		ShortID:   queryFirst(queryParams, "sid", "shortId", "shortid"),
 		Flow:      queryParams.Get("flow"),
 		Mux:       muxParam == "1" || muxParam == "true",
 	}
 	fragParam := strings.ToLower(strings.TrimSpace(queryParams.Get("fragment")))
 	params.Fragment = fragParam != "0" && fragParam != "false"
 	params.FragmentSize = queryParams.Get("fragment_size")
-	params.Fingerprint = queryParams.Get("fp")
+	params.Fingerprint = queryFirst(queryParams, "fp", "fingerprint", "utls")
 
 	// BUG FIX (фаззер): возвращал params с port=0 / port=99999 / пустым Address
 	// без ошибки. Теперь fail-fast прямо здесь, до возврата из парсера.

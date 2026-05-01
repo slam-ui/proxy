@@ -180,16 +180,13 @@ func (s *Server) handleImportRules(w http.ResponseWriter, r *http.Request) {
 		s.respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.tunHandlers.mu.Lock()
-	s.tunHandlers.routing.Rules = append(s.tunHandlers.routing.Rules, rules...)
-	snapshot := cloneRoutingConfig(s.tunHandlers.routing)
-	s.tunHandlers.mu.Unlock()
-	if err := config.SaveRoutingConfig(config.DataDir+"/routing.json", snapshot); err != nil {
+
+	if err := s.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+		routing.Rules = append(routing.Rules, rules...)
+		return len(rules) > 0, nil
+	}); err != nil {
 		s.respondError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if err := s.tunHandlers.TriggerApply(); err != nil {
-		s.logger.Warn("handleImportRules: TriggerApply: %v", err)
 	}
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{"imported": len(rules)})
 }

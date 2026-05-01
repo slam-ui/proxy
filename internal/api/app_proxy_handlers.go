@@ -27,29 +27,30 @@ func (s *Server) SetupAppProxyRoutes(engine apprules.Engine, monitor process.Mon
 		launcher: launcher,
 		server:   s,
 	}
+	api := s.router.PathPrefix("/api").Subrouter()
 
 	// Rules management
-	s.router.HandleFunc("/api/apps/rules", handlers.handleListRules).Methods("GET")
-	s.router.HandleFunc("/api/apps/rules", handlers.handleCreateRule).Methods("POST")
-	s.router.HandleFunc("/api/apps/rules/{id}", handlers.handleGetRule).Methods("GET")
-	s.router.HandleFunc("/api/apps/rules/{id}", handlers.handleUpdateRule).Methods("PUT")
-	s.router.HandleFunc("/api/apps/rules/{id}", handlers.handleDeleteRule).Methods("DELETE")
-	s.router.HandleFunc("/api/apps/rules/{id}/enable", handlers.handleEnableRule).Methods("POST")
-	s.router.HandleFunc("/api/apps/rules/{id}/disable", handlers.handleDisableRule).Methods("POST")
+	api.HandleFunc("/apps/rules", handlers.handleListRules).Methods("GET", "OPTIONS")
+	api.HandleFunc("/apps/rules", handlers.handleCreateRule).Methods("POST", "OPTIONS")
+	api.HandleFunc("/apps/rules/{id}", handlers.handleGetRule).Methods("GET", "OPTIONS")
+	api.HandleFunc("/apps/rules/{id}", handlers.handleUpdateRule).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/apps/rules/{id}", handlers.handleDeleteRule).Methods("DELETE", "OPTIONS")
+	api.HandleFunc("/apps/rules/{id}/enable", handlers.handleEnableRule).Methods("POST", "OPTIONS")
+	api.HandleFunc("/apps/rules/{id}/disable", handlers.handleDisableRule).Methods("POST", "OPTIONS")
 
 	// Process management
-	s.router.HandleFunc("/api/apps/processes", handlers.handleListProcesses).Methods("GET")
+	api.HandleFunc("/apps/processes", handlers.handleListProcesses).Methods("GET", "OPTIONS")
 	// {pid:[0-9]+} ограничивает паттерн только числами.
 	// Без этого GET /api/apps/processes/refresh попадал бы в этот хендлер
 	// вместо 405 Method Not Allowed, и возвращал 400 "Invalid PID".
-	s.router.HandleFunc("/api/apps/processes/{pid:[0-9]+}", handlers.handleGetProcess).Methods("GET")
-	s.router.HandleFunc("/api/apps/processes/refresh", handlers.handleRefreshProcesses).Methods("POST")
+	api.HandleFunc("/apps/processes/{pid:[0-9]+}", handlers.handleGetProcess).Methods("GET", "OPTIONS")
+	api.HandleFunc("/apps/processes/refresh", handlers.handleRefreshProcesses).Methods("POST", "OPTIONS")
 
 	// Launch process
-	s.router.HandleFunc("/api/apps/launch", handlers.handleLaunch).Methods("POST")
+	api.HandleFunc("/apps/launch", handlers.handleLaunch).Methods("POST", "OPTIONS")
 
 	// Find matching rule
-	s.router.HandleFunc("/api/apps/match", handlers.handleMatchRule).Methods("POST")
+	api.HandleFunc("/apps/match", handlers.handleMatchRule).Methods("POST", "OPTIONS")
 }
 
 // Requests and Responses

@@ -350,39 +350,36 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 		newDNS.RemoteDNSFallback = defaultDNS.RemoteDNSFallback
 	}
 
+	applyAlreadyRequested := false
 	if h.server.tunHandlers != nil {
-		// FIX Bug2: работаем через in-memory tunHandlers.routing под мьютексом.
-		// Чтение с диска + запись на диск создавало race с конкурентными handleAddRule и др.:
-		// если те уже изменили routing.Rules в памяти но ещё не сохранили на диск,
-		// handleSetDNS читал устаревший диск и перезаписывал его, теряя новые правила.
-		h.server.tunHandlers.mu.Lock()
-		oldDNS := h.server.tunHandlers.routing.DNS
-		h.server.tunHandlers.routing.DNS = newDNS
-		// Снимаем копию всего routing для сохранения на диск — включает все актуальные правила.
-		routingSnapshot := *h.server.tunHandlers.routing
-		h.server.tunHandlers.mu.Unlock()
-
-		if err := config.SaveRoutingConfig(routingConfigPath, &routingSnapshot); err != nil {
-			// Откатываем in-memory изменение при ошибке записи.
-			h.server.tunHandlers.mu.Lock()
-			h.server.tunHandlers.routing.DNS = oldDNS
-			h.server.tunHandlers.mu.Unlock()
+		// FIX Bug2: работаем через общий serialized read-modify-write routing.
+		// Без routingOpMu конкурентные handleAddRule/import/bulk replace могли сохранить
+		// снимок без нового DNS или, наоборот, handleSetDNS мог потерять только что добавленные правила.
+		if err := h.server.mutateRoutingSnapshot(func(routing *config.RoutingConfig) (bool, error) {
+			routing.DNS = newDNS
+			return true, nil
+		}); err != nil {
 			h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения: "+err.Error())
 			return
 		}
+		applyAlreadyRequested = true
 	} else {
 		// Fallback: TUN ещё не инициализирован — читаем с диска, обновляем DNS, сохраняем.
 		// В этом состоянии нет конкурентных горутин изменяющих routing, race невозможен.
+		h.server.routingOpMu.Lock()
 		cfg, err := config.LoadRoutingConfig(routingConfigPath)
 		if err != nil {
+			h.server.routingOpMu.Unlock()
 			h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения конфигурации: "+err.Error())
 			return
 		}
 		cfg.DNS = newDNS
 		if err := config.SaveRoutingConfig(routingConfigPath, cfg); err != nil {
+			h.server.routingOpMu.Unlock()
 			h.server.respondError(w, http.StatusInternalServerError, "ошибка сохранения: "+err.Error())
 			return
 		}
+		h.server.routingOpMu.Unlock()
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
@@ -393,7 +390,7 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 	})
 
 	// Применяем новый DNS сразу — sing-box должен использовать новые серверы.
-	if h.server.tunHandlers != nil {
+	if h.server.tunHandlers != nil && !applyAlreadyRequested {
 		if err := h.server.tunHandlers.TriggerApply(); err != nil {
 			h.server.logger.Warn("handleSetDNS: TriggerApply: %v", err)
 		}
