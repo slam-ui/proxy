@@ -28,6 +28,16 @@ func newBlob(d []byte) *dataBlob {
 	return &dataBlob{cbData: uint32(len(d)), pbData: &d[0]}
 }
 
+func freeBlob(blob *dataBlob, zero bool) {
+	if blob == nil || blob.pbData == nil {
+		return
+	}
+	if zero && blob.cbData > 0 {
+		clear(unsafe.Slice(blob.pbData, blob.cbData))
+	}
+	windows.LocalFree(windows.Handle(unsafe.Pointer(blob.pbData)))
+}
+
 func Encrypt(data []byte) ([]byte, error) {
 	in := newBlob(data)
 	var out dataBlob
@@ -45,7 +55,7 @@ func Encrypt(data []byte) ([]byte, error) {
 	if r == 0 {
 		return nil, fmt.Errorf("CryptProtectData: %w", err)
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.pbData)))
+	defer freeBlob(&out, false)
 	result := make([]byte, out.cbData)
 	copy(result, unsafe.Slice(out.pbData, out.cbData))
 	return result, nil
@@ -68,7 +78,7 @@ func Decrypt(data []byte) ([]byte, error) {
 	if r == 0 {
 		return nil, fmt.Errorf("CryptUnprotectData: %w", err)
 	}
-	defer windows.LocalFree(windows.Handle(unsafe.Pointer(out.pbData)))
+	defer freeBlob(&out, true)
 	result := make([]byte, out.cbData)
 	copy(result, unsafe.Slice(out.pbData, out.cbData))
 	return result, nil
