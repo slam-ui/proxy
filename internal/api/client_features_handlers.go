@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,8 @@ import (
 
 	"github.com/gorilla/mux"
 )
+
+const maxClientFeaturesRequestBytes = 4 << 10
 
 const temporaryRuleNotePrefix = "expires:"
 
@@ -300,7 +303,18 @@ func (s *Server) handleConnectionRule(w http.ResponseWriter, r *http.Request) {
 		Action config.RuleAction `json:"action"`
 		TTLMin int               `json:"ttl_min"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxClientFeaturesRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -428,7 +442,18 @@ func (s *Server) handleDNSGuardGet(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleDNSGuardSet(w http.ResponseWriter, r *http.Request) {
 	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
 	var body config.DNSGuardSettings
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxClientFeaturesRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -554,7 +579,18 @@ func (s *Server) handleTrafficBudgetGet(w http.ResponseWriter, _ *http.Request) 
 func (s *Server) handleTrafficBudgetSet(w http.ResponseWriter, r *http.Request) {
 	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
 	var body config.TrafficBudgetSettings
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxClientFeaturesRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		s.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
