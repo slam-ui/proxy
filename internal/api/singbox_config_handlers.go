@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -9,6 +11,8 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
 )
+
+const maxSingBoxConfigRequestBytes = 4 << 20
 
 type singBoxConfigResponse struct {
 	Path          string `json:"path"`
@@ -55,7 +59,18 @@ func (s *Server) handleSetSingBoxConfig(w http.ResponseWriter, r *http.Request) 
 		ManualEnabled *bool   `json:"manual_enabled"`
 		Apply         bool    `json:"apply"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSingBoxConfigRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		s.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		s.respondError(w, http.StatusBadRequest, "неверный JSON: multiple JSON values")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
 		return
 	}
