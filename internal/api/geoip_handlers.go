@@ -23,6 +23,8 @@ const (
 var (
 	geoCacheMu sync.Mutex
 	geoCache   = map[string]geoCacheEntry{}
+
+	geoIPHTTPClient = &http.Client{Timeout: 3 * time.Second}
 )
 
 type geoCacheEntry struct {
@@ -204,7 +206,7 @@ func countryFromIPAPI(ctx context.Context, ipStr string) string {
 	if err != nil {
 		return ""
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := geoIPHTTPClient.Do(req)
 	if err != nil {
 		return ""
 	}
