@@ -3,6 +3,7 @@ package trafficstats
 import (
 	"encoding/json"
 	"os"
+	"sync"
 	"sync/atomic"
 
 	"proxyclient/internal/fileutil"
@@ -19,6 +20,7 @@ type Stats struct {
 }
 
 var (
+	saveMu      sync.Mutex
 	sessionDown atomic.Int64
 	sessionUp   atomic.Int64
 )
@@ -36,6 +38,9 @@ func Current() Stats {
 }
 
 func SaveToFile() error {
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
 	s := load()
 	down := sessionDown.Swap(0)
 	up := sessionUp.Swap(0)
@@ -46,7 +51,12 @@ func SaveToFile() error {
 	if err != nil {
 		return err
 	}
-	return fileutil.WriteAtomic(statsFile, data, 0644)
+	if err := fileutil.WriteAtomic(statsFile, data, 0644); err != nil {
+		sessionDown.Add(down)
+		sessionUp.Add(up)
+		return err
+	}
+	return nil
 }
 
 func load() Stats {
