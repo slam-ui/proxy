@@ -3,10 +3,13 @@ package apprules
 import (
 	"crypto/rand"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 	"time"
 )
+
+var randRead = rand.Read
 
 // Engine интерфейс для управления правилами
 type Engine interface {
@@ -57,10 +60,16 @@ func NewEngine() Engine {
 }
 
 // newID генерирует уникальный ID без внешних зависимостей
-func newID() string {
+func newID() (string, error) {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+	n, err := randRead(b)
+	if err != nil {
+		return "", fmt.Errorf("generate rule id: %w", err)
+	}
+	if n != len(b) {
+		return "", fmt.Errorf("generate rule id: %w", io.ErrShortBuffer)
+	}
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
 // AddRule добавляет новое правило
@@ -73,7 +82,11 @@ func (e *engine) AddRule(rule Rule) (*Rule, error) {
 	}
 
 	now := time.Now()
-	rule.ID = newID()
+	id, err := newID()
+	if err != nil {
+		return nil, err
+	}
+	rule.ID = id
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
 	// OPT #1: нормализуем паттерн один раз при сохранении.
@@ -93,7 +106,11 @@ func (e *engine) restoreRule(rule Rule) error {
 		return fmt.Errorf("invalid rule: %w", err)
 	}
 	if rule.ID == "" {
-		rule.ID = newID()
+		id, err := newID()
+		if err != nil {
+			return err
+		}
+		rule.ID = id
 	}
 	rule.Pattern = NormalizePattern(rule.Pattern)
 	e.rules[rule.ID] = &rule
