@@ -115,6 +115,8 @@ type GeositeDownloadRequest struct {
 	Apply *bool  `json:"apply,omitempty"`
 }
 
+const maxGeositeDownloadRequestBytes = 4 << 10
+
 func isValidGeositeName(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.Contains(name, "..") || strings.ContainsAny(name, `/\`) {
@@ -177,10 +179,20 @@ func (s *Server) geositeRuleNames() []string {
 
 func (s *Server) handleGeositeDownload(w http.ResponseWriter, r *http.Request) {
 	var req GeositeDownloadRequest
-	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+	r.Body = http.MaxBytesReader(w, r.Body, maxGeositeDownloadRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	decodeErr := dec.Decode(&req)
 	if decodeErr != nil && !errors.Is(decodeErr, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
 		return
+	}
+	if decodeErr == nil {
+		var extra struct{}
+		if err := dec.Decode(&extra); err == nil || !errors.Is(err, io.EOF) {
+			s.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+			return
+		}
 	}
 	shouldApply := req.Apply == nil || *req.Apply
 
