@@ -20,6 +20,8 @@ func TestIsProxyEnvVar_DetectsProxyVariables(t *testing.T) {
 		"HTTPS_PROXY=http://localhost:8080",
 		"ALL_PROXY=http://localhost:8080",
 		"http_proxy=http://localhost:8080",
+		"NO_PROXY=localhost",
+		"no_proxy=localhost",
 	}
 
 	for _, env := range proxyVars {
@@ -113,6 +115,67 @@ func TestApplyRuleToCommand_ProxyAction(t *testing.T) {
 	}
 }
 
+func TestApplyProxyEnvReplacesExistingProxyVars(t *testing.T) {
+	log := logger.New(logger.LevelInfo)
+	engine := apprules.NewEngine()
+	l := NewLauncher(log, engine).(*launcher)
+	l.baseEnv = []string{
+		"PATH=C:\\Windows",
+		"HTTP_PROXY=http://old-proxy",
+		"NO_PROXY=old.local",
+	}
+
+	cmd := exec.Command("test.exe")
+	if err := l.applyProxyEnv(cmd, "127.0.0.1:8080"); err != nil {
+		t.Fatalf("applyProxyEnv: %v", err)
+	}
+
+	if got := countEnvKey(cmd.Env, "HTTP_PROXY"); got != 1 {
+		t.Fatalf("HTTP_PROXY entries=%d, want 1 in %v", got, cmd.Env)
+	}
+	if got := countEnvKey(cmd.Env, "NO_PROXY"); got != 1 {
+		t.Fatalf("NO_PROXY entries=%d, want 1 in %v", got, cmd.Env)
+	}
+	envMap := envToMap(cmd.Env)
+	if envMap["HTTP_PROXY"] != "http://127.0.0.1:8080" {
+		t.Fatalf("HTTP_PROXY=%q, want new proxy", envMap["HTTP_PROXY"])
+	}
+	if envMap["NO_PROXY"] != "localhost,127.0.0.1,::1" {
+		t.Fatalf("NO_PROXY=%q, want local bypass list", envMap["NO_PROXY"])
+	}
+}
+
+func TestApplyDirectEnvRemovesExistingNoProxyVars(t *testing.T) {
+	log := logger.New(logger.LevelInfo)
+	engine := apprules.NewEngine()
+	l := NewLauncher(log, engine).(*launcher)
+
+	cmd := exec.Command("test.exe")
+	cmd.Env = []string{
+		"PATH=C:\\Windows",
+		"HTTP_PROXY=http://old-proxy",
+		"NO_PROXY=old.local",
+		"no_proxy=old.local",
+	}
+	if err := l.applyDirectEnv(cmd); err != nil {
+		t.Fatalf("applyDirectEnv: %v", err)
+	}
+
+	if got := countEnvKey(cmd.Env, "HTTP_PROXY"); got != 0 {
+		t.Fatalf("HTTP_PROXY entries=%d, want 0 in %v", got, cmd.Env)
+	}
+	if got := countEnvKey(cmd.Env, "NO_PROXY"); got != 1 {
+		t.Fatalf("NO_PROXY entries=%d, want 1 in %v", got, cmd.Env)
+	}
+	if got := countEnvKey(cmd.Env, "no_proxy"); got != 1 {
+		t.Fatalf("no_proxy entries=%d, want 1 in %v", got, cmd.Env)
+	}
+	envMap := envToMap(cmd.Env)
+	if envMap["NO_PROXY"] != "*" || envMap["no_proxy"] != "*" {
+		t.Fatalf("direct NO_PROXY values = %q/%q, want *", envMap["NO_PROXY"], envMap["no_proxy"])
+	}
+}
+
 // ── LaunchResult Tests ────────────────────────────────────────────────────────────
 
 func TestLaunchResult_FilledCorrectly(t *testing.T) {
@@ -160,6 +223,17 @@ func envToMap(env []string) map[string]string {
 		}
 	}
 	return result
+}
+
+func countEnvKey(env []string, key string) int {
+	count := 0
+	for _, e := range env {
+		got, _, _ := strings.Cut(e, "=")
+		if got == key {
+			count++
+		}
+	}
+	return count
 }
 
 func TestLauncher_ConcurrentLaunch(t *testing.T) {
