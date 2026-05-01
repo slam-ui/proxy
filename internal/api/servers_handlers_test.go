@@ -385,6 +385,35 @@ func TestHandleFetchURL_ValidVLESS(t *testing.T) {
 	}
 }
 
+func TestHandleAddServerRejectsUnknownFields(t *testing.T) {
+	srv, cleanup := buildServerRoutesServer(t)
+	defer cleanup()
+
+	body := `{"name":"A","url":"vless://uuid@example.com:443","country_code":"DE","unexpected":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/servers", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleFetchURLRejectsOversizedBody(t *testing.T) {
+	srv := newTestServerWithMockFetch(t, "vless://uuid@example.com:443")
+
+	body := `{"url":"https://example.com/sub","name":"` + strings.Repeat("x", maxServersRequestBytes) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/servers/fetch-url", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
 // TestValidateSubscriptionURL проверяет валидацию URL субскрипций.
 func TestValidateSubscriptionURL(t *testing.T) {
 	valid := []string{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -74,7 +75,29 @@ func (h *ServersHandlers) Shutdown() {
 	noProxyTransport.CloseIdleConnections()
 }
 
-const serversFile = "servers.json"
+const (
+	serversFile            = "servers.json"
+	maxServersRequestBytes = 64 << 10
+)
+
+func (h *ServersHandlers) decodeRequest(w http.ResponseWriter, r *http.Request, dst interface{}) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxServersRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+		return false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: несколько JSON-значений в теле запроса")
+		return false
+	} else if !errors.Is(err, io.EOF) {
+		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+		return false
+	}
+	return true
+}
 
 // ServerEntry — сохранённый сервер в servers.json
 type ServerEntry struct {
@@ -222,8 +245,7 @@ func (h *ServersHandlers) handleAdd(w http.ResponseWriter, r *http.Request) {
 		URL         string `json:"url"`
 		CountryCode string `json:"country_code"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+	if !h.decodeRequest(w, r, &req) {
 		return
 	}
 	req.URL = strings.TrimSpace(strings.TrimPrefix(req.URL, "\xef\xbb\xbf"))
@@ -609,8 +631,7 @@ func (h *ServersHandlers) handleImportClipboard(w http.ResponseWriter, r *http.R
 	var req struct {
 		URL string `json:"url"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+	if !h.decodeRequest(w, r, &req) {
 		return
 	}
 
@@ -979,8 +1000,7 @@ func (h *ServersHandlers) handleFetchURL(w http.ResponseWriter, r *http.Request)
 		URL  string `json:"url"`
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+	if !h.decodeRequest(w, r, &req) {
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)
