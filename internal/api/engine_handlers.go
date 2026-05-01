@@ -11,12 +11,35 @@ import (
 	"proxyclient/internal/engine"
 )
 
+const maxEngineRequestBytes = 4 << 10
+
+type enginePathRequest struct {
+	ExecPath string `json:"exec_path"`
+}
+
+func decodeEnginePathRequest(w http.ResponseWriter, r *http.Request, req *enginePathRequest) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxEngineRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		return errors.New("multiple JSON values")
+	} else if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
 // handleEngineVersion GET /api/engine/version — возвращает установленную и последнюю версии sing-box.
 func (s *Server) handleEngineVersion(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ExecPath string `json:"exec_path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	var req enginePathRequest
+	if err := decodeEnginePathRequest(w, r, &req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -79,10 +102,8 @@ func (s *Server) handleEngineStatus(w http.ResponseWriter, _ *http.Request) {
 
 // handleEngineDownload POST /api/engine/download — запускает загрузку sing-box.exe
 func (s *Server) handleEngineDownload(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ExecPath string `json:"exec_path"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	var req enginePathRequest
+	if err := decodeEnginePathRequest(w, r, &req); err != nil {
 		s.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
