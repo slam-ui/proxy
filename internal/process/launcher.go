@@ -158,8 +158,12 @@ func (l *launcher) applyProxyEnv(cmd *exec.Cmd, proxyAddr string) error {
 
 	// OPT #9: копируем кэшированный базовый environ вместо os.Environ().
 	l.baseEnvMu.RLock()
-	env := make([]string, len(l.baseEnv), len(l.baseEnv)+6)
-	copy(env, l.baseEnv)
+	env := make([]string, 0, len(l.baseEnv)+6)
+	for _, e := range l.baseEnv {
+		if !isProxyEnvVar(e) {
+			env = append(env, e)
+		}
+	}
 	l.baseEnvMu.RUnlock()
 
 	env = append(env,
@@ -215,7 +219,7 @@ func (l *launcher) applyDirectEnv(cmd *exec.Cmd) error {
 func isProxyEnvVar(env string) bool {
 	key, _, _ := strings.Cut(env, "=")
 	switch strings.ToUpper(key) {
-	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY":
+	case "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY":
 		return true
 	}
 	return false
