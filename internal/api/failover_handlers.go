@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -18,7 +20,22 @@ func (h *ServersHandlers) handleFailoverSettings(w http.ResponseWriter, _ *http.
 func (h *ServersHandlers) handleSetFailoverSettings(w http.ResponseWriter, r *http.Request) {
 	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
 	var body config.SmartFailoverSettings
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if dec.More() {
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid body")
 		return
 	}

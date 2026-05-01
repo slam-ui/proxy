@@ -411,3 +411,33 @@ func TestValidateSubscriptionURL(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleSetFailoverSettingsRejectsUnknownFields(t *testing.T) {
+	srv, cleanup := buildServerRoutesServer(t)
+	defer cleanup()
+
+	body := `{"enabled":true,"max_latency_ms":700,"check_interval_sec":60,"min_improvement_ms":50,"unexpected":true}`
+	req := httptest.NewRequest(http.MethodPost, "/api/servers/failover/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSetFailoverSettingsRejectsOversizedBody(t *testing.T) {
+	srv, cleanup := buildServerRoutesServer(t)
+	defer cleanup()
+
+	body := `{"enabled":true` + strings.Repeat(" ", 5<<10) + `}`
+	req := httptest.NewRequest(http.MethodPost, "/api/servers/failover/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
