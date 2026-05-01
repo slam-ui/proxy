@@ -1,6 +1,7 @@
 package apprules
 
 import (
+	"errors"
 	"sync"
 	"testing"
 )
@@ -96,6 +97,25 @@ func TestEngine_ListRules_Empty_NotNil(t *testing.T) {
 	rules := e.ListRules()
 	if rules == nil {
 		t.Error("ListRules на пустом engine не должен возвращать nil")
+	}
+}
+
+func TestEngine_AddRule_IDGenerationError(t *testing.T) {
+	oldRandRead := randRead
+	randRead = func([]byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+	t.Cleanup(func() {
+		randRead = oldRandRead
+	})
+
+	e := NewEngine()
+	_, err := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Enabled: true})
+	if err == nil {
+		t.Fatal("AddRule succeeded when ID generation failed")
+	}
+	if len(e.ListRules()) != 0 {
+		t.Fatal("rule was added after ID generation failure")
 	}
 }
 
