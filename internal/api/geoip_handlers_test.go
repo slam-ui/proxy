@@ -51,3 +51,9 @@ func TestGeoIPAPIURL_EscapesPathSegment(t *testing.T) {
 		t.Fatalf("geoIPAPIURL = %q, want %q", got, want)
 	}
 }
+
+func TestGeoIPHTTPClientHasTimeout(t *testing.T) {
+	if geoIPHTTPClient.Timeout <= 0 {
+		t.Fatal("geoIPHTTPClient must have a finite timeout")
+	}
+}
