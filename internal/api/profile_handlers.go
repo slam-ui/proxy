@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 )
 
 const profilesDir = "profiles"
+const maxProfileSaveRequestBytes = 1 << 20
 
 var reValidName = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,64}$`) // letters, digits, space, _, -
 
@@ -145,7 +147,18 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		Name    string               `json:"name"`
 		Routing config.RoutingConfig `json:"routing"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxProfileSaveRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: multiple JSON values")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
