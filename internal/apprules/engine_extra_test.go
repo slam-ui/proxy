@@ -12,7 +12,10 @@ import (
 // Если нарушен — UI покажет неверную дату создания.
 func TestEngine_UpdateRule_PreservesCreatedAt(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(newTestRule("app.exe", ActionProxy, 10))
+	r, err := e.AddRule(newTestRule("app.exe", ActionProxy, 10))
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
 	createdAt := r.CreatedAt
 
 	updated, err := e.UpdateRule(r.ID, Rule{
@@ -35,8 +38,13 @@ func TestEngine_UpdateRule_PreservesCreatedAt(t *testing.T) {
 // только Enabled=true. Задизейбленное правило НЕ должно матчиться.
 func TestEngine_Match_DisabledRule_NotMatched(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(Rule{Pattern: "blocked_app.exe", Action: ActionBlock, Priority: 100, Enabled: true})
-	e.DisableRule(r.ID)
+	r, err := e.AddRule(Rule{Pattern: "blocked_app.exe", Action: ActionBlock, Priority: 100, Enabled: true})
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
+	if err := e.DisableRule(r.ID); err != nil {
+		t.Fatalf("DisableRule failed: %v", err)
+	}
 
 	match := e.Match("blocked_app.exe")
 	if match.Matched {
@@ -47,9 +55,16 @@ func TestEngine_Match_DisabledRule_NotMatched(t *testing.T) {
 // BUG-РИСК: после EnableRule правило снова должно матчиться.
 func TestEngine_EnableRule_RestoredToMatch(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 10, Enabled: true})
-	e.DisableRule(r.ID)
-	e.EnableRule(r.ID)
+	r, err := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 10, Enabled: true})
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
+	if err := e.DisableRule(r.ID); err != nil {
+		t.Fatalf("DisableRule failed: %v", err)
+	}
+	if err := e.EnableRule(r.ID); err != nil {
+		t.Fatalf("EnableRule failed: %v", err)
+	}
 
 	match := e.Match("app.exe")
 	if !match.Matched {
@@ -63,8 +78,12 @@ func TestEngine_EnableRule_RestoredToMatch(t *testing.T) {
 // точное правило с высоким приоритетом.
 func TestEngine_Match_Priority_HigherWins(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(Rule{Pattern: "*.exe", Action: ActionDirect, Priority: 5, Enabled: true})
-	e.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 100, Enabled: true})
+	if _, err := e.AddRule(Rule{Pattern: "*.exe", Action: ActionDirect, Priority: 5, Enabled: true}); err != nil {
+		t.Fatalf("AddRule wildcard failed: %v", err)
+	}
+	if _, err := e.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 100, Enabled: true}); err != nil {
+		t.Fatalf("AddRule exact failed: %v", err)
+	}
 
 	match := e.Match("chrome.exe")
 	if !match.Matched {
@@ -81,9 +100,16 @@ func TestEngine_Match_Priority_HigherWins(t *testing.T) {
 // а не только те, что в sorted кэше.
 func TestEngine_ListRules_IncludesDisabled(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(Rule{Pattern: "a.exe", Action: ActionProxy, Priority: 1, Enabled: true})
-	r2, _ := e.AddRule(Rule{Pattern: "b.exe", Action: ActionDirect, Priority: 2, Enabled: true})
-	e.DisableRule(r2.ID)
+	if _, err := e.AddRule(Rule{Pattern: "a.exe", Action: ActionProxy, Priority: 1, Enabled: true}); err != nil {
+		t.Fatalf("AddRule first failed: %v", err)
+	}
+	r2, err := e.AddRule(Rule{Pattern: "b.exe", Action: ActionDirect, Priority: 2, Enabled: true})
+	if err != nil {
+		t.Fatalf("AddRule second failed: %v", err)
+	}
+	if err := e.DisableRule(r2.ID); err != nil {
+		t.Fatalf("DisableRule failed: %v", err)
+	}
 
 	rules := e.ListRules()
 	if len(rules) != 2 {
@@ -123,8 +149,13 @@ func TestEngine_AddRule_IDGenerationError(t *testing.T) {
 
 func TestEngine_DeleteRule_RemovedFromMatch(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(Rule{Pattern: "temp.exe", Action: ActionProxy, Priority: 10, Enabled: true})
-	e.DeleteRule(r.ID)
+	r, err := e.AddRule(Rule{Pattern: "temp.exe", Action: ActionProxy, Priority: 10, Enabled: true})
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
+	if err := e.DeleteRule(r.ID); err != nil {
+		t.Fatalf("DeleteRule failed: %v", err)
+	}
 
 	match := e.Match("temp.exe")
 	if match.Matched {
@@ -138,7 +169,10 @@ func TestEngine_DeleteRule_RemovedFromMatch(t *testing.T) {
 // не должен сработать. Запускать с -race флагом.
 func TestEngine_Match_ConcurrentWithMutations(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 1, Enabled: true})
+	r, err := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 1, Enabled: true})
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -152,8 +186,12 @@ func TestEngine_Match_ConcurrentWithMutations(t *testing.T) {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
-			e.DisableRule(id)
-			e.EnableRule(id)
+			if err := e.DisableRule(id); err != nil {
+				t.Errorf("DisableRule failed: %v", err)
+			}
+			if err := e.EnableRule(id); err != nil {
+				t.Errorf("EnableRule failed: %v", err)
+			}
 		}(r.ID)
 	}
 	wg.Wait()
@@ -186,13 +224,22 @@ func TestEngine_EnableDisable_NonexistentID_ReturnsError(t *testing.T) {
 // BUG-РИСК: мутация возвращённого правила не должна влиять на внутреннее состояние.
 func TestEngine_GetRule_ReturnsCopy(t *testing.T) {
 	e := NewEngine()
-	r, _ := e.AddRule(newTestRule("app.exe", ActionProxy, 10))
+	r, err := e.AddRule(newTestRule("app.exe", ActionProxy, 10))
+	if err != nil {
+		t.Fatalf("AddRule failed: %v", err)
+	}
 
-	got, _ := e.GetRule(r.ID)
+	got, err := e.GetRule(r.ID)
+	if err != nil {
+		t.Fatalf("GetRule failed: %v", err)
+	}
 	got.Pattern = "mutated.exe"
 
 	// Оригинал не должен измениться
-	original, _ := e.GetRule(r.ID)
+	original, err := e.GetRule(r.ID)
+	if err != nil {
+		t.Fatalf("GetRule original failed: %v", err)
+	}
 	if original.Pattern == "mutated.exe" {
 		t.Error("GetRule должен возвращать копию — мутация не должна влиять на engine")
 	}
