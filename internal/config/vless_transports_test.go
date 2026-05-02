@@ -121,6 +121,29 @@ func TestParseVLESSURL_GRPC(t *testing.T) {
 	}
 }
 
+func TestBuildVLESSOutbound_GRPC(t *testing.T) {
+	params := &VLESSParams{
+		Address:     "example.com",
+		Port:        443,
+		UUID:        "uuid",
+		SNI:         "sni.example.com",
+		PublicKey:   "pub",
+		ShortID:     "abc",
+		Security:    "reality",
+		Type:        "grpc",
+		ServiceName: "GunService",
+		GRPCMode:    "multi",
+	}
+	out := buildVLESSOutbound(params)
+	if out.Transport == nil {
+		t.Fatal("Transport должен быть задан для grpc")
+	}
+	want := &SBTransport{Type: "grpc", ServiceName: "GunService"}
+	if !reflect.DeepEqual(out.Transport, want) {
+		t.Fatalf("Transport = %#v, want %#v", out.Transport, want)
+	}
+}
+
 func TestParseVLESSURL_HTTP(t *testing.T) {
 	p, err := ParseVLESSContent("vless://uuid@example.com:443?security=tls&type=h2&path=/h2&host=a.example.com,b.example.com")
 	if err != nil {

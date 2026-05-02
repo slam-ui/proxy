@@ -146,6 +146,11 @@ func buildTransport(params *VLESSParams) *SBTransport {
 			t.EarlyDataHeaderName = "Sec-WebSocket-Protocol"
 		}
 		return t
+	case "grpc":
+		return &SBTransport{
+			Type:        "grpc",
+			ServiceName: params.ServiceName,
+		}
 	}
 	// Невалидные или ещё не реализованные типы должны были отсеяться парсером.
 	return nil
