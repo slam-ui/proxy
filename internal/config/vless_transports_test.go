@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -284,6 +285,26 @@ func TestBuildVLESSOutbound_Insecure(t *testing.T) {
 	out := buildVLESSOutbound(params)
 	if out.TLS == nil || !out.TLS.Insecure {
 		t.Fatalf("TLS.Insecure должен быть true: %+v", out.TLS)
+	}
+}
+
+func TestBuildVLESSOutbound_TCPRealityGolden(t *testing.T) {
+	params := &VLESSParams{
+		Address:   "reality-srv.example.com",
+		Port:      443,
+		UUID:      "uuid",
+		SNI:       "cdn.example.com",
+		PublicKey: "realitypubkey",
+		ShortID:   "0xabcd",
+	}
+	out := buildVLESSOutbound(params)
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	const want = `{"type":"vless","tag":"proxy-out","server":"reality-srv.example.com","server_port":443,"uuid":"uuid","tls":{"enabled":true,"server_name":"cdn.example.com","reality":{"enabled":true,"public_key":"realitypubkey","short_id":"0xabcd"},"utls":{"enabled":true,"fingerprint":"random"},"alpn":["h2","http/1.1"]},"tcp_fast_open":true,"tcp_multi_path":true}`
+	if string(raw) != want {
+		t.Fatalf("golden mismatch:\n got: %s\nwant: %s", raw, want)
 	}
 }
 
