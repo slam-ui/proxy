@@ -55,6 +55,7 @@ func (h *ServersHandlers) handleFailoverStatus(w http.ResponseWriter, r *http.Re
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	list = visibleServers(list)
 	activeID := h.activeServerIDFromList(list)
 	type score struct {
 		ID        string `json:"id"`
@@ -119,6 +120,7 @@ func (h *ServersHandlers) shouldFailover(ctx context.Context, settings config.Sm
 	h.mu.RLock()
 	list, err := loadServers()
 	h.mu.RUnlock()
+	list = visibleServers(list)
 	if err != nil || len(list) < 2 {
 		return false
 	}

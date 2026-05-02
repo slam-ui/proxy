@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/subscription"
 	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 
@@ -116,6 +118,7 @@ type Server struct {
 	silentCache     map[string]bool
 	tunHandlers     *TunHandlers
 	serversHandlers *ServersHandlers
+	subscriptions   *subscription.Manager
 	reconnectMu     sync.Mutex
 	reconnectCancel context.CancelFunc
 
@@ -304,6 +307,18 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	if s.config.SecretKeyPath != "" {
 		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
 		s.serversHandlers.StartSmartFailover(ctx)
+		if mgr, err := subscription.NewManager(subscription.Options{
+			Dir:          filepath.Join(config.DataDir, "subscriptions"),
+			Client:       newSubscriptionHTTPClient(noProxyTransport),
+			IsSupported:  isSupportedServerURI,
+			ApplyServers: s.serversHandlers.applySubscriptionServers,
+		}); err != nil {
+			s.logger.Warn("subscriptions disabled: %v", err)
+		} else {
+			s.subscriptions = mgr
+			SetupSubscriptionRoutes(s)
+			go mgr.Start(ctx)
+		}
 	}
 
 	api := s.router.PathPrefix("/api").Subrouter()
@@ -332,6 +347,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/security/traffic-budget")
 	s.addSilentPath("/api/servers/failover")
 	s.addSilentPath("/api/update/status")
+	s.addSilentPath("/api/subscriptions")
 }
 
 func (s *Server) FinalizeRoutes() {
