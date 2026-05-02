@@ -198,6 +198,27 @@ func TestParseVLESSURL_HTTPUpgrade(t *testing.T) {
 	}
 }
 
+func TestBuildVLESSOutbound_HTTPUpgrade(t *testing.T) {
+	params := &VLESSParams{
+		Address:  "example.com",
+		Port:     443,
+		UUID:     "uuid",
+		SNI:      "sni.example.com",
+		Security: "tls",
+		Type:     "httpupgrade",
+		Path:     "/up",
+		Host:     []string{"edge.example.com"},
+	}
+	out := buildVLESSOutbound(params)
+	if out.Transport == nil {
+		t.Fatal("Transport должен быть задан для httpupgrade")
+	}
+	want := &SBTransport{Type: "httpupgrade", Path: "/up", Headers: map[string]string{"Host": "edge.example.com"}}
+	if !reflect.DeepEqual(out.Transport, want) {
+		t.Fatalf("Transport = %#v, want %#v", out.Transport, want)
+	}
+}
+
 func TestParseVLESSURL_TCPHTTPObfuscation(t *testing.T) {
 	p, err := ParseVLESSContent("vless://uuid@example.com:443?security=tls&type=tcp&headerType=http&path=/&host=front.example.com")
 	if err != nil {
