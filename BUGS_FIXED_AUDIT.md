@@ -293,3 +293,142 @@
 - **File(s):** internal/apprules/engine_extra_test.go
 - **Reason:** Existing tests in the touched file ignored rule mutation errors; checking them prevents silent false-positive test passes and removed a local `golangci-lint` finding without changing production behavior.
 - **Verified:** go build ok, go test -race ok, GOOS=windows/linux build ok
+
+## Win32 / unsafe pass (categories B, J)
+
+### [F-026] Unsafe DLL search paths for system DLLs
+- **Severity:** High
+- **Category:** B
+- **File(s):** cmd/proxy-client/main.go, internal/xray/process_windows.go, internal/process/monitor_windows.go, internal/proxy/windows_proxy.go, internal/window/window.go, internal/fileutil/atomic.go, cmd/proxy-client/orphan_test.go
+- **Symptom:** Several Win32 callers used `syscall.NewLazyDLL`, which can participate in unsafe DLL search behavior.
+- **Root cause:** System DLL loading was inconsistent across Windows-only packages.
+- **Fix:** Switched Win32 system DLL loading to `windows.NewLazySystemDLL` and set default DLL directories early in `main`.
+- **Verified:** `go build ./...`, `GOOS=linux GOARCH=amd64 go build ./...`, `gosec -quiet -severity high ./...`
+
+### [F-027] Wintun DLL load path not pinned
+- **Severity:** High
+- **Category:** B
+- **File(s):** internal/wintun/probe_windows.go
+- **Symptom:** The Wintun probe loaded `wintun.dll` by name.
+- **Root cause:** The probe did not constrain DLL resolution to the application directory plus System32.
+- **Fix:** Load `wintun.dll` from the executable directory via `LoadLibraryEx` with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32`, then resolve exports with `GetProcAddress`.
+- **Verified:** `go test ./internal/wintun/... -count=1`, full `go test ./... -count=1 -race -timeout=10m`
+
+### [F-028] Win32 callbacks lacked panic/lifetime guards
+- **Severity:** Medium
+- **Category:** B
+- **File(s):** internal/tray/tray_win32.go, internal/netwatch/netwatch_windows.go
+- **Symptom:** Panics escaping Win32 callbacks or callback values losing lifetime clarity could destabilize the process.
+- **Root cause:** Callback functions were not consistently wrapped and retained.
+- **Fix:** Added callback panic recovery, a package-level tray window proc callback, and explicit `runtime.KeepAlive` where callback or UTF-16 pointer lifetime matters.
+- **Verified:** `go test ./internal/tray/... ./internal/netwatch/... -count=1`
+
+### [F-029] High-severity syscall conversion findings
+- **Severity:** Medium
+- **Category:** B
+- **File(s):** cmd/proxy-client/main.go, internal/window/window.go, internal/tray/tray_win32.go, internal/tray/icon.go, internal/dpapi/dpapi_windows.go, internal/xray/memory_windows.go
+- **Symptom:** `gosec` high severity G115 findings obscured real integer-conversion risk in syscall arguments.
+- **Root cause:** Win32 signed integer parameters and bounded buffer lengths were cast inline without guards or rationale.
+- **Fix:** Added bounded conversion helpers, explicit length checks, and narrow `#nosec` comments only where the Win32 ABI requires signed values in `uintptr` slots.
+- **Verified:** `gosec -quiet -severity high ./...`
+
+## Security pass (category G)
+
+### [F-030] Local API could bind wildcard addresses
+- **Severity:** High
+- **Category:** G
+- **File(s):** internal/api/server.go, internal/api/server_timeout_test.go, cmd/proxy-client/app.go, cmd/proxy-client/main.go
+- **Symptom:** API defaults and internal callers mixed wildcard/localhost addressing.
+- **Root cause:** `NewServer` accepted wildcard listen addresses directly, and internal URLs used `localhost`.
+- **Fix:** Normalize wildcard and localhost listen addresses to `127.0.0.1`, and use loopback TCP helpers for internal client calls.
+- **Test:** `TestServerNormalizesWildcardListenAddressToLoopback`
+- **Verified:** `go test ./internal/api/... ./cmd/proxy-client/... -count=1`
+
+### [F-031] Backup restore accepted unexpected in-tree files
+- **Severity:** High
+- **Category:** G
+- **File(s):** internal/api/backup_handlers.go, internal/api/backup_restore_extra_test.go
+- **Symptom:** A valid backup zip could restore arbitrary root files if the path stayed under the workdir.
+- **Root cause:** Restore protection blocked Zip Slip but did not restrict entries to the backup schema.
+- **Fix:** Added a restore allowlist for `servers.json`, `data/settings.json`, `data/routing.json`, and `profiles/*.json`.
+- **Test:** `TestHandleBackupRestore_SkipsUnexpectedRootFiles`
+- **Verified:** `go test ./internal/api/... -count=1`
+
+### [F-032] Reserved Windows profile names
+- **Severity:** Medium
+- **Category:** G
+- **File(s):** internal/api/profile_handlers.go, internal/api/profile_handlers_test.go
+- **Symptom:** Profile names such as `CON` or `COM1` could map to reserved Windows device names.
+- **Root cause:** Profile path validation rejected traversal but not Windows device basenames.
+- **Fix:** Reject reserved device names before appending `.json`.
+- **Test:** `TestProfilePathRejectsWindowsDeviceNames`
+- **Verified:** `go test ./internal/api/... -count=1`
+
+### [F-033] Secret key plaintext lifetime
+- **Severity:** Medium
+- **Category:** G
+- **File(s):** internal/config/vless.go
+- **Symptom:** DPAPI plaintext byte buffers could remain live after read/write operations.
+- **Root cause:** DPAPI plaintext slices were converted or written without zeroing temporary buffers.
+- **Fix:** Zero DPAPI plaintext and serialized secret buffers after use while keeping the returned string behavior unchanged.
+- **Verified:** `go test ./internal/config/... -count=1`, `govulncheck ./...`
+
+### [F-034] GeoIP request input hardening
+- **Severity:** Medium
+- **Category:** G
+- **File(s):** internal/api/geoip_handlers.go
+- **Symptom:** Dynamic URL construction produced high-severity security scanner findings.
+- **Root cause:** The handler used raw input in the path even though callers were expected to pass IPs.
+- **Fix:** Parse and normalize input with `net.ParseIP` before constructing the fixed-host request URL.
+- **Verified:** `gosec -quiet -severity high ./...`
+
+## UI pass (category I)
+
+### [F-035] Static script loader used document.write
+- **Severity:** Medium
+- **Category:** I
+- **File(s):** internal/api/static/app.js, internal/api/static_ui_test.go
+- **Symptom:** The split frontend loader depended on `document.write`.
+- **Root cause:** Script loading was synchronous and parser-dependent.
+- **Fix:** Replaced it with a constant script list and sequential dynamic script injection; added a static test to prevent regression.
+- **Test:** `TestStaticIndexUsesSplitAssets`
+- **Verified:** `go test ./internal/api/... -count=1`
+
+### [F-036] Frontend API calls had no default timeout
+- **Severity:** Medium
+- **Category:** I
+- **File(s):** internal/api/static/js/00-core.js, internal/api/static_ui_test.go
+- **Symptom:** Hung fetches could leave UI actions waiting indefinitely.
+- **Root cause:** Browser fetch calls relied on default network behavior.
+- **Fix:** Added a global fetch wrapper with `AbortController` timeout unless the caller supplies a signal, and changed the API base URL to `127.0.0.1`.
+- **Test:** `TestStaticCoreFetchesLoopbackWithTimeout`
+- **Verified:** `go test ./internal/api/... -count=1`
+
+## Lint / CI / build pass (categories H, J)
+
+### [F-037] Lint baseline hid unchecked errors
+- **Severity:** Medium
+- **Category:** H
+- **File(s):** internal/**, cmd/proxy-client/**
+- **Symptom:** `golangci-lint run ./...` failed on unchecked test setup errors, response decoders, cleanup calls, and Win32 best-effort calls.
+- **Root cause:** Tests and syscall wrappers often ignored returned errors implicitly.
+- **Fix:** Checked meaningful setup/decode errors, marked best-effort cleanup explicitly, added shared test helpers, and routed ignored Win32 calls through small helper wrappers.
+- **Verified:** `golangci-lint run ./... --timeout 5m`
+
+### [F-038] CI did not enforce current security gates
+- **Severity:** High
+- **Category:** J
+- **File(s):** .github/workflows/ci.yml, go.mod
+- **Symptom:** CI used an older Go selector, scoped race tests to a subset, allowed `govulncheck` failures, and uploaded non-failing gosec SARIF only.
+- **Root cause:** Security/lint steps were configured as advisory or partial gates.
+- **Fix:** Pin toolchain selection to Go 1.26.2, run full `go test ./... -race`, install current staticcheck/govulncheck, make govulncheck fail, and add a high-severity gosec gate.
+- **Verified:** `go test ./... -count=1 -race -timeout=10m`, `govulncheck ./...`, `gosec -quiet -severity high ./...`
+
+### [F-039] PowerShell build scripts did not consistently fail on native command errors
+- **Severity:** Medium
+- **Category:** J
+- **File(s):** build.ps1, dev.ps1, monitor.ps1, test.ps1, run_tests.ps1, test-proxy.ps1
+- **Symptom:** Native command failures could be missed in helper scripts, and local API checks used `localhost`.
+- **Root cause:** Scripts lacked strict mode or `$LASTEXITCODE` handling in several paths.
+- **Fix:** Added strict mode/progress suppression, introduced `Invoke-Native` in `dev.ps1`, checked `go tool cover`, and switched probe URLs to `127.0.0.1`.
+- **Verified:** PowerShell script parse check, `pwsh -NoProfile -File .\dev.ps1 help`

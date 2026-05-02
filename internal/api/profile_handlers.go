@@ -320,10 +320,23 @@ func loadProfile(filename string) (*Profile, error) {
 }
 
 func profilePath(filename string) (string, error) {
-	if filename == "" || filename != filepath.Base(filename) || !strings.HasSuffix(filename, ".json") {
+	if filename == "" || filename != filepath.Base(filename) || !strings.HasSuffix(filename, ".json") || isReservedWindowsDeviceFilename(filename) {
 		return "", errors.New("invalid profile filename")
 	}
 	return filepath.Join(profilesDir, filename), nil
+}
+
+func isReservedWindowsDeviceFilename(filename string) bool {
+	base := strings.TrimSuffix(filename, filepath.Ext(filename))
+	name := strings.ToUpper(strings.TrimSpace(base))
+	switch name {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(name) == 4 && (strings.HasPrefix(name, "COM") || strings.HasPrefix(name, "LPT")) {
+		return name[3] >= '1' && name[3] <= '9'
+	}
+	return false
 }
 
 // sanitizeFilename убирает из имени символы опасные для файловой системы

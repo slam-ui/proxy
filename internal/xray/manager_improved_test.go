@@ -36,7 +36,7 @@ func TestTailWriter_TruncatesOldData(t *testing.T) {
 
 	// Write more than maxSize
 	largeData := strings.Repeat("x", 200)
-	tw.Write([]byte(largeData))
+	mustWriteTail(t, tw, []byte(largeData))
 
 	result := tw.String()
 	if len(result) > maxSize {
@@ -51,7 +51,7 @@ func TestTailWriter_DoesNotCutMidLine(t *testing.T) {
 	// Write data that would cut a line if truncated at maxSize
 	line1 := "this is a very long first line that exceeds the limit\n"
 	line2 := "second line\n"
-	tw.Write([]byte(line1 + line2))
+	mustWriteTail(t, tw, []byte(line1+line2))
 
 	result := tw.String()
 	// Result should not start with partial line
@@ -62,7 +62,7 @@ func TestTailWriter_DoesNotCutMidLine(t *testing.T) {
 
 func TestTailWriter_ResetClearsBuffer(t *testing.T) {
 	tw := newTailWriter(1024)
-	tw.Write([]byte("some data"))
+	mustWriteTail(t, tw, []byte("some data"))
 
 	tw.Reset()
 
@@ -74,12 +74,12 @@ func TestTailWriter_ResetClearsBuffer(t *testing.T) {
 func TestTailWriter_ResetPreservesCapacity(t *testing.T) {
 	maxSize := 1024
 	tw := newTailWriter(maxSize)
-	tw.Write([]byte(strings.Repeat("x", maxSize)))
+	mustWriteTail(t, tw, []byte(strings.Repeat("x", maxSize)))
 
 	tw.Reset()
 
 	// Should be able to write again
-	tw.Write([]byte("new data"))
+	mustWriteTail(t, tw, []byte("new data"))
 	if tw.String() != "new data" {
 		t.Errorf("After Reset and Write, String() = %q", tw.String())
 	}
@@ -94,7 +94,7 @@ func TestTailWriter_ConcurrentWrites(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				tw.Write([]byte(fmt.Sprintf("goroutine %d line %d\n", id, j)))
+				_, _ = tw.Write([]byte(fmt.Sprintf("goroutine %d line %d\n", id, j)))
 			}
 		}(i)
 	}
@@ -113,7 +113,7 @@ func TestTailWriter_LargeOutput(t *testing.T) {
 
 	// Write 100KB
 	for i := 0; i < 1000; i++ {
-		tw.Write([]byte(strings.Repeat("x", 100) + "\n"))
+		mustWriteTail(t, tw, []byte(strings.Repeat("x", 100)+"\n"))
 	}
 
 	result := tw.String()
@@ -127,7 +127,7 @@ func TestTailWriter_UnicodeContent(t *testing.T) {
 	tw := newTailWriter(1024)
 	unicodeData := "Привет мир\n日本語テスト\nEmoji: 🔥🎉\n"
 
-	tw.Write([]byte(unicodeData))
+	mustWriteTail(t, tw, []byte(unicodeData))
 
 	result := tw.String()
 	if !strings.Contains(result, "Привет") {
@@ -152,7 +152,7 @@ func TestTailWriter_NewLineBoundary(t *testing.T) {
 
 	// Write exact boundary case
 	data := "1234567890\n1234567890\n1234567890\n1234567890\n1234567890\n"
-	tw.Write([]byte(data))
+	mustWriteTail(t, tw, []byte(data))
 
 	result := tw.String()
 	// Check that result ends with newline
@@ -354,14 +354,14 @@ func BenchmarkTailWriter_Write(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		tw.Write(data)
+		_, _ = tw.Write(data)
 	}
 }
 
 func BenchmarkTailWriter_String(b *testing.B) {
 	tw := newTailWriter(32 * 1024)
 	for i := 0; i < 1000; i++ {
-		tw.Write([]byte(strings.Repeat("x", 100) + "\n"))
+		_, _ = tw.Write([]byte(strings.Repeat("x", 100) + "\n"))
 	}
 
 	b.ResetTimer()
@@ -396,7 +396,7 @@ func TestTailWriter_ExactMaxSize(t *testing.T) {
 
 	// Write exactly maxSize bytes
 	data := strings.Repeat("x", maxSize)
-	tw.Write([]byte(data))
+	mustWriteTail(t, tw, []byte(data))
 
 	if tw.String() != data {
 		t.Errorf("Expected exact data when within limit")
@@ -409,7 +409,7 @@ func TestTailWriter_OneByteOverMax(t *testing.T) {
 
 	// Write one byte over
 	data := strings.Repeat("x", maxSize+1)
-	tw.Write([]byte(data))
+	mustWriteTail(t, tw, []byte(data))
 
 	result := tw.String()
 	if len(result) > maxSize {
@@ -445,7 +445,7 @@ func TestTailWriter_ConcurrentString(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				tw.Write([]byte(fmt.Sprintf("writer %d: line %d\n", id, j)))
+				_, _ = tw.Write([]byte(fmt.Sprintf("writer %d: line %d\n", id, j)))
 			}
 		}(i)
 		go func() {
@@ -538,7 +538,7 @@ func TestTailWriter_BufferBoundary(t *testing.T) {
 
 	// Write many times
 	for i := 0; i < 100; i++ {
-		tw.Write([]byte(strings.Repeat("x", 100)))
+		mustWriteTail(t, tw, []byte(strings.Repeat("x", 100)))
 	}
 
 	// Internal buffer should be bounded
@@ -557,7 +557,7 @@ func TestTailWriter_MemoryEfficiency(t *testing.T) {
 	// Verify that Reset reuses the buffer
 	tw := newTailWriter(1024)
 
-	tw.Write([]byte(strings.Repeat("x", 1024)))
+	mustWriteTail(t, tw, []byte(strings.Repeat("x", 1024)))
 	cap1 := cap(tw.buf)
 
 	tw.Reset()
@@ -602,7 +602,7 @@ func TestTailWriter_LineAwareTruncation(t *testing.T) {
 	longLine := strings.Repeat("a", 100) + "\n"
 	shortLine := "short\n"
 
-	tw.Write([]byte(longLine + shortLine))
+	mustWriteTail(t, tw, []byte(longLine+shortLine))
 
 	result := tw.String()
 	// Result should end with newline (not cut mid-line in shortLine)
@@ -621,7 +621,7 @@ func TestTailWriter_FullLifecycle(t *testing.T) {
 	for cycle := 0; cycle < 5; cycle++ {
 		// Write data
 		for i := 0; i < 10; i++ {
-			tw.Write([]byte(fmt.Sprintf("cycle %d line %d\n", cycle, i)))
+			mustWriteTail(t, tw, []byte(fmt.Sprintf("cycle %d line %d\n", cycle, i)))
 		}
 
 		// Check result is bounded

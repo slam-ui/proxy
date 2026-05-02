@@ -1,10 +1,23 @@
 // ═══════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════
-const API = 'http://localhost:8080/api';
+const API = 'http://127.0.0.1:8080/api';
 const POLL_STATUS = 3000;   // ms
 const POLL_STATS  = 1000;   // ms  — реальная скорость
 const POLL_CONNS  = 3000;   // ms
+const FETCH_TIMEOUT_MS = 10000;
+
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (resource, options = {}) => {
+  const opts = { ...options };
+  if (opts.signal) return _nativeFetch(resource, opts);
+  const timeoutMs = Number(opts.timeoutMs || FETCH_TIMEOUT_MS);
+  delete opts.timeoutMs;
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), timeoutMs);
+  return _nativeFetch(resource, { ...opts, signal: ctrl.signal })
+    .finally(() => window.clearTimeout(timer));
+};
 
 // ═══════════════════════════════════════════════════
 // STATE

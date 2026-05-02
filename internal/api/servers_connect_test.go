@@ -38,7 +38,7 @@ func buildServersServer(t *testing.T) (*Server, string, func()) {
 	SetupServerRoutes(srv, secretKeyPath)
 	srv.FinalizeRoutes()
 
-	return srv, secretKeyPath, func() { os.Chdir(old) }
+	return srv, secretKeyPath, func() { _ = os.Chdir(old) }
 }
 
 // addServer добавляет сервер через POST /api/servers и возвращает его ID.
@@ -51,7 +51,9 @@ func addServer(t *testing.T, srv *Server, name, url, cc string) string {
 		t.Fatalf("POST /api/servers %q = %d, body=%s", name, w.Code, w.Body.String())
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode server response: %v", err)
+	}
 	srv2, ok := resp["server"].(map[string]interface{})
 	if !ok {
 		t.Fatalf("server field missing in response: %s", w.Body.String())
@@ -232,7 +234,9 @@ func TestHandleConnect_APIContract_RestartRequiredField(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode connect response: %v", err)
+	}
 
 	// Убеждаемся что поле restart_required ПРИСУТСТВУЕТ в ответе (не undefined).
 	if _, exists := resp["restart_required"]; !exists {

@@ -1,6 +1,10 @@
 # test-proxy.ps1
 # Automatic integration test for proxy-client
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Proxy Client - Integration Test" -ForegroundColor Cyan
@@ -27,7 +31,7 @@ function Test-Result {
 # Test 1: API Health Check
 Write-Host "Test 1: API Health Check" -ForegroundColor Yellow
 try {
-    $response = Invoke-RestMethod -Uri "http://localhost:8080/api/health" -TimeoutSec 5 -ErrorAction Stop
+    $response = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/health" -TimeoutSec 5 -ErrorAction Stop
     Test-Result ($response.status -eq "ok") "API responds with OK"
 } catch {
     Test-Result $false "API Health (Error: $_)"
@@ -37,7 +41,7 @@ Write-Host ""
 # Test 2: API Status
 Write-Host "Test 2: API Status Check" -ForegroundColor Yellow
 try {
-    $status = Invoke-RestMethod -Uri "http://localhost:8080/api/status" -TimeoutSec 5 -ErrorAction Stop
+    $status = Invoke-RestMethod -Uri "http://127.0.0.1:8080/api/status" -TimeoutSec 5 -ErrorAction Stop
 
     Test-Result ($status.xray.running) "XRay is running"
     if ($status.xray.running) {

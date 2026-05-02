@@ -20,7 +20,12 @@ var (
 
 func Watch(ctx context.Context, onChange func()) error {
 	var handle uintptr
-	cb := syscall.NewCallback(func(_, _, _ uintptr) uintptr {
+	cb := syscall.NewCallback(func(_, _, _ uintptr) (ret uintptr) {
+		defer func() {
+			if recover() != nil {
+				ret = 0
+			}
+		}()
 		if onChange != nil {
 			go onChange()
 		}
@@ -37,7 +42,7 @@ func Watch(ctx context.Context, onChange func()) error {
 		return fmt.Errorf("NotifyIpInterfaceChange: %w", err)
 	}
 	<-ctx.Done()
-	procCancelMibChangeNotify2.Call(handle)
+	_, _, _ = procCancelMibChangeNotify2.Call(handle)
 	runtime.KeepAlive(cb)
 	return nil
 }

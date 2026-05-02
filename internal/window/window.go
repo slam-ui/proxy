@@ -23,9 +23,9 @@ var (
 )
 
 var (
-	user32                = windows.NewLazyDLL("user32.dll")
-	dwmAPI                = windows.NewLazyDLL("dwmapi.dll")
-	kernel32dll           = windows.NewLazyDLL("kernel32.dll")
+	user32                = windows.NewLazySystemDLL("user32.dll")
+	dwmAPI                = windows.NewLazySystemDLL("dwmapi.dll")
+	kernel32dll           = windows.NewLazySystemDLL("kernel32.dll")
 	setWindowPos          = user32.NewProc("SetWindowPos")
 	setWindowRgn          = user32.NewProc("SetWindowRgn")
 	getWindowRect         = user32.NewProc("GetWindowRect")
@@ -93,9 +93,18 @@ const dwmWindowCornerDoNotRound uint32 = 1
 
 func colorref(r, g, b uint32) uint32 { return b<<16 | g<<8 | r }
 
+func win32IntArg(v int32) uintptr {
+	return uintptr(v) // #nosec G115 -- Win32 syscall slots encode signed int parameters as uintptr.
+}
+
+func ignoreWin32Call(proc *windows.LazyProc, args ...uintptr) {
+	_, _, _ = proc.Call(args...)
+}
+
 func applySquareWindowCorners(hwnd uintptr) {
 	cornerPref := dwmWindowCornerDoNotRound
-	dwmSetAttr.Call(
+	ignoreWin32Call(
+		dwmSetAttr,
 		hwnd,
 		dwmwaWindowCornerPref,
 		uintptr(unsafe.Pointer(&cornerPref)),
@@ -128,48 +137,48 @@ func setAppIcon(hwnd uintptr) {
 		lrShared,
 	)
 	if hBig != 0 {
-		sendMessageW.Call(hwnd, wmSetIcon, iconBig, hBig)
+		ignoreWin32Call(sendMessageW, hwnd, wmSetIcon, iconBig, hBig)
 	}
 	if hSmall != 0 {
-		sendMessageW.Call(hwnd, wmSetIcon, iconSmall, hSmall)
+		ignoreWin32Call(sendMessageW, hwnd, wmSetIcon, iconSmall, hSmall)
 	}
 }
 
 func applyDarkTitle(hwnd uintptr) {
 	dark := uint32(1)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	// Caption (title bar background): почти чёрный — сливается с UI
 	capColor := colorref(0x0c, 0x0c, 0x12)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	// Title text: акцентный фиолетовый
 	textColor := colorref(0x7c, 0x6c, 0xff)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	// Border: тёмная акцентная рамка
 	borderColor := colorref(0x2a, 0x2a, 0x40)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
 	// Пробуем Mica backdrop (Windows 11 22H2+) — при неудаче молча игнорируется
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
 
 func applyLightTitle(hwnd uintptr) {
 	dark := uint32(0)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	// Caption: светлый фон — сливается с UI
 	capColor := colorref(0xf0, 0xf2, 0xf8)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	// Title text: тёмный акцентный
 	textColor := colorref(0x5b, 0x4d, 0xcc)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	// Border: светлая рамка
 	borderColor := colorref(0xc8, 0xcc, 0xe0)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
 
 // applyThemeByName применяет стили titlebar по имени пресета.
@@ -198,21 +207,21 @@ func applyThemeByName(hwnd uintptr, name string) {
 //	--hairline2: ~#1e1e30 → бордер рамки
 func applyAxiomTitle(hwnd uintptr) {
 	dark := uint32(1)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	// Caption: --bg #070713
 	capColor := colorref(0x07, 0x07, 0x13)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	// Title text (виден только в Alt+Tab / панели задач): --on #2de89a
 	textColor := colorref(0x2d, 0xe8, 0x9a)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	// Border: --s1 #0c0c1d (темнее фона, соответствует hairline)
 	borderColor := colorref(0x0c, 0x0c, 0x1d)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
 	// Mica backdrop — прозрачность за окном, если поддерживается (Win 11 22H2+)
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
 
 // applyHackerTitle применяет DWM-цвета для «хакерской» темы:
@@ -220,53 +229,53 @@ func applyAxiomTitle(hwnd uintptr) {
 //	--bg: #000000 (чёрный фон), --on: #00ff41 (зелёный текст)
 func applyHackerTitle(hwnd uintptr) {
 	dark := uint32(1)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	capColor := colorref(0x00, 0x00, 0x00)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	textColor := colorref(0x00, 0xff, 0x41)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	borderColor := colorref(0x0d, 0x22, 0x00)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 }
 
 func applyMidnightTitle(hwnd uintptr) {
 	dark := uint32(1)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	runtime.KeepAlive(dark)
 	capColor := colorref(0x08, 0x08, 0x18)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	runtime.KeepAlive(capColor)
 	textColor := colorref(0xa7, 0x8b, 0xfa)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	runtime.KeepAlive(textColor)
 	borderColor := colorref(0x1a, 0x1a, 0x40)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	runtime.KeepAlive(borderColor)
 	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 	runtime.KeepAlive(backdrop)
 }
 
 func applySepiaTitle(hwnd uintptr) {
 	dark := uint32(1)
-	dwmSetAttr.Call(hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
 	runtime.KeepAlive(dark)
 	capColor := colorref(0x1c, 0x15, 0x10)
-	dwmSetAttr.Call(hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
 	runtime.KeepAlive(capColor)
 	textColor := colorref(0xc4, 0x93, 0x3f)
-	dwmSetAttr.Call(hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
 	runtime.KeepAlive(textColor)
 	borderColor := colorref(0x3a, 0x2e, 0x1e)
-	dwmSetAttr.Call(hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
 	runtime.KeepAlive(borderColor)
 	applySquareWindowCorners(hwnd)
 	backdrop := uint32(backdropMica)
-	dwmSetAttr.Call(hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
 	runtime.KeepAlive(backdrop)
 }
 
@@ -333,7 +342,7 @@ func writeState(s windowState) {
 func isZoomed(hwnd uintptr) bool {
 	var wp [12]uint32
 	wp[0] = uint32(unsafe.Sizeof(wp))
-	getWindowPlacement.Call(hwnd, uintptr(unsafe.Pointer(&wp[0])))
+	ignoreWin32Call(getWindowPlacement, hwnd, uintptr(unsafe.Pointer(&wp[0])))
 	return wp[2] == showStateMaximized
 }
 
@@ -341,7 +350,7 @@ func applyRoundedWindowRegion(hwnd uintptr) {
 	if hwnd == 0 {
 		return
 	}
-	setWindowRgn.Call(hwnd, 0, 1)
+	ignoreWin32Call(setWindowRgn, hwnd, 0, 1)
 }
 
 // BringToFront переводит главное окно на передний план.
@@ -374,14 +383,14 @@ func BringToFront(url string) {
 	// Если свёрнуто — восстанавливаем
 	minimized, _, _ := isIconic.Call(rootHwnd)
 	if minimized != 0 {
-		showWindowProc.Call(rootHwnd, swRestore)
+		ignoreWin32Call(showWindowProc, rootHwnd, swRestore)
 	} else {
-		showWindowProc.Call(rootHwnd, swShow)
+		ignoreWin32Call(showWindowProc, rootHwnd, swShow)
 	}
 
 	// Переводим на передний план
-	setForegroundWindowFn.Call(rootHwnd)
-	bringWindowToTopFn.Call(rootHwnd)
+	ignoreWin32Call(setForegroundWindowFn, rootHwnd)
+	ignoreWin32Call(bringWindowToTopFn, rootHwnd)
 }
 
 // Open открывает окно с Web UI.
@@ -430,13 +439,13 @@ func Open(url string) {
 		// Сохраняем WS_THICKFRAME для изменения размера окна.
 		const gwlStyleIdx = uintptr(^uintptr(0) - 15) // GWL_STYLE = -16 as uintptr on any arch
 		style, _, _ := getWindowLong.Call(rootHwnd, gwlStyleIdx)
-		setWindowLong.Call(rootHwnd, gwlStyleIdx, style&^wsCaption)
+		ignoreWin32Call(setWindowLong, rootHwnd, gwlStyleIdx, style&^wsCaption)
 		// Перерасчёт рамки и принудительная переотрисовка клиентской области.
 		var rect [4]int32
-		getWindowRect.Call(rootHwnd, uintptr(unsafe.Pointer(&rect[0])))
-		setWindowPos.Call(rootHwnd, 0,
-			uintptr(rect[0]), uintptr(rect[1]),
-			uintptr(rect[2]-rect[0]), uintptr(rect[3]-rect[1]),
+		ignoreWin32Call(getWindowRect, rootHwnd, uintptr(unsafe.Pointer(&rect[0])))
+		ignoreWin32Call(setWindowPos, rootHwnd, 0,
+			win32IntArg(rect[0]), win32IntArg(rect[1]),
+			win32IntArg(rect[2]-rect[0]), win32IntArg(rect[3]-rect[1]),
 			swpFrameChanged|swpNozorder|swpNoActivate)
 
 		// Устанавливаем иконку из ресурсов .exe — панель задач + Alt+Tab.
@@ -463,9 +472,9 @@ func Open(url string) {
 			if s.Height < uiMinH {
 				s.Height = uiMinH
 			}
-			setWindowPos.Call(rootHwnd, 0,
-				uintptr(s.X), uintptr(s.Y),
-				uintptr(s.Width), uintptr(s.Height),
+			ignoreWin32Call(setWindowPos, rootHwnd, 0,
+				win32IntArg(s.X), win32IntArg(s.Y),
+				win32IntArg(s.Width), win32IntArg(s.Height),
 				swpNozorder|swpNoActivate)
 		} else {
 			w.SetSize(uiDefaultW, uiDefaultH, webview2.HintNone)
@@ -496,37 +505,37 @@ func Open(url string) {
 		// windowClose из JS сохраняет состояние прямо перед закрытием
 		// (на случай если periodic ещё не успел сохранить последнее положение).
 		// setTitleTheme вызывается из JS при смене темы — мгновенно меняет цвет нативного titlebar.
-		w.Bind("setTitleTheme", func(name string) {
+		_ = w.Bind("setTitleTheme", func(name string) {
 			applyThemeByName(rootHwnd, name)
 		})
 
-		w.Bind("windowClose", func() {
+		_ = w.Bind("windowClose", func() {
 			if s, ok := readRect(rootHwnd); ok {
 				writeState(s)
 			}
-			postMessageW.Call(rootHwnd, wmClose, 0, 0)
+			ignoreWin32Call(postMessageW, rootHwnd, wmClose, 0, 0)
 		})
 
-		w.Bind("windowDrag", func() {
+		_ = w.Bind("windowDrag", func() {
 			// Имитируем захват нативного заголовка окна — Windows обрабатывает перетаскивание.
-			releaseCapture.Call()
-			postMessageW.Call(rootHwnd, wmNcLButtonDown, htCaption, 0)
+			ignoreWin32Call(releaseCapture)
+			ignoreWin32Call(postMessageW, rootHwnd, wmNcLButtonDown, htCaption, 0)
 		})
-		w.Bind("windowResize", func(ht int) {
+		_ = w.Bind("windowResize", func(ht int) {
 			// Инициирует изменение размера окна через WM_NCLBUTTONDOWN.
 			// WebView2 перекрывает клиентскую область поверх resize-зон WS_THICKFRAME
 			// на левом и верхнем краях — JS-оверлеи перехватывают эти клики и маршрутизируют сюда.
-			releaseCapture.Call()
-			postMessageW.Call(rootHwnd, wmNcLButtonDown, uintptr(ht), 0)
+			ignoreWin32Call(releaseCapture)
+			ignoreWin32Call(postMessageW, rootHwnd, wmNcLButtonDown, uintptr(ht), 0)
 		})
-		w.Bind("windowMinimize", func() {
-			postMessageW.Call(rootHwnd, wmSysCommand, scMinimize, 0)
+		_ = w.Bind("windowMinimize", func() {
+			ignoreWin32Call(postMessageW, rootHwnd, wmSysCommand, scMinimize, 0)
 		})
-		w.Bind("windowMaximize", func() {
+		_ = w.Bind("windowMaximize", func() {
 			if isZoomed(rootHwnd) {
-				postMessageW.Call(rootHwnd, wmSysCommand, scRestore, 0)
+				ignoreWin32Call(postMessageW, rootHwnd, wmSysCommand, scRestore, 0)
 			} else {
-				postMessageW.Call(rootHwnd, wmSysCommand, scMaximize, 0)
+				ignoreWin32Call(postMessageW, rootHwnd, wmSysCommand, scMaximize, 0)
 			}
 			time.AfterFunc(150*time.Millisecond, func() {
 				applyRoundedWindowRegion(rootHwnd)

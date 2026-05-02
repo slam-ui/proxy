@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,6 +241,7 @@ func NewServer(cfg Config, lifecycleCtx context.Context) *Server {
 	if lifecycleCtx == nil {
 		lifecycleCtx = context.Background()
 	}
+	cfg.ListenAddress = loopbackListenAddress(cfg.ListenAddress)
 	s := &Server{
 		config:       cfg,
 		logger:       cfg.Logger,
@@ -248,6 +251,26 @@ func NewServer(cfg Config, lifecycleCtx context.Context) *Server {
 	}
 	s.setupRoutes()
 	return s
+}
+
+func loopbackListenAddress(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "127.0.0.1" + addr
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch strings.ToLower(strings.Trim(host, "[]")) {
+	case "", "localhost", "0.0.0.0", "::":
+		return net.JoinHostPort("127.0.0.1", port)
+	default:
+		return addr
+	}
 }
 
 func (s *Server) setupRoutes() {

@@ -29,12 +29,16 @@ const (
 	gmemMoveable  = 0x0002
 )
 
+func ignoreWin32Call(proc *windows.LazyProc, args ...uintptr) {
+	_, _, _ = proc.Call(args...)
+}
+
 func Read() string {
 	r, _, _ := procOpenClipboard.Call(0)
 	if r == 0 {
 		return ""
 	}
-	defer procCloseClipboard.Call()
+	defer ignoreWin32Call(procCloseClipboard)
 	h, _, _ := procGetClipboard.Call(cfUnicodeText)
 	if h == 0 {
 		return ""
@@ -43,7 +47,7 @@ func Read() string {
 	if ptr == 0 {
 		return ""
 	}
-	defer procGlobalUnlock.Call(h)
+	defer ignoreWin32Call(procGlobalUnlock, h)
 	text := windows.UTF16PtrToString(ptrAt[uint16](ptr))
 	runtime.KeepAlive(h)
 	return text
@@ -58,7 +62,7 @@ func Write(text string) bool {
 	if r == 0 {
 		return false
 	}
-	defer procCloseClipboard.Call()
+	defer ignoreWin32Call(procCloseClipboard)
 	if r, _, _ := procEmptyClipboard.Call(); r == 0 {
 		return false
 	}
@@ -69,15 +73,15 @@ func Write(text string) bool {
 	}
 	ptr, _, _ := procGlobalLock.Call(h)
 	if ptr == 0 {
-		procGlobalFree.Call(h)
+		ignoreWin32Call(procGlobalFree, h)
 		return false
 	}
-	procRtlMoveMemory.Call(ptr, uintptr(unsafe.Pointer(&data[0])), size)
+	ignoreWin32Call(procRtlMoveMemory, ptr, uintptr(unsafe.Pointer(&data[0])), size)
 	runtime.KeepAlive(data)
-	procGlobalUnlock.Call(h)
+	ignoreWin32Call(procGlobalUnlock, h)
 	r, _, _ = procSetClipboard.Call(cfUnicodeText, h)
 	if r == 0 {
-		procGlobalFree.Call(h)
+		ignoreWin32Call(procGlobalFree, h)
 		return false
 	}
 	return true

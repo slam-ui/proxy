@@ -45,11 +45,11 @@ import (
 // NewLazySystemDLL откладывает загрузку до первого вызова — паника
 // перехватывается recover из main() и записывается в crash.log.
 var (
-	kern32             = syscall.NewLazyDLL("kernel32.dll")
+	kern32             = windows.NewLazySystemDLL("kernel32.dll")
 	procProcess32First = kern32.NewProc("Process32FirstW")
 	procProcess32Next  = kern32.NewProc("Process32NextW")
 	procCreateSnapshot = kern32.NewProc("CreateToolhelp32Snapshot")
-	// BUG FIX #NEW-J: переиспользуем глобальный kern32 вместо повторного NewLazyDLL
+	// BUG FIX #NEW-J: переиспользуем глобальный kern32 вместо повторной загрузки DLL
 	// в createSingleInstanceMutex. LoadLibrary вызывается ровно один раз.
 	// Имя procCreateMutexW (не procCreateMutex) — чтобы не конфликтовать с
 	// одноимённой переменной в orphan_test.go.
@@ -59,6 +59,7 @@ var (
 
 	user32DPI                         = windows.NewLazySystemDLL("user32.dll")
 	shcoreDPI                         = windows.NewLazySystemDLL("shcore.dll")
+	procSetDefaultDllDirectories      = kern32.NewProc("SetDefaultDllDirectories")
 	procSetProcessDpiAwarenessContext = user32DPI.NewProc("SetProcessDpiAwarenessContext")
 	procSetProcessDPIAware            = user32DPI.NewProc("SetProcessDPIAware")
 	procSetProcessDpiAwareness        = shcoreDPI.NewProc("SetProcessDpiAwareness")
@@ -73,12 +74,18 @@ const (
 	hresultAccessDenied                  = uintptr(0x80070005)
 )
 
+func init() {
+	if procSetDefaultDllDirectories.Find() == nil {
+		_, _, _ = procSetDefaultDllDirectories.Call(windows.LOAD_LIBRARY_SEARCH_SYSTEM32 | windows.LOAD_LIBRARY_SEARCH_APPLICATION_DIR)
+	}
+}
+
 type preflightAddr struct{ name, addr string }
 
 var preflightAddrs = []preflightAddr{
 	{"ProxyPort (sing-box inbound)", config.ProxyAddr},
 	{"ClashAPI (sing-box API)", config.ClashAPIAddr},
-	{"APIAddress (SafeSky)", "localhost" + config.APIAddress},
+	{"APIAddress (SafeSky)", apiTCPAddress(config.APIAddress)},
 }
 
 func openLogFile() (*os.File, error) {
@@ -116,7 +123,7 @@ func configureDPIAwareness() {
 	if ret, _, _ := procSetProcessDpiAwareness.Call(processPerMonitorDPIAware); ret == 0 || ret == hresultAccessDenied {
 		return
 	}
-	procSetProcessDPIAware.Call()
+	_, _, _ = procSetProcessDPIAware.Call()
 }
 
 func main() {
@@ -130,7 +137,7 @@ func main() {
 	if err != nil {
 		os.Exit(0)
 	}
-	defer syscall.CloseHandle(mutex)
+	defer func() { _ = syscall.CloseHandle(mutex) }()
 
 	if !isRunningAsAdmin() {
 		exePath, _ := os.Executable()
@@ -283,7 +290,7 @@ func initDataDir(log interface {
 			log.Warn("initDataDir: не удалось прочитать %s: %v", src, err)
 			continue
 		}
-		if err := os.WriteFile(dst, data, 0644); err != nil {
+		if err := os.WriteFile(dst, data, 0644); err != nil { // #nosec G703 -- dst uses filepath.Base from a fixed geosite glob under config.DataDir.
 			log.Warn("initDataDir: %s → %s: %v", filepath.Base(src), dst, err)
 		} else {
 			log.Info("initDataDir: скопирован %s", filepath.Base(src))
@@ -438,7 +445,7 @@ func run(output io.Writer) error {
 		}
 	}()
 	go func() {
-		if waitErr := netutil.WaitForPort(ctx, "localhost"+cfg.APIAddress, 5*time.Second); waitErr == nil {
+		if waitErr := netutil.WaitForPort(ctx, apiTCPAddress(cfg.APIAddress), 5*time.Second); waitErr == nil {
 			app.mainLogger.Info("API сервер готов на %s", cfg.APIAddress)
 		} else {
 			app.mainLogger.Warn("API сервер не ответил за 5с: %v", waitErr)
@@ -557,7 +564,7 @@ func (a *App) refreshTrayServers(apiAddress string) {
 		ActiveID string `json:"active_id"`
 	}
 
-	url := "http://localhost" + apiAddress + "/api/servers"
+	url := apiBaseURL(apiAddress) + "/api/servers"
 	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -632,7 +639,7 @@ func urlDecodeFragment(s string) string {
 			hi := hexVal(s[i+1])
 			lo := hexVal(s[i+2])
 			if hi >= 0 && lo >= 0 {
-				result = append(result, byte(hi<<4|lo))
+				result = append(result, byte(hi<<4|lo)) // #nosec G115 -- hexVal returns only 0..15 for both nibbles here.
 				i += 3
 				continue
 			}
@@ -661,7 +668,7 @@ func hexVal(c byte) int {
 }
 
 func (a *App) connectTrayServer(apiAddress, serverID string) error {
-	url := fmt.Sprintf("http://localhost%s/api/servers/%s/connect", apiAddress, serverID)
+	url := fmt.Sprintf("%s/api/servers/%s/connect", apiBaseURL(apiAddress), serverID)
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		return err
@@ -676,6 +683,17 @@ func (a *App) connectTrayServer(apiAddress, serverID string) error {
 		return fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func apiTCPAddress(apiAddress string) string {
+	if strings.HasPrefix(apiAddress, ":") {
+		return "127.0.0.1" + apiAddress
+	}
+	return apiAddress
+}
+
+func apiBaseURL(apiAddress string) string {
+	return "http://" + apiTCPAddress(apiAddress)
 }
 
 // ── Windows helpers ───────────────────────────────────────────────────────────
@@ -698,7 +716,7 @@ func killProcessesInDir(targetName string, exeDir string, log interface{ Info(st
 	if err != nil {
 		return false
 	}
-	defer syscall.CloseHandle(snap)
+	defer func() { _ = syscall.CloseHandle(snap) }()
 
 	type entry32 struct {
 		Size              uint32
@@ -715,7 +733,7 @@ func killProcessesInDir(targetName string, exeDir string, log interface{ Info(st
 
 	var e entry32
 	e.Size = uint32(unsafe.Sizeof(e))
-	selfPID := uint32(os.Getpid())
+	selfPID := currentPIDUint32()
 	var procs []*os.Process
 	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	for ret != 0 {
@@ -761,7 +779,7 @@ func killProcessesByName(targetName string, log interface{ Info(string, ...inter
 	if err != nil {
 		return false
 	}
-	defer syscall.CloseHandle(snap)
+	defer func() { _ = syscall.CloseHandle(snap) }()
 
 	type entry32 struct {
 		Size              uint32
@@ -778,7 +796,7 @@ func killProcessesByName(targetName string, log interface{ Info(string, ...inter
 
 	var e entry32
 	e.Size = uint32(unsafe.Sizeof(e))
-	selfPID := uint32(os.Getpid())
+	selfPID := currentPIDUint32()
 	var procs []*os.Process
 	ret, _, _ := procProcess32First.Call(uintptr(snap), uintptr(unsafe.Pointer(&e)))
 	for ret != 0 {
@@ -833,10 +851,10 @@ func getProcessExePath(pid uint32) string {
 	if err != nil {
 		return ""
 	}
-	defer syscall.CloseHandle(hProc)
+	defer func() { _ = syscall.CloseHandle(hProc) }()
 
 	buf := make([]uint16, syscall.MAX_PATH)
-	size := uint32(len(buf))
+	size := uint32(len(buf)) // #nosec G115 -- syscall.MAX_PATH is a small fixed buffer length.
 	ret, _, _ := procQueryFullProcessImageName.Call(
 		uintptr(hProc), 0,
 		uintptr(unsafe.Pointer(&buf[0])),
@@ -847,6 +865,14 @@ func getProcessExePath(pid uint32) string {
 		return ""
 	}
 	return syscall.UTF16ToString(buf[:size])
+}
+
+func currentPIDUint32() uint32 {
+	pid := os.Getpid()
+	if pid < 0 || uint64(pid) > uint64(^uint32(0)) {
+		return 0
+	}
+	return uint32(pid) // #nosec G115 -- pid is bounded by the check above.
 }
 
 // isRunningAsAdmin проверяет привилегии через Windows token elevation.
@@ -860,7 +886,7 @@ func isRunningAsAdmin() bool {
 }
 
 func createSingleInstanceMutex(name string) (syscall.Handle, error) {
-	// BUG FIX #NEW-J: используем глобальный procCreateMutexW вместо повторного NewLazyDLL.
+	// BUG FIX #NEW-J: используем глобальный procCreateMutexW вместо повторной загрузки DLL.
 	namePtr, err := syscall.UTF16PtrFromString(name)
 	if err != nil {
 		return 0, err

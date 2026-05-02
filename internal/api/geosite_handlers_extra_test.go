@@ -36,7 +36,7 @@ func TestGeositeList_UsesSRSHeaderInsteadOfSize(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
 		t.Fatalf("MkdirAll data: %v", err)

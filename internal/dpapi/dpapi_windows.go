@@ -21,11 +21,14 @@ type dataBlob struct {
 	pbData *byte
 }
 
-func newBlob(d []byte) *dataBlob {
+func newBlob(d []byte) (*dataBlob, error) {
 	if len(d) == 0 {
-		return &dataBlob{}
+		return &dataBlob{}, nil
 	}
-	return &dataBlob{cbData: uint32(len(d)), pbData: &d[0]}
+	if uint64(len(d)) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("DPAPI input too large: %d bytes", len(d))
+	}
+	return &dataBlob{cbData: uint32(len(d)), pbData: &d[0]}, nil // #nosec G115 -- bounded by the uint64 check above.
 }
 
 func freeBlob(blob *dataBlob, zero bool) {
@@ -40,7 +43,10 @@ func freeBlob(blob *dataBlob, zero bool) {
 }
 
 func Encrypt(data []byte) ([]byte, error) {
-	in := newBlob(data)
+	in, err := newBlob(data)
+	if err != nil {
+		return nil, err
+	}
 	var out dataBlob
 	r, _, err := procProtectData.Call(
 		uintptr(unsafe.Pointer(in)),
@@ -63,7 +69,10 @@ func Encrypt(data []byte) ([]byte, error) {
 }
 
 func Decrypt(data []byte) ([]byte, error) {
-	in := newBlob(data)
+	in, err := newBlob(data)
+	if err != nil {
+		return nil, err
+	}
 	var out dataBlob
 	r, _, err := procUnprotectData.Call(
 		uintptr(unsafe.Pointer(in)),

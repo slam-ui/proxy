@@ -61,6 +61,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+$ProgressPreference = "SilentlyContinue"
 Set-Location $PSScriptRoot
 
 # Paths

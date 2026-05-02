@@ -47,14 +47,16 @@ func TestManager_Disable_ConfigRetentionPolicy(t *testing.T) {
 		t.Logf("Enable failed (не-Windows): %v — пропускаем", err)
 		return
 	}
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	before := mgr.GetConfig()
 	if before.Address != cfg.Address {
 		t.Fatalf("до Disable GetConfig.Address=%q, want %q", before.Address, cfg.Address)
 	}
 
-	mgr.Disable()
+	if err := mgr.Disable(); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
 
 	after := mgr.GetConfig()
 	// Поведение: либо пустой конфиг, либо последний активный — оба допустимы.
@@ -74,7 +76,7 @@ func TestManager_Disable_ConfigRetentionPolicy(t *testing.T) {
 // Тест проверяет что GetConfig после второго Enable показывает НОВЫЙ адрес.
 func TestManager_Enable_UpdatesRegistryOnConfigChange(t *testing.T) {
 	mgr := NewManager(&logger.NoOpLogger{})
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	cfg1 := Config{Address: "127.0.0.1:8080", Override: "<local>"}
 	cfg2 := Config{Address: "127.0.0.1:9090", Override: "<local>"}
@@ -103,7 +105,7 @@ func TestManager_Enable_UpdatesRegistryOnConfigChange(t *testing.T) {
 // но можно убедиться что нет ошибок и финальное состояние консистентно.
 func TestManager_Enable_ConcurrentSameConfig_NoError(t *testing.T) {
 	mgr := NewManager(&logger.NoOpLogger{})
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
 
@@ -258,7 +260,7 @@ func TestManager_Enable_EmptyOverride_StoredCorrectly(t *testing.T) {
 		t.Logf("Enable failed (не-Windows): %v — пропускаем", err)
 		return
 	}
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	got := mgr.GetConfig()
 	if got.Override != "" {
@@ -290,7 +292,7 @@ func TestManager_Enable_LongOverride_NoPanic(t *testing.T) {
 	if err != nil {
 		t.Logf("Enable с длинным Override вернул ошибку (приемлемо): %v", err)
 	}
-	mgr.Disable()
+	_ = mgr.Disable()
 }
 
 // ── BUG-РИСК #10: NewManager после краша (ProxyEnable=1 в реестре) ──────────

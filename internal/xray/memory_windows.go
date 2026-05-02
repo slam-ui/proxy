@@ -32,11 +32,15 @@ func (m *manager) MemoryMB() uint64 {
 	if pid == 0 {
 		return 0
 	}
-	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, uint32(pid))
+	if pid < 0 || uint64(pid) > uint64(^uint32(0)) {
+		return 0
+	}
+	pid32 := uint32(pid) // #nosec G115 -- pid is bounded by the check above.
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_INFORMATION|windows.PROCESS_VM_READ, false, pid32)
 	if err != nil {
 		return 0
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 	var counters processMemoryCounters
 	counters.CB = uint32(unsafe.Sizeof(counters))
 	r, _, _ := procGetProcessMemoryInfo.Call(

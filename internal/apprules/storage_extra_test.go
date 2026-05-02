@@ -139,8 +139,12 @@ func TestPersistentEngine_Match_AfterReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
 
 	pe1, _ := NewPersistentEngine(NewFileStorage(path))
-	pe1.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true})
-	pe1.AddRule(Rule{Pattern: "firefox.exe", Action: ActionDirect, Priority: 5, Enabled: false})
+	if _, err := pe1.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true}); err != nil {
+		t.Fatalf("AddRule chrome.exe: %v", err)
+	}
+	if _, err := pe1.AddRule(Rule{Pattern: "firefox.exe", Action: ActionDirect, Priority: 5, Enabled: false}); err != nil {
+		t.Fatalf("AddRule firefox.exe: %v", err)
+	}
 
 	pe2, _ := NewPersistentEngine(NewFileStorage(path))
 	if !pe2.Match("chrome.exe").Matched {
@@ -157,9 +161,15 @@ func TestPersistentEngine_MultipleRules_SortedByPriorityAfterReload(t *testing.T
 	path := filepath.Join(t.TempDir(), "rules.json")
 
 	pe1, _ := NewPersistentEngine(NewFileStorage(path))
-	pe1.AddRule(Rule{Pattern: "low.exe", Action: ActionDirect, Priority: 1, Enabled: true})
-	pe1.AddRule(Rule{Pattern: "high.exe", Action: ActionProxy, Priority: 100, Enabled: true})
-	pe1.AddRule(Rule{Pattern: "mid.exe", Action: ActionBlock, Priority: 50, Enabled: true})
+	if _, err := pe1.AddRule(Rule{Pattern: "low.exe", Action: ActionDirect, Priority: 1, Enabled: true}); err != nil {
+		t.Fatalf("AddRule low.exe: %v", err)
+	}
+	if _, err := pe1.AddRule(Rule{Pattern: "high.exe", Action: ActionProxy, Priority: 100, Enabled: true}); err != nil {
+		t.Fatalf("AddRule high.exe: %v", err)
+	}
+	if _, err := pe1.AddRule(Rule{Pattern: "mid.exe", Action: ActionBlock, Priority: 50, Enabled: true}); err != nil {
+		t.Fatalf("AddRule mid.exe: %v", err)
+	}
 
 	pe2, _ := NewPersistentEngine(NewFileStorage(path))
 	rules := pe2.ListRules()
@@ -209,8 +219,12 @@ func TestPersistentEngine_SaveToFile_WritesValidJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
 	pe, _ := NewPersistentEngine(NewFileStorage(path))
 
-	pe.AddRule(Rule{Pattern: "a.exe", Action: ActionProxy, Enabled: true})
-	pe.AddRule(Rule{Pattern: "b.exe", Action: ActionDirect, Enabled: true})
+	if _, err := pe.AddRule(Rule{Pattern: "a.exe", Action: ActionProxy, Enabled: true}); err != nil {
+		t.Fatalf("AddRule a.exe: %v", err)
+	}
+	if _, err := pe.AddRule(Rule{Pattern: "b.exe", Action: ActionDirect, Enabled: true}); err != nil {
+		t.Fatalf("AddRule b.exe: %v", err)
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {

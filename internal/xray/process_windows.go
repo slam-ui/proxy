@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // kernel32 для CTRL_BREAK graceful shutdown.
-// Используем LazyDLL — загрузка при первом вызове, не при старте приложения.
+// Используем LazySystemDLL — загрузка при первом вызове только из System32.
 var (
-	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	kernel32          = windows.NewLazySystemDLL("kernel32.dll")
 	procGenCtrlEvt    = kernel32.NewProc("GenerateConsoleCtrlEvent")
 	procAttachConsole = kernel32.NewProc("AttachConsole")
 	procFreeConsole   = kernel32.NewProc("FreeConsole")
@@ -29,8 +31,8 @@ func hideConsole(cmd *exec.Cmd) {
 // сохраняет DNS-кэш, закрывает TUN-адаптер — что снижает вероятность
 // "file already exists" при следующем старте.
 func sendCtrlBreak(pid int) error {
-	procAttachConsole.Call(uintptr(pid))
-	defer procFreeConsole.Call()
+	_, _, _ = procAttachConsole.Call(uintptr(pid))
+	defer func() { _, _, _ = procFreeConsole.Call() }()
 	ret, _, err := procGenCtrlEvt.Call(
 		syscall.CTRL_BREAK_EVENT,
 		uintptr(pid),

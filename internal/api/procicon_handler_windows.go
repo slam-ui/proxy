@@ -38,6 +38,10 @@ var (
 	pDestroyIcon        = procUser32p.NewProc("DestroyIcon")
 )
 
+func ignoreProcIconCall(proc *windows.LazyProc, args ...uintptr) {
+	_, _, _ = proc.Call(args...)
+}
+
 const (
 	shgfiIcon           = 0x0000_0100
 	shgfiSmallIcon      = 0x0000_0001
@@ -133,7 +137,7 @@ func (s *Server) handleProcIcon(w http.ResponseWriter, r *http.Request) {
 	if cached := getIconCached(path); cached != nil {
 		w.Header().Set("Content-Type", "image/png")
 		w.Header().Set("Cache-Control", "public, max-age=1800")
-		w.Write(cached)
+		_, _ = w.Write(cached)
 		return
 	}
 
@@ -147,7 +151,7 @@ func (s *Server) handleProcIcon(w http.ResponseWriter, r *http.Request) {
 	setIconCached(path, data)
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=1800")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // extractExeIconPNG извлекает маленькую иконку из .exe через SHGetFileInfoW,
@@ -173,14 +177,14 @@ func extractExeIconPNG(exePath string) ([]byte, error) {
 		return nil, nil
 	}
 	hIcon := fi.HIcon
-	defer pDestroyIcon.Call(hIcon)
+	defer ignoreProcIconCall(pDestroyIcon, hIcon)
 
 	// 2. Создаём совместимый DC (memory DC от desktop)
 	hDC, _, _ := pCreateCompatibleDC.Call(0)
 	if hDC == 0 {
 		return nil, nil
 	}
-	defer pDeleteDC.Call(hDC)
+	defer ignoreProcIconCall(pDeleteDC, hDC)
 
 	// 3. Создаём 32bpp DIB section для захвата пикселей
 	bi := bitmapInfo{
@@ -205,16 +209,17 @@ func extractExeIconPNG(exePath string) ([]byte, error) {
 	if hBmp == 0 {
 		return nil, nil
 	}
-	defer pDeleteObject.Call(hBmp)
+	defer ignoreProcIconCall(pDeleteObject, hBmp)
 
 	// 4. Выбираем bitmap в DC
 	oldObj, _, _ := pSelectObject.Call(hDC, hBmp)
 	if oldObj != 0 {
-		defer pSelectObject.Call(hDC, oldObj)
+		defer ignoreProcIconCall(pSelectObject, hDC, oldObj)
 	}
 
 	// 5. Рисуем иконку в DC
-	pDrawIconEx.Call(
+	ignoreProcIconCall(
+		pDrawIconEx,
 		hDC, 0, 0, hIcon,
 		iconSize, iconSize,
 		0, 0, diNormal,

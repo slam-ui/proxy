@@ -234,7 +234,9 @@ func TestEngine_AddRule_SetsCreatedAtAndUpdatedAt(t *testing.T) {
 
 func TestEngine_FindMatchingRule_SameBehaviorAsMatch(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true})
+	if _, err := e.AddRule(Rule{Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
 
 	m1 := e.Match("chrome.exe")
 	m2 := e.FindMatchingRule("chrome.exe")
@@ -296,7 +298,9 @@ func TestEngine_UpdateRule_MissingID_ReturnsError(t *testing.T) {
 // не влияет на внутреннее состояние engine.
 func TestEngine_Match_ReturnsCopy(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 5, Enabled: true})
+	if _, err := e.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Priority: 5, Enabled: true}); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
 
 	m := e.Match("app.exe")
 	if !m.Matched {

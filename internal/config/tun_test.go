@@ -78,7 +78,7 @@ func TestLoadRoutingConfig_ValidJSON(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(content)
-	os.WriteFile(path, data, 0644)
+	mustWriteFile(t, path, data)
 
 	cfg, err := LoadRoutingConfig(path)
 	if err != nil {
@@ -97,7 +97,7 @@ func TestLoadRoutingConfig_ValidJSON(t *testing.T) {
 
 func TestLoadRoutingConfig_InvalidJSON_ReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bad.json")
-	os.WriteFile(path, []byte("{not valid json"), 0644)
+	mustWriteFile(t, path, []byte("{not valid json"))
 
 	_, err := LoadRoutingConfig(path)
 	if err == nil {
@@ -169,7 +169,9 @@ func TestSaveRoutingConfig_RoundTrip_PreservesOrder(t *testing.T) {
 		{Value: "c.com", Type: RuleTypeDomain, Action: ActionBlock},
 	}
 	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: rules}
-	SaveRoutingConfig(path, cfg)
+	if err := SaveRoutingConfig(path, cfg); err != nil {
+		t.Fatalf("SaveRoutingConfig: %v", err)
+	}
 
 	loaded, _ := LoadRoutingConfig(path)
 	for i, r := range loaded.Rules {

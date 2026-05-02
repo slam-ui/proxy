@@ -36,7 +36,7 @@ func TestManager_Enable(t *testing.T) {
 		err := mgr.Enable(config)
 
 		// Clean up
-		defer mgr.Disable()
+		defer func() { _ = mgr.Disable() }()
 
 		if err != nil {
 			// On non-Windows or without permissions, this might fail
@@ -75,7 +75,7 @@ func TestManager_Enable(t *testing.T) {
 
 	t.Run("enable twice", func(t *testing.T) {
 		mgr := NewManager(&logger.NoOpLogger{})
-		defer mgr.Disable()
+		defer func() { _ = mgr.Disable() }()
 
 		config := Config{
 			Address:  "127.0.0.1:8080",
@@ -143,14 +143,16 @@ func TestManager_IsEnabled(t *testing.T) {
 	_ = mgr.Enable(config)
 
 	// Clean up at end
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	if !mgr.IsEnabled() {
 		t.Error("Expected proxy to be enabled after Enable()")
 	}
 
 	// After disable
-	mgr.Disable()
+	if err := mgr.Disable(); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
 
 	if mgr.IsEnabled() {
 		t.Error("Expected proxy to be disabled after Disable()")
@@ -172,7 +174,7 @@ func TestManager_GetConfig(t *testing.T) {
 		Override: "<local>",
 	}
 	_ = mgr.Enable(newConfig)
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	gotConfig := mgr.GetConfig()
 	if gotConfig.Address != newConfig.Address {
@@ -244,7 +246,7 @@ func TestValidateConfig(t *testing.T) {
 
 func TestManager_ThreadSafety(t *testing.T) {
 	mgr := NewManager(&logger.NoOpLogger{})
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	config := Config{
 		Address:  "127.0.0.1:8080",
@@ -330,12 +332,12 @@ func TestManager_StateTransitions(t *testing.T) {
 	}
 
 	// Clean up
-	mgr.Disable()
+	_ = mgr.Disable()
 }
 
 func BenchmarkManager_Enable(b *testing.B) {
 	mgr := NewManager(&logger.NoOpLogger{})
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	config := Config{
 		Address:  "127.0.0.1:8080",
@@ -364,7 +366,7 @@ func BenchmarkManager_GetConfig(b *testing.B) {
 		Override: "<local>",
 	}
 	_ = mgr.Enable(config)
-	defer mgr.Disable()
+	defer func() { _ = mgr.Disable() }()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

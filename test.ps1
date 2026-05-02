@@ -16,6 +16,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+Set-StrictMode -Version Latest
+$ProgressPreference = "SilentlyContinue"
 $script:failed = $false
 
 # ── Лог-файл ──────────────────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ function Run-Coverage {
     Run-Go "Coverage" @("test", "-coverprofile=coverage.out", "./cmd/...", "./internal/...")
     if (-not $script:failed) {
         & go tool cover -html=coverage.out -o coverage.html
+        if ($LASTEXITCODE -ne 0) { $script:failed = $true }
         Write-Both "Отчёт: coverage.html" DarkGray
     }
     return (-not $script:failed)

@@ -125,7 +125,7 @@ func TestStart_Twice_ReturnsError(t *testing.T) {
 	if err := m.Start(); err != nil {
 		t.Fatalf("First Start failed: %v", err)
 	}
-	defer m.Stop()
+	defer func() { _ = m.Stop() }()
 
 	err := m.Start()
 	if err == nil {

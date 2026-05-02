@@ -39,3 +39,11 @@ func TestHandleSaveProfileRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
 }
+
+func TestProfilePathRejectsWindowsDeviceNames(t *testing.T) {
+	for _, name := range []string{"CON.json", "PRN.json", "AUX.json", "NUL.json", "COM1.json", "LPT9.json"} {
+		if path, err := profilePath(name); err == nil {
+			t.Fatalf("profilePath(%q) = %q, want error", name, path)
+		}
+	}
+}
