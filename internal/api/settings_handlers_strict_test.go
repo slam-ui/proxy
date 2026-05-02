@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,42 @@ func TestHandleSetSettingsRejectsOversizedBody(t *testing.T) {
 	h := newSettingsHandlers(t)
 	body := `{"keepalive_enabled":true,"` + strings.Repeat("a", int(maxSettingsRequestBytes)) + `":true}`
 	req := httptest.NewRequest(http.MethodPost, "/api/settings", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleSetSettingsAcceptsHotkeys(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"hotkeys":{"enabled":true,"bindings":[{"action":"toggle_connection","accelerator":"alt+ctrl+p","enabled":true}]}}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Hotkeys struct {
+			Bindings []struct {
+				Action      string `json:"action"`
+				Accelerator string `json:"accelerator"`
+			} `json:"bindings"`
+		} `json:"hotkeys"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Hotkeys.Bindings) == 0 || resp.Hotkeys.Bindings[0].Accelerator != "Ctrl+Alt+P" {
+		t.Fatalf("hotkeys response = %+v", resp.Hotkeys.Bindings)
+	}
+}
+
+func TestHandleSetSettingsRejectsInvalidHotkey(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"hotkeys":{"enabled":true,"bindings":[{"action":"toggle_connection","accelerator":"Ctrl+Alt+F13","enabled":true}]}}`))
 	w := httptest.NewRecorder()
 	h.handleSetSettings(w, req)
 	if w.Code != http.StatusBadRequest {
