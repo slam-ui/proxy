@@ -377,6 +377,7 @@ function applyLifecycleControls(d) {
   const lt = _appSettingsCache.leak_test || {};
   if ($id('leakDomainInp')) $id('leakDomainInp').value = lt.domain || 'dnsleak.example.com';
   if ($id('leakReportURLInp')) $id('leakReportURLInp').value = lt.report_url || 'https://example.com/api/dnsleak/check';
+  renderHotkeySettings(_appSettingsCache.hotkeys || {});
   const ks = _appSettingsCache.kill_switch_state || {};
   const recovery = !!(ks.active && ks.expected_clean_shutdown === false);
   if ($id('killSwitchRecoveryRow')) $id('killSwitchRecoveryRow').style.display = recovery ? 'flex' : 'none';
@@ -440,6 +441,7 @@ async function saveLifecycleSettings() {
       expected_resolvers: [],
       check_interval_min: 30
     },
+    hotkeys: currentHotkeySettings(),
     schedule
   };
   try {
@@ -453,6 +455,108 @@ async function saveLifecycleSettings() {
     applyLifecycleControls(d);
     showToast('Настройки сохранены', 'on');
   } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+function hotkeyActionLabel(action) {
+  if (action === 'toggle_connection') return 'Toggle connection';
+  if (action === 'next_server') return 'Next server';
+  if (action === 'show_hide_window') return 'Show / hide window';
+  if (/^profile_\d$/.test(action || '')) return 'Profile ' + action.slice(-1);
+  return action || 'Hotkey';
+}
+
+function renderHotkeySettings(settings) {
+  const rows = $id('hotkeyRows');
+  if (!rows) return;
+  const hotkeys = settings && Array.isArray(settings.bindings) ? settings : defaultHotkeySettings();
+  $id('hotkeysToggle')?.classList.toggle('on', hotkeys.enabled !== false);
+  rows.innerHTML = hotkeys.bindings.map((binding, idx) => {
+    const action = esc(binding.action || '');
+    const actionArg = jsArg(binding.action || '');
+    return `<div class="hotkey-row" data-action="${action}">
+      <div class="hotkey-main">
+        <div class="pg-lbl">${esc(hotkeyActionLabel(binding.action))}</div>
+        <div class="pg-sub">${action}</div>
+      </div>
+      <input class="pg-inp hotkey-input" value="${esc(binding.accelerator || '')}"
+             oninput="updateHotkeyValue(${actionArg},this.value)">
+      <button class="pg-btn" id="hotkeyCapture${idx}" onclick="captureHotkey(${actionArg},this)">Capture</button>
+      <button class="pg-btn" onclick="clearHotkey(${actionArg})">Clear</button>
+    </div>`;
+  }).join('');
+}
+
+function defaultHotkeySettings() {
+  const bindings = [
+    ['toggle_connection','Ctrl+Alt+P'],
+    ['next_server','Ctrl+Alt+S'],
+    ['show_hide_window','Ctrl+Alt+L']
+  ];
+  for (let i = 1; i <= 9; i++) bindings.push(['profile_' + i, 'Ctrl+Alt+' + i]);
+  return { enabled: true, bindings: bindings.map(([action, accelerator]) => ({action, accelerator, enabled: true})) };
+}
+
+function currentHotkeySettings() {
+  const current = (_appSettingsCache.hotkeys && Array.isArray(_appSettingsCache.hotkeys.bindings))
+    ? _appSettingsCache.hotkeys
+    : defaultHotkeySettings();
+  return {
+    enabled: !!$id('hotkeysToggle')?.classList.contains('on'),
+    bindings: current.bindings.map(binding => ({...binding}))
+  };
+}
+
+function updateHotkeyValue(action, value) {
+  if (!_appSettingsCache.hotkeys || !Array.isArray(_appSettingsCache.hotkeys.bindings)) {
+    _appSettingsCache.hotkeys = defaultHotkeySettings();
+  }
+  const binding = _appSettingsCache.hotkeys.bindings.find(b => b.action === action);
+  if (binding) {
+    binding.accelerator = value.trim();
+    binding.enabled = binding.accelerator !== '';
+  }
+}
+
+function toggleHotkeys() {
+  $id('hotkeysToggle')?.classList.toggle('on');
+  saveLifecycleSettings();
+}
+
+function clearHotkey(action) {
+  updateHotkeyValue(action, '');
+  renderHotkeySettings(_appSettingsCache.hotkeys);
+  saveLifecycleSettings();
+}
+
+function captureHotkey(action, btn) {
+  if (!btn) return;
+  btn.textContent = 'Press keys';
+  const handler = (e) => {
+    e.preventDefault();
+    const parts = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Win');
+    const key = normalizeCapturedKey(e.key);
+    if (key && !['Control','Alt','Shift','Win'].includes(key)) parts.push(key);
+    if (parts.length >= 2) {
+      updateHotkeyValue(action, parts.join('+'));
+      renderHotkeySettings(_appSettingsCache.hotkeys);
+      saveLifecycleSettings();
+      window.removeEventListener('keydown', handler, true);
+    }
+  };
+  window.addEventListener('keydown', handler, true);
+  setTimeout(() => { btn.textContent = 'Capture'; window.removeEventListener('keydown', handler, true); }, 8000);
+}
+
+function normalizeCapturedKey(key) {
+  if (!key) return '';
+  if (key === ' ') return 'Space';
+  if (key === 'Escape') return 'Esc';
+  if (key.length === 1) return key.toUpperCase();
+  return key;
 }
 
 function currentUpdateSettings() {
