@@ -12,6 +12,7 @@ import (
 
 	"proxyclient/internal/dpapi"
 	"proxyclient/internal/fileutil"
+	"proxyclient/internal/logger"
 )
 
 const dpapiMagic = "DPAPI:"
@@ -29,6 +30,43 @@ type VLESSParams struct {
 	Fragment     bool
 	FragmentSize string
 	Fingerprint  string
+	Encryption   string
+	Security     string
+	ALPN         []string
+	Insecure     bool
+	Type         string
+	HeaderType   string
+	Path         string
+	Host         []string
+	ServiceName  string
+	GRPCMode     string
+	EarlyData    int
+}
+
+var (
+	vlessLoggerMu sync.Mutex
+	vlessLogger   logger.Logger = logger.New(logger.Config{Level: logger.WarnLevel})
+)
+
+func warnVLESS(format string, args ...interface{}) {
+	vlessLoggerMu.Lock()
+	log := vlessLogger
+	vlessLoggerMu.Unlock()
+	if log != nil {
+		log.Warn("vless: "+format, args...)
+	}
+}
+
+func setVLESSLoggerForTest(log logger.Logger) func() {
+	vlessLoggerMu.Lock()
+	prev := vlessLogger
+	vlessLogger = log
+	vlessLoggerMu.Unlock()
+	return func() {
+		vlessLoggerMu.Lock()
+		vlessLogger = prev
+		vlessLoggerMu.Unlock()
+	}
 }
 
 // VLESSCache кэш разобранных параметров VLESS.
@@ -192,6 +230,70 @@ func queryFirst(values url.Values, names ...string) string {
 	return ""
 }
 
+func splitQueryList(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseALPN(value string) []string {
+	alpn := splitQueryList(value)
+	for _, proto := range alpn {
+		if strings.EqualFold(proto, "h3") {
+			warnVLESS("alpn=h3 не поддерживается sing-box VLESS, использую h2,http/1.1")
+			return nil
+		}
+	}
+	return alpn
+}
+
+func parseWSPath(path string) (string, int, error) {
+	if path == "" {
+		return "/", 0, nil
+	}
+	base, rawQuery, hasQuery := strings.Cut(path, "?")
+	if !hasQuery {
+		if base == "" {
+			return "/", 0, nil
+		}
+		return base, 0, nil
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", 0, fmt.Errorf("ошибка парсинга VLESS URL: параметр path содержит некорректный query: %w", err)
+	}
+	earlyData := 0
+	if ed := strings.TrimSpace(values.Get("ed")); ed != "" {
+		n, err := strconv.Atoi(ed)
+		if err != nil || n <= 0 {
+			return "", 0, fmt.Errorf("ошибка парсинга VLESS URL: ws path содержит ed=%q, ожидается положительное число", ed)
+		}
+		earlyData = n
+	}
+	if base == "" {
+		base = "/"
+	}
+	return base, earlyData, nil
+}
+
 // parseVLESSContentInternal содержит реальную реализацию парсинга.
 func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 	// Убираем BOM (U+FEFF) — Блокнот Windows добавляет его при сохранении
@@ -230,19 +332,134 @@ func parseVLESSContentInternal(content string) (*VLESSParams, error) {
 
 	queryParams := parsedURL.Query()
 
+	encryption := strings.ToLower(strings.TrimSpace(queryParams.Get("encryption")))
+	if encryption == "" {
+		encryption = "none"
+	}
+	if encryption != "none" {
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: encryption=%s не поддерживается; ожидается encryption=none", encryption)
+	}
+
+	security := strings.ToLower(strings.TrimSpace(queryParams.Get("security")))
+	publicKey := queryFirst(queryParams, "pbk", "publicKey", "publickey")
+	if security == "" {
+		if strings.TrimSpace(publicKey) != "" {
+			security = "reality"
+		} else {
+			security = "tls"
+		}
+	}
+	switch security {
+	case "none", "tls", "reality":
+	default:
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: security=%s не поддерживается; ожидается none, tls или reality", security)
+	}
+	if strings.TrimSpace(publicKey) != "" && security != "reality" {
+		warnVLESS("pbk задан, но security=%s; использую reality", security)
+		security = "reality"
+	}
+	if security == "reality" && strings.TrimSpace(publicKey) == "" {
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: security=reality требует параметр pbk")
+	}
+	if spx := strings.TrimSpace(queryParams.Get("spx")); spx != "" {
+		warnVLESS("параметр spx не поддерживается sing-box и будет проигнорирован")
+	}
+
+	transportType := strings.ToLower(strings.TrimSpace(queryParams.Get("type")))
+	if transportType == "" {
+		transportType = "tcp"
+	}
+	if transportType == "h2" {
+		transportType = "http"
+	}
+	switch transportType {
+	case "tcp", "ws", "grpc", "http", "httpupgrade":
+	case "quic", "kcp", "mkcp":
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: транспорт type=%s не поддерживается sing-box; поддерживаемые: tcp, ws, grpc, http, httpupgrade", transportType)
+	default:
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: транспорт type=%s не поддерживается; поддерживаемые: tcp, ws, grpc, http, httpupgrade", transportType)
+	}
+
+	headerType := strings.ToLower(strings.TrimSpace(queryParams.Get("headerType")))
+	if headerType == "" {
+		headerType = "none"
+	}
+	if headerType != "none" && headerType != "http" {
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: headerType=%s не поддерживается; ожидается none или http", headerType)
+	}
+
+	rawPath := queryParams.Get("path")
+	pathValue := rawPath
+	earlyData := 0
+	if transportType == "ws" {
+		var err error
+		pathValue, earlyData, err = parseWSPath(rawPath)
+		if err != nil {
+			return nil, err
+		}
+	} else if (transportType == "httpupgrade" || transportType == "tcp" && headerType == "http") && pathValue == "" {
+		pathValue = "/"
+	}
+	if transportType == "http" && security == "none" {
+		return nil, fmt.Errorf("ошибка парсинга VLESS URL: транспорт type=http требует TLS и alpn=h2; security=none недопустим")
+	}
+
+	hostParam := queryParams.Get("host")
+	var hosts []string
+	switch transportType {
+	case "http":
+		hosts = splitQueryList(hostParam)
+	case "ws", "httpupgrade":
+		if host := strings.TrimSpace(hostParam); host != "" {
+			hosts = []string{host}
+		}
+	case "tcp":
+		if headerType == "http" {
+			hosts = splitQueryList(hostParam)
+		}
+	}
+
+	serviceName := queryFirst(queryParams, "serviceName", "service_name")
+	grpcMode := strings.ToLower(strings.TrimSpace(queryParams.Get("mode")))
+	if transportType == "grpc" {
+		if strings.TrimSpace(serviceName) == "" {
+			return nil, fmt.Errorf("ошибка парсинга VLESS URL: транспорт type=grpc требует параметр serviceName")
+		}
+		if grpcMode != "" && grpcMode != "gun" {
+			warnVLESS("mode=%s проигнорирован, sing-box gRPC использует gun", grpcMode)
+		}
+	}
+
+	alpn := parseALPN(queryParams.Get("alpn"))
+	insecure := parseBoolQuery(queryParams.Get("allowInsecure")) || parseBoolQuery(queryParams.Get("insecure"))
+	if insecure {
+		warnVLESS("insecure=1 - TLS-проверка сертификата отключена")
+	}
+
 	muxParam := queryParams.Get("mux")
 	if muxParam == "" {
 		muxParam = queryParams.Get("multiplex")
 	}
 	params := &VLESSParams{
-		Address:   parsedURL.Hostname(),
-		Port:      port,
-		UUID:      parsedURL.User.Username(),
-		SNI:       queryFirst(queryParams, "sni", "serverName", "servername", "peer"),
-		PublicKey: queryFirst(queryParams, "pbk", "publicKey", "publickey"),
-		ShortID:   queryFirst(queryParams, "sid", "shortId", "shortid"),
-		Flow:      queryParams.Get("flow"),
-		Mux:       muxParam == "1" || muxParam == "true",
+		Address:     parsedURL.Hostname(),
+		Port:        port,
+		UUID:        parsedURL.User.Username(),
+		SNI:         queryFirst(queryParams, "sni", "serverName", "servername", "peer"),
+		PublicKey:   publicKey,
+		ShortID:     queryFirst(queryParams, "sid", "shortId", "shortid"),
+		Flow:        queryParams.Get("flow"),
+		Mux:         muxParam == "1" || muxParam == "true",
+		Encryption:  encryption,
+		Security:    security,
+		ALPN:        alpn,
+		Insecure:    insecure,
+		Type:        transportType,
+		HeaderType:  headerType,
+		Path:        pathValue,
+		Host:        hosts,
+		ServiceName: serviceName,
+		GRPCMode:    grpcMode,
+		EarlyData:   earlyData,
 	}
 	fragParam := strings.ToLower(strings.TrimSpace(queryParams.Get("fragment")))
 	params.Fragment = fragParam != "0" && fragParam != "false"
