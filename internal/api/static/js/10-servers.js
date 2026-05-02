@@ -122,7 +122,7 @@ function renderServerList() {
   const list = state.servers;
   const el = $id('splist');
   if (!list.length) {
-    el.innerHTML = '<div class="sp-noservers">Серверов нет.<br>Добавьте vless/trojan/ss/hy2/tuic/wireguard ссылку в настройках.</div>';
+    el.innerHTML = '<div class="sp-noservers">Серверов нет.<br>Добавьте vless/trojan/ss/hy2/tuic/wireguard/vmess ссылку в настройках.</div>';
     updateSrvPanelSummary(list, []);
     return;
   }
@@ -217,7 +217,7 @@ async function importSrvUrlFromPanel() {
   const inp = $id('srvPanelUrlInp');
   const url = inp ? inp.value.trim() : '';
   if (!url) { showToast('Вставьте server URI', 'warn'); return; }
-  if (!isSupportedServerURI(url)) { showToast('Поддерживаются vless, trojan, ss, hysteria2, tuic, wireguard', 'warn'); return; }
+  if (!isSupportedServerURI(url)) { showToast('Поддерживаются vless, trojan, ss, hysteria2, tuic, wireguard, vmess', 'warn'); return; }
   try {
     const r = await fetch(API + '/servers', {
       method:'POST',

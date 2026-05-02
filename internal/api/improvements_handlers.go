@@ -100,7 +100,7 @@ func fetchIP(ctx context.Context, client *http.Client) string {
 
 func (s *Server) handleClipboardVLESS(w http.ResponseWriter, _ *http.Request) {
 	text := strings.TrimSpace(clipboard.Read())
-	if !strings.HasPrefix(text, "vless://") && !strings.HasPrefix(text, "trojan://") && !strings.HasPrefix(text, "ss://") && !strings.HasPrefix(text, "hysteria2://") && !strings.HasPrefix(text, "hy2://") && !strings.HasPrefix(text, "tuic://") && !strings.HasPrefix(text, "wireguard://") {
+	if !strings.HasPrefix(text, "vless://") && !strings.HasPrefix(text, "trojan://") && !strings.HasPrefix(text, "ss://") && !strings.HasPrefix(text, "hysteria2://") && !strings.HasPrefix(text, "hy2://") && !strings.HasPrefix(text, "tuic://") && !strings.HasPrefix(text, "wireguard://") && !strings.HasPrefix(text, "vmess://") {
 		s.respondJSON(w, http.StatusOK, map[string]interface{}{"found": false})
 		return
 	}

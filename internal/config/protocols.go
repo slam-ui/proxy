@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -45,11 +46,101 @@ func ParseServerContent(content string) (*ParsedServer, error) {
 		return parseTUICURL(content)
 	case strings.HasPrefix(content, "wireguard://"):
 		return parseWireGuardURL(content)
+	case strings.HasPrefix(content, "vmess://"):
+		return parseVMessURL(content)
 	case strings.Contains(content, "[Interface]") && strings.Contains(content, "[Peer]"):
 		return parseWireGuardConf(content)
 	default:
 		return nil, fmt.Errorf("unsupported server protocol")
 	}
+}
+
+type vmessJSON struct {
+	V        string `json:"v"`
+	PS       string `json:"ps"`
+	Add      string `json:"add"`
+	Port     string `json:"port"`
+	ID       string `json:"id"`
+	AID      string `json:"aid"`
+	Security string `json:"scy"`
+	Net      string `json:"net"`
+	Type     string `json:"type"`
+	Host     string `json:"host"`
+	Path     string `json:"path"`
+	TLS      string `json:"tls"`
+	SNI      string `json:"sni"`
+	ALPN     string `json:"alpn"`
+	FP       string `json:"fp"`
+}
+
+func parseVMessURL(raw string) (*ParsedServer, error) {
+	encoded := strings.TrimPrefix(raw, "vmess://")
+	data, err := decodeMaybeBase64(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("vmess base64: %w", err)
+	}
+	var v vmessJSON
+	if err := json.Unmarshal([]byte(data), &v); err != nil {
+		return nil, fmt.Errorf("vmess json: %w", err)
+	}
+	if v.Add == "" || v.Port == "" || v.ID == "" || v.Net == "" {
+		return nil, fmt.Errorf("vmess add, port, id and net are required")
+	}
+	port, err := strconv.Atoi(v.Port)
+	if err != nil || port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("vmess port is invalid")
+	}
+	aid := intQuery(v.AID)
+	if aid > 0 {
+		return nil, fmt.Errorf("vmess alterId > 0 is deprecated and not supported")
+	}
+	security := firstNonEmpty(v.Security, "auto")
+	switch security {
+	case "auto", "aes-128-gcm", "chacha20-poly1305", "none":
+	default:
+		return nil, fmt.Errorf("unsupported vmess security %q", security)
+	}
+	netType := strings.ToLower(v.Net)
+	if netType == "kcp" || netType == "mkcp" {
+		return nil, fmt.Errorf("vmess mKCP transport is not supported")
+	}
+	params := &VLESSParams{
+		Address:     v.Add,
+		Port:        port,
+		Type:        netType,
+		HeaderType:  strings.ToLower(v.Type),
+		Path:        v.Path,
+		Host:        splitQueryList(v.Host),
+		ServiceName: v.Path,
+		EarlyData:   0,
+	}
+	var tls *SBTLS
+	if strings.EqualFold(v.TLS, "tls") {
+		alpn := parseALPN(v.ALPN)
+		if len(alpn) == 0 {
+			alpn = []string{"h2", "http/1.1"}
+		}
+		tls = &SBTLS{
+			Enabled:    true,
+			ServerName: firstNonEmpty(v.SNI, v.Host, v.Add),
+			ALPN:       alpn,
+			UTLS:       &SBUTLS{Enabled: true, Fingerprint: firstNonEmpty(v.FP, "chrome")},
+		}
+	}
+	out := SBOutbound{
+		Type:         "vmess",
+		Tag:          "proxy-out",
+		Server:       v.Add,
+		ServerPort:   port,
+		UUID:         v.ID,
+		Security:     security,
+		AlterID:      0,
+		TLS:          tls,
+		Transport:    buildTransport(params),
+		TCPFastOpen:  ptrBool(true),
+		TCPMultiPath: true,
+	}
+	return &ParsedServer{Proto: "vmess", DisplayName: firstNonEmpty(v.PS, v.Add), Address: v.Add, Port: port, Outbound: out}, nil
 }
 
 func parseTrojanURL(raw string) (*ParsedServer, error) {

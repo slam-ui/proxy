@@ -91,6 +91,8 @@ type SBOutbound struct {
 	Server            string       `json:"server,omitempty"`
 	ServerPort        int          `json:"server_port,omitempty"`
 	UUID              string       `json:"uuid,omitempty"`
+	Security          string       `json:"security,omitempty"`
+	AlterID           int          `json:"alter_id,omitempty"`
 	Password          string       `json:"password,omitempty"`
 	Method            string       `json:"method,omitempty"`
 	SystemInterface   *bool        `json:"system_interface,omitempty"`
