@@ -309,7 +309,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 		s.serversHandlers.StartSmartFailover(ctx)
 		if mgr, err := subscription.NewManager(subscription.Options{
 			Dir:          filepath.Join(config.DataDir, "subscriptions"),
-			Client:       newSubscriptionHTTPClient(noProxyTransport),
+			Client:       newManagedSubscriptionHTTPClient(),
 			IsSupported:  isSupportedServerURI,
 			ApplyServers: s.serversHandlers.applySubscriptionServers,
 		}); err != nil {

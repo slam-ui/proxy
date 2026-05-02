@@ -136,3 +136,11 @@ func TestSubscriptionHandlersAddUpdatesServers(t *testing.T) {
 		t.Fatalf("secret key was not auto-activated: len=%d err=%v", len(raw), err)
 	}
 }
+
+func TestManagedSubscriptionHTTPClientRejectsHTTPRedirect(t *testing.T) {
+	client := newManagedSubscriptionHTTPClient()
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/sub", nil)
+	if err := client.CheckRedirect(req, []*http.Request{httptest.NewRequest(http.MethodGet, "https://example.com/start", nil)}); err == nil {
+		t.Fatal("CheckRedirect accepted http redirect")
+	}
+}
