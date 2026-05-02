@@ -47,6 +47,7 @@ var (
 	pSetMenuInfo         = user32dll.NewProc("SetMenuInfo")
 	pCreateIconFromRes   = user32dll.NewProc("CreateIconFromResource")
 	pCreateIconFromResEx = user32dll.NewProc("CreateIconFromResourceEx")
+	pDestroyIcon         = user32dll.NewProc("DestroyIcon")
 	pLoadImage           = user32dll.NewProc("LoadImageW")
 	pFillRect            = user32dll.NewProc("FillRect")
 	pDrawTextW           = user32dll.NewProc("DrawTextW")
@@ -300,6 +301,7 @@ var (
 	win32mu         sync.Mutex
 	win32hwnd       uintptr
 	win32hicon      uintptr
+	win32IconOwned  bool
 	win32tooltipOn  [128]uint16
 	win32tooltipOff [128]uint16
 
@@ -368,9 +370,10 @@ func win32Run(onReady func(), onExit func()) {
 	ignoreWin32Call(pSetWindowTheme, hwnd, uintptr(unsafe.Pointer(themeStr)), 0)
 	runtime.KeepAlive(themeStr)
 
-	initialIcon := buildIconHandle(iconOff())
+	initialIcon, initialIconOwned := buildIconHandleOwned(iconOff(), true)
 	win32mu.Lock()
 	win32hicon = initialIcon
+	win32IconOwned = initialIconOwned
 	win32mu.Unlock()
 
 	nid := buildNID(hwnd, initialIcon, win32tooltipOff)
@@ -392,6 +395,7 @@ func win32Run(onReady func(), onExit func()) {
 	nid2 := buildNID(hwnd, 0, win32tooltipOff)
 	ignoreWin32Call(pShellNotifyIcon, nimDelete, uintptr(unsafe.Pointer(&nid2)))
 	ignoreWin32Call(pDestroyWindow, hwnd)
+	cleanupWin32TrayResources()
 
 	onExit()
 }
@@ -412,28 +416,35 @@ func win32SetIcon(enabled bool) {
 func win32SetIconForHealth(enabled bool, state HealthState) {
 	win32mu.Lock()
 	var h uintptr
+	var owned bool
 	preferResource := true
 	if enabled {
 		switch state {
 		case HealthDegraded:
-			h = buildIconHandleWithResource(iconDegraded(), false)
+			h, owned = buildIconHandleOwned(iconDegraded(), false)
 			preferResource = false
 		case HealthCritical:
-			h = buildIconHandleWithResource(iconCritical(), false)
+			h, owned = buildIconHandleOwned(iconCritical(), false)
 			preferResource = false
 		default:
-			h = buildIconHandleWithResource(iconOn(), true)
+			h, owned = buildIconHandleOwned(iconOn(), true)
 		}
 	} else {
-		h = buildIconHandleWithResource(iconOff(), true)
+		h, owned = buildIconHandleOwned(iconOff(), true)
 	}
 	if h == 0 && !preferResource {
-		h = buildIconHandleWithResource(iconOn(), true)
+		h, owned = buildIconHandleOwned(iconOn(), true)
 	}
+	oldIcon := win32hicon
+	oldOwned := win32IconOwned
 	win32hicon = h
+	win32IconOwned = owned
 	win32mu.Unlock()
 
 	if win32hwnd == 0 {
+		if owned {
+			ignoreWin32Call(pDestroyIcon, h)
+		}
 		return
 	}
 	nid := buildNID(win32hwnd, h, win32tooltipOff)
@@ -441,6 +452,9 @@ func win32SetIconForHealth(enabled bool, state HealthState) {
 		copyUTF16(&nid.SzTip, "SafeSky — туннель включён")
 	}
 	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
+	if oldOwned && oldIcon != 0 && oldIcon != h {
+		ignoreWin32Call(pDestroyIcon, oldIcon)
+	}
 }
 
 func win32SetTooltip(tip string) {
@@ -919,11 +933,7 @@ func setMenuBackground(hMenu uintptr) {
 
 // ── Icon helpers ──────────────────────────────────────────────────────────
 
-func buildIconHandle(data []byte) uintptr {
-	return buildIconHandleWithResource(data, true)
-}
-
-func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
+func buildIconHandleOwned(data []byte, preferResource bool) (uintptr, bool) {
 	const (
 		imageIcon     = 1
 		lrShared      = 0x8000
@@ -934,26 +944,26 @@ func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
 		if hMod != 0 {
 			h, _, _ := pLoadImage.Call(hMod, 1, imageIcon, 16, 16, lrShared)
 			if h != 0 {
-				return h
+				return h, false
 			}
 			h, _, _ = pLoadImage.Call(hMod, 1, imageIcon, 0, 0, lrShared|lrDefaultSize)
 			if h != 0 {
-				return h
+				return h, false
 			}
 		}
 	}
 
 	if len(data) < 22 {
-		return 0
+		return 0, false
 	}
 	offset := uint32(data[18]) | uint32(data[19])<<8 | uint32(data[20])<<16 | uint32(data[21])<<24
 	size := uint32(data[14]) | uint32(data[15])<<8 | uint32(data[16])<<16 | uint32(data[17])<<24
 	if uint64(len(data)) > uint64(^uint32(0)) {
-		return 0
+		return 0, false
 	}
 	dataLen := uint32(len(data)) // #nosec G115 -- bounded by the uint64 check above.
 	if size == 0 || dataLen < offset+size {
-		return 0
+		return 0, false
 	}
 	imgData := data[offset : offset+size]
 
@@ -968,7 +978,7 @@ func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
 	)
 	if h != 0 {
 		runtime.KeepAlive(imgData)
-		return h
+		return h, true
 	}
 
 	h, _, _ = pCreateIconFromRes.Call(
@@ -978,7 +988,32 @@ func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
 		0x00030000,
 	)
 	runtime.KeepAlive(imgData)
-	return h
+	return h, h != 0
+}
+
+func cleanupWin32TrayResources() {
+	win32mu.Lock()
+	hicon := win32hicon
+	iconOwned := win32IconOwned
+	win32hicon = 0
+	win32IconOwned = false
+	win32mu.Unlock()
+
+	if iconOwned && hicon != 0 {
+		ignoreWin32Call(pDestroyIcon, hicon)
+	}
+	if menuBgBrush != 0 {
+		ignoreWin32Call(pDeleteObject, menuBgBrush)
+		menuBgBrush = 0
+	}
+	if menuFontNormal != 0 {
+		ignoreWin32Call(pDeleteObject, menuFontNormal)
+		menuFontNormal = 0
+	}
+	if menuFontBold != 0 {
+		ignoreWin32Call(pDeleteObject, menuFontBold)
+		menuFontBold = 0
+	}
 }
 
 // ── NID helpers ──────────────────────────────────────────────────────────
