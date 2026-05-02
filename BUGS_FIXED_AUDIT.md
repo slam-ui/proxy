@@ -1,9 +1,9 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 25 (Critical: 0, High: 6, Medium: 18, Low: 1)
-- Skipped (in BUG_REVIEW_NEEDED.md): 4
-- Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 289 findings; golangci-lint and govulncheck had baseline failures not introduced here.
+- Fixed: 31 (Critical: 0, High: 7, Medium: 23, Low: 1)
+- Skipped (in BUG_REVIEW_NEEDED.md): 1; additional endpoint/lint review items tracked separately.
+- Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 128 findings; golangci-lint clean; govulncheck clean with Go 1.26.2.
 
 ## Fixes
 
@@ -518,3 +518,71 @@ Summary:
 - Warnings on use: alpn fallback, insecure, grpc mode=multi, spx ignored
 - Tests added: 20 named tests plus transport subcases
 - Backward compat: verified by golden test for tcp+reality
+
+## Cleanup pass before roadmap (categories B, G, H, I)
+
+### [F-047] CI toolchain selection pinned for govulncheck
+- **Severity:** Medium
+- **Category:** J
+- **File(s):** .github/workflows/ci.yml
+- **Commit:** bfcbce3
+- **Symptom:** `govulncheck` could report Go 1.26.1 standard-library CVEs even though `go.mod` declared `toolchain go1.26.2`.
+- **Root cause:** CI pinned `setup-go` to Go 1.26.2 but did not force the Go command's toolchain selection.
+- **Fix:** Added workflow-level `GOTOOLCHAIN=go1.26.2`.
+- **Test:** `GOTOOLCHAIN=go1.26.2 govulncheck ./...`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, govulncheck clean
+
+### [F-048] Window Win32 unsafe audit consolidation
+- **Severity:** Medium
+- **Category:** B
+- **File(s):** internal/window/window.go
+- **Commit:** f2eaace
+- **Symptom:** `gosec` reported 36 unaudited `G103` findings around DWM, RECT, WINDOWPLACEMENT, and WebView HWND conversions.
+- **Root cause:** Inline `unsafe.Pointer` conversions repeated audited Win32 lifetime assumptions at each call site.
+- **Fix:** Centralized conversions in small helpers with narrow `#nosec G103` rationale and `runtime.KeepAlive` where needed.
+- **Test:** package has no test files
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/window/... -count=1 -race -timeout=180s`, gosec total 164 -> 128
+
+### [F-049] Tray owned handle cleanup
+- **Severity:** High
+- **Category:** B
+- **File(s):** internal/tray/tray_win32.go
+- **Commit:** 4d84c3f
+- **Symptom:** Repeated degraded/critical tray icon updates and tray shutdown could leave owned `HICON`/GDI handles alive.
+- **Root cause:** The tray did not distinguish `LR_SHARED` resource icons from `CreateIconFromResource*` handles, and cached menu brush/font objects had no shutdown cleanup.
+- **Fix:** Track icon ownership, destroy replaced owned icons, and release cached menu brush/fonts on tray exit.
+- **Test:** existing tray package tests
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/tray/... -count=1 -race -timeout=180s`
+
+### [F-050] UI listener lifecycle audit
+- **Severity:** Medium
+- **Category:** I
+- **File(s):** internal/api/static/js/30-rules-processes.js, internal/api/static/js/50-settings-theme.js, internal/api/static/js/70-runtime-polling.js, internal/api/static/js/80-chart-utils-init.js
+- **Commit:** cleanup-docs
+- **Symptom:** The frontend had 14 `addEventListener` calls and no `removeEventListener` calls.
+- **Root cause:** The previous audit did not classify stable global bindings versus dynamic DOM bindings.
+- **Fix:** Verified listeners are attached once to stable globals (`window`/`document`), one static canvas, static pages, and a single setup input during initialization. Dynamic repeated connection rows use delegated document listeners rather than per-row handlers.
+- **Test:** static audit; no code change required
+- **Verified:** `rg -n "addEventListener|removeEventListener" internal/api/static/js`
+
+### [F-051] UI/server endpoint diff audit
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** ENDPOINT_REVIEW_NEEDED.md, .audit/cleanup/ui_routes.txt, .audit/cleanup/server_routes.txt, .audit/cleanup/endpoint_diff.txt
+- **Commit:** cleanup-docs
+- **Symptom:** The UI/server route diff had not been captured after frontend split.
+- **Root cause:** Route extraction needed to account for `API` prefixes and dynamic path segments.
+- **Fix:** Captured route artifacts, confirmed apparent UI misses are dynamic route false positives, and documented 38 server-only endpoints for product review instead of deleting them.
+- **Test:** `go test ./internal/api/... -count=1 -race -timeout=180s`
+- **Verified:** UI direct routes 52, server routes 87, no confirmed UI-to-404 mismatch
+
+### [F-052] Win32 lifecycle follow-up audit
+- **Severity:** Medium
+- **Category:** B
+- **File(s):** internal/api/procicon_handler_windows.go, internal/wintun/probe_windows.go, internal/wintun/wintun.go, internal/tray/tray_win32.go
+- **Commit:** cleanup-docs
+- **Symptom:** The pre-roadmap prompt called out procicon, Wintun lifecycle, and tray resources for follow-up.
+- **Root cause:** Earlier fixes did not record a single confirmation pass for these Windows resource surfaces.
+- **Fix:** Confirmed `procicon` has paired `DestroyIcon`, `DeleteDC`, and `DeleteObject`; confirmed Wintun probe closes adapters after delete/open checks and polling paths are context-cancellable; fixed tray owned icon/GDI cleanup in F-049.
+- **Test:** existing API, Wintun, and tray tests
+- **Verified:** `go test ./internal/api/... ./internal/tray/... ./internal/wintun/... -count=1 -race -timeout=180s`
