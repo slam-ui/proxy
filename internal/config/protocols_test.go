@@ -99,3 +99,45 @@ func TestParseServerContentTUICRejectsBadCongestion(t *testing.T) {
 		t.Fatal("accepted bad congestion_control")
 	}
 }
+
+func TestParseServerContentWireGuardConf(t *testing.T) {
+	conf := `[Interface]
+PrivateKey = priv
+Address = 10.0.0.2/32, fd00::2/128
+DNS = 1.1.1.1
+MTU = 1420
+
+[Peer]
+PublicKey = pub
+PresharedKey = psk
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = wg.example.com:51820
+PersistentKeepalive = 25
+`
+	got, err := ParseServerContent(conf)
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Proto != "wireguard" || got.Outbound.Type != "wireguard" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if got.Outbound.PrivateKey != "priv" || got.Outbound.PeerPublicKey != "pub" || got.Outbound.PreSharedKey != "psk" {
+		t.Fatalf("unexpected keys: %+v", got.Outbound)
+	}
+	if got.Outbound.MTU != 1420 || len(got.Outbound.LocalAddress) != 2 {
+		t.Fatalf("unexpected wg settings: %+v", got.Outbound)
+	}
+}
+
+func TestParseServerContentWireGuardURL(t *testing.T) {
+	got, err := ParseServerContent("wireguard://priv@wg.example.com:51820?publickey=pub&address=10.0.0.2%2F32&mtu=1280#WG")
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Outbound.Server != "wg.example.com" || got.Outbound.ServerPort != 51820 {
+		t.Fatalf("unexpected endpoint: %+v", got.Outbound)
+	}
+	if got.Outbound.MTU != 1280 || got.Outbound.LocalAddress[0] != "10.0.0.2/32" {
+		t.Fatalf("unexpected wg outbound: %+v", got.Outbound)
+	}
+}
