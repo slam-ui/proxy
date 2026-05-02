@@ -1,8 +1,9 @@
 // Package tray реализует системный трей SafeSky через кастомный Win32 бэкенд.
 //
 // Поведение иконки (в отличие от getlantern/systray):
-//   - Левый клик / двойной клик → показать меню
-//   - Правый клик → перевести главное окно на передний план (OnOpen)
+//   - Левый клик → toggle connect/disconnect
+//   - Двойной клик → перевести главное окно на передний план (OnOpen)
+//   - Правый клик → показать меню
 //
 // Меню использует тёмную тему Windows (SetWindowTheme "DarkMode_Explorer"),
 // что даёт тёмный фон на Windows 10 20H1+ и Windows 11.
@@ -139,6 +140,10 @@ func SetHealthState(state HealthState) {
 	win32SetTooltip(buildTooltip(isEnabled))
 }
 
+func ToggleFromTray() {
+	handleTrayToggle()
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────
 
 var (
@@ -200,5 +205,27 @@ func onReady() {
 func onExit() {
 	if cb.OnQuit != nil {
 		cb.OnQuit()
+	}
+}
+
+func handleTrayToggle() {
+	warmingMu.Lock()
+	warming := warmingActive
+	warmingMu.Unlock()
+	if warming {
+		return
+	}
+
+	win32MenuState.Lock()
+	isEnabled := win32MenuState.disableEnabled
+	win32MenuState.Unlock()
+	if isEnabled {
+		if cb.OnDisable != nil {
+			cb.OnDisable()
+		}
+		return
+	}
+	if cb.OnEnable != nil {
+		cb.OnEnable()
 	}
 }

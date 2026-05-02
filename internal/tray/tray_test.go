@@ -162,3 +162,25 @@ func TestCallbackOnServerSwitch(t *testing.T) {
 		t.Errorf("OnServerSwitch вызван с %q, ожидалось %q", calledWith, "server-42")
 	}
 }
+
+func TestHandleTrayToggleCallsEnableDisable(t *testing.T) {
+	var enabled, disabled int
+	cb.OnEnable = func() { enabled++ }
+	cb.OnDisable = func() { disabled++ }
+	defer func() {
+		cb.OnEnable = nil
+		cb.OnDisable = nil
+	}()
+
+	SetEnabled(false)
+	handleTrayToggle()
+	if enabled != 1 || disabled != 0 {
+		t.Fatalf("disabled toggle: enabled=%d disabled=%d", enabled, disabled)
+	}
+
+	SetEnabled(true)
+	handleTrayToggle()
+	if enabled != 1 || disabled != 1 {
+		t.Fatalf("enabled toggle: enabled=%d disabled=%d", enabled, disabled)
+	}
+}
