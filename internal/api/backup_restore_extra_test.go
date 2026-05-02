@@ -131,7 +131,9 @@ func TestBackupRestoreRoute_AllowsFiveMegabyteUploads(t *testing.T) {
 		ProxyManager: &stubProxy{},
 		Logger:       &logger.NoOpLogger{},
 	}, context.Background())
-	srv.SetupFeatureRoutes(context.Background())
+	featureCtx, featureCancel := context.WithCancel(context.Background())
+	defer featureCancel()
+	srv.SetupFeatureRoutes(featureCtx)
 	srv.FinalizeRoutes()
 
 	meta, _ := json.Marshal(map[string]int{"schema_version": 1})

@@ -59,10 +59,12 @@ type Detector struct {
 	// поэтому второй файл открывался с #2, но второй блок в первом файле тоже #2.
 	anomalyCount map[string]int // filename → количество записанных аномалий
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	running  bool
-	wg       sync.WaitGroup
+	lifecycleMu sync.Mutex
+	stopCh      chan struct{}
+	stopClosed  bool
+	running     bool
+	stopping    bool
+	wg          sync.WaitGroup
 }
 
 // New создаёт детектор.
@@ -110,30 +112,37 @@ func (d *Detector) rotateOldFiles(maxAge time.Duration) {
 // Start запускает фоновую горутину детектора.
 // Повторный вызов без Stop ничего не делает.
 func (d *Detector) Start() {
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+
 	d.mu.Lock()
-	if d.running {
+	if d.running || d.stopping {
 		d.mu.Unlock()
 		return
 	}
-	// Создаём новый канал и Once при каждом Start — позволяет перезапуск после Stop.
+	// Создаём новый stop-канал при каждом Start — позволяет перезапуск после Stop.
 	d.stopCh = make(chan struct{})
-	d.stopOnce = sync.Once{}
+	d.stopClosed = false
+	stopCh := d.stopCh
 	d.running = true
+	d.stopping = false
+	d.wg.Add(1)
 	d.mu.Unlock()
 
-	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
 		defer func() {
 			d.mu.Lock()
-			d.running = false
+			if !d.stopping {
+				d.running = false
+			}
 			d.mu.Unlock()
 		}()
 		ticker := time.NewTicker(d.pollInterval)
 		defer ticker.Stop()
 		for {
 			select {
-			case <-d.stopCh:
+			case <-stopCh:
 				return
 			case <-ticker.C:
 				d.check()
@@ -145,8 +154,28 @@ func (d *Detector) Start() {
 // Stop останавливает детектор и ждёт завершения горутины.
 // Безопасен при повторном вызове.
 func (d *Detector) Stop() {
-	d.stopOnce.Do(func() { close(d.stopCh) })
+	d.lifecycleMu.Lock()
+	defer d.lifecycleMu.Unlock()
+
+	d.mu.Lock()
+	if !d.running && !d.stopping {
+		d.mu.Unlock()
+		return
+	}
+	stopCh := d.stopCh
+	d.stopping = true
+	if !d.stopClosed {
+		close(stopCh)
+		d.stopClosed = true
+	}
+	d.mu.Unlock()
+
 	d.wg.Wait()
+
+	d.mu.Lock()
+	d.running = false
+	d.stopping = false
+	d.mu.Unlock()
 }
 
 // check просматривает новые события с момента последней проверки.

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -209,5 +210,96 @@ func TestStartGuard_GenerationRace(t *testing.T) {
 	m.mu.Unlock()
 	if runningAfterStop {
 		t.Error("guardRunning=true после StopGuard")
+	}
+}
+
+type blockingStateBackend struct {
+	mu      sync.Mutex
+	enabled bool
+	config  Config
+
+	block   bool
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingStateBackend) set(config Config) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.enabled = true
+	b.config = config
+	return nil
+}
+
+func (b *blockingStateBackend) disable() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.enabled = false
+	return nil
+}
+
+func (b *blockingStateBackend) state() (bool, Config) {
+	b.mu.Lock()
+	block := b.block
+	enabled := b.enabled
+	config := b.config
+	b.mu.Unlock()
+
+	if block {
+		b.once.Do(func() { close(b.entered) })
+		<-b.release
+	}
+	return enabled, config
+}
+
+func (b *blockingStateBackend) disableAndBlock() {
+	b.mu.Lock()
+	b.enabled = false
+	b.block = true
+	b.mu.Unlock()
+}
+
+func TestStopGuardWaitsForActiveCheck(t *testing.T) {
+	backend := &blockingStateBackend{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	m := newManagerWithBackend(&mockLogger{}, backend)
+	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
+	if err := m.Enable(cfg); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	backend.disableAndBlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.StartGuard(ctx, time.Second); err != nil {
+		t.Fatalf("StartGuard: %v", err)
+	}
+
+	select {
+	case <-backend.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("guard did not enter backend state check")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		m.StopGuard()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("StopGuard returned before the active guard check finished")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(backend.release)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopGuard did not return after active guard check was released")
 	}
 }

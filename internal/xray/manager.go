@@ -245,6 +245,7 @@ type manager struct {
 	cmd     *exec.Cmd
 	config  Config
 	logger  logger.Logger
+	opMu    sync.Mutex
 	mu      sync.RWMutex
 	done    chan struct{}
 	stopped bool
@@ -319,14 +320,15 @@ func validateConfig(cfg Config) error {
 
 // Start запускает sing-box (можно вызвать повторно после Stop/краша).
 func (m *manager) Start() error {
-	m.mu.Lock()
-	m.done = make(chan struct{})
-	m.stopped = false
-	m.mu.Unlock()
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	newDone, prevDone, prevStopped := m.beginStart(false)
 	// FIX 8: сбрасываем счётчик крашей только при успешном старте.
 	// Ранее Reset() вызывался до doStart() — если doStart падал,
 	// счётчик оказывался сброшен, и цикл крашей не обнаруживался.
 	if err := m.doStart(); err != nil {
+		m.rollbackFailedStart(newDone, prevDone, prevStopped)
 		return err
 	}
 	m.crashes.Reset()
@@ -336,22 +338,46 @@ func (m *manager) Start() error {
 // StartAfterManualCleanup запускает sing-box без вызова BeforeRestart.
 // Вызывать когда cleanup уже выполнен внешним кодом (handleCrash).
 func (m *manager) StartAfterManualCleanup() error {
-	m.mu.Lock()
-	m.done = make(chan struct{})
-	m.stopped = false
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	newDone, prevDone, prevStopped := m.beginStart(true)
 	// BUG FIX #5: firstStart=true пропускает BeforeRestart в doStart.
 	// Убрана логика с prevFirst: она создавала иллюзию отката, но между
 	// Unlock() и doStart() другая горутина могла изменить firstStart — race.
-	// Если doStart упал, firstStart остаётся true — корректно: вызывающий
+	// beginStart(true) выставляет firstStart до doStart: вызывающий
 	// (handleCrash) уже сделал cleanup вручную для этой попытки.
-	m.firstStart = true
-	m.mu.Unlock()
 	// FIX 9: аналогично Start() — Reset только при успехе.
 	if err := m.doStart(); err != nil {
+		m.rollbackFailedStart(newDone, prevDone, prevStopped)
 		return err
 	}
 	m.crashes.Reset()
 	return nil
+}
+
+func (m *manager) beginStart(skipBeforeRestart bool) (newDone, prevDone chan struct{}, prevStopped bool) {
+	newDone = make(chan struct{})
+	m.mu.Lock()
+	prevDone = m.done
+	prevStopped = m.stopped
+	m.done = newDone
+	m.stopped = false
+	if skipBeforeRestart {
+		m.firstStart = true
+	}
+	m.mu.Unlock()
+	return newDone, prevDone, prevStopped
+}
+
+func (m *manager) rollbackFailedStart(newDone, prevDone chan struct{}, prevStopped bool) {
+	m.mu.Lock()
+	if m.done == newDone {
+		m.done = prevDone
+		m.stopped = prevStopped
+	}
+	m.mu.Unlock()
+	close(newDone)
 }
 
 func (m *manager) doStart() error {
@@ -552,6 +578,9 @@ func IsTooManyRestarts(err error) bool {
 }
 
 func (m *manager) Stop() error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	if m.cmd == nil || m.cmd.Process == nil {
 		m.mu.Unlock()
