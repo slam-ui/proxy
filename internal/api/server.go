@@ -306,6 +306,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
 	if s.config.SecretKeyPath != "" {
 		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
+		s.serversHandlers.StartHealthMonitor(ctx)
 		s.serversHandlers.StartSmartFailover(ctx)
 		if mgr, err := subscription.NewManager(subscription.Options{
 			Dir:          filepath.Join(config.DataDir, "subscriptions"),
@@ -346,6 +347,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/security/network")
 	s.addSilentPath("/api/security/traffic-budget")
 	s.addSilentPath("/api/servers/failover")
+	s.addSilentPath("/api/servers/health")
 	s.addSilentPath("/api/update/status")
 	s.addSilentPath("/api/subscriptions")
 }
