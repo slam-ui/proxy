@@ -17,6 +17,7 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
+	"proxyclient/internal/healthmonitor"
 	"proxyclient/internal/latency"
 
 	qrcode "github.com/skip2/go-qrcode"
@@ -118,6 +119,7 @@ type ServersHandlers struct {
 	mu         sync.RWMutex
 	secretKey  string                              // путь до active secret.key
 	fetchURLFn func(rawURL string) (string, error) // C-5: инъекция для тестов (nil → fetchServerURIFromURL)
+	health     *healthmonitor.Monitor
 }
 
 // SetupServerRoutes регистрирует маршруты менеджера серверов.
@@ -134,6 +136,7 @@ func SetupServerRoutes(s *Server, secretKeyPath string) *ServersHandlers {
 	api.HandleFunc("/servers/{id}/qr", h.handleQR).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/{id}/latency-history", h.handleLatencyHistory).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/ping-all", h.handlePingAll).Methods("GET", "OPTIONS")
+	api.HandleFunc("/servers/health", h.handleHealth).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/auto-connect", h.handleAutoConnect).Methods("POST", "OPTIONS") // B-4
 	api.HandleFunc("/servers/failover", h.handleFailoverStatus).Methods("GET", "OPTIONS")
 	api.HandleFunc("/servers/failover/settings", h.handleFailoverSettings).Methods("GET", "OPTIONS")
@@ -142,6 +145,36 @@ func SetupServerRoutes(s *Server, secretKeyPath string) *ServersHandlers {
 	api.HandleFunc("/servers/fetch-url", h.handleFetchURL).Methods("POST", "OPTIONS")               // C-5
 	api.HandleFunc("/servers/{id}/refresh", h.handleRefresh).Methods("POST", "OPTIONS")             // C-5
 	return h
+}
+
+func (h *ServersHandlers) StartHealthMonitor(ctx context.Context) {
+	h.health = healthmonitor.New(healthmonitor.Options{
+		Interval: 30 * time.Second,
+		Targets:  h.healthTargets,
+		Probe: func(ctx context.Context, target healthmonitor.ServerTarget) (time.Duration, error) {
+			ms, _, _, ok := pingServerWithProbes(ctx, target.URL, 1)
+			if !ok {
+				return 0, fmt.Errorf("tcp probe failed")
+			}
+			return time.Duration(ms) * time.Millisecond, nil
+		},
+	})
+	go h.health.Start(ctx)
+}
+
+func (h *ServersHandlers) healthTargets() []healthmonitor.ServerTarget {
+	h.mu.RLock()
+	list, err := loadServers()
+	h.mu.RUnlock()
+	if err != nil {
+		return nil
+	}
+	list = visibleServers(list)
+	targets := make([]healthmonitor.ServerTarget, 0, len(list))
+	for _, server := range list {
+		targets = append(targets, healthmonitor.ServerTarget{ID: server.ID, URL: server.URL})
+	}
+	return targets
 }
 
 func (h *ServersHandlers) handleQR(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +216,14 @@ func (h *ServersHandlers) handleLatencyHistory(w http.ResponseWriter, r *http.Re
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"history": latency.Global.Get(mux.Vars(r)["id"]),
 	})
+}
+
+func (h *ServersHandlers) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	if h.health == nil {
+		h.server.respondJSON(w, http.StatusOK, map[string]interface{}{"servers": []healthmonitor.Snapshot{}})
+		return
+	}
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{"servers": h.health.Snapshot()})
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────
@@ -469,6 +510,9 @@ func (h *ServersHandlers) handlePing(w http.ResponseWriter, r *http.Request) {
 
 	// B-5: используем 3 пробы для более точного измерения
 	ms, minMs, maxMs, ok := pingServerWithProbes(r.Context(), target.URL, 3)
+	if h.health != nil {
+		h.health.Record(target.ID, time.Duration(ms)*time.Millisecond, ok)
+	}
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"id":         target.ID,
 		"latency_ms": ms,
@@ -555,6 +599,9 @@ func (h *ServersHandlers) doAutoConnect(ctx context.Context) (map[string]interfa
 			defer wg.Done()
 			// B-5: для auto-connect используем 1 пробу (приоритет скорость)
 			ms, _, _, ok := pingServerWithProbes(pingCtx, srv.URL, 1)
+			if h.health != nil {
+				h.health.Record(srv.ID, time.Duration(ms)*time.Millisecond, ok)
+			}
 			results[i] = pingResult{id: srv.ID, latency: ms, ok: ok}
 		}(i, srv)
 	}
@@ -566,6 +613,18 @@ func (h *ServersHandlers) doAutoConnect(ctx context.Context) (map[string]interfa
 		if results[i].ok {
 			if bestResult == nil || results[i].latency < bestResult.latency {
 				bestResult = &results[i]
+			}
+		}
+	}
+	if h.health != nil {
+		if bestHealth, ok := healthmonitor.Best(h.health.Snapshot()); ok {
+			for i := range results {
+				if results[i].id == bestHealth.ID {
+					results[i].latency = bestHealth.AverageLatencyMs
+					results[i].ok = true
+					bestResult = &results[i]
+					break
+				}
 			}
 		}
 	}
@@ -753,6 +812,9 @@ func (h *ServersHandlers) handlePingAll(w http.ResponseWriter, r *http.Request) 
 			defer wg.Done()
 			// B-5: для ping-all используем 1 пробу (приоритет скорость)
 			ms, minMs, maxMs, ok := pingServerWithProbes(r.Context(), srv.URL, 1)
+			if h.health != nil {
+				h.health.Record(srv.ID, time.Duration(ms)*time.Millisecond, ok)
+			}
 			results[i] = result{ID: srv.ID, LatencyMs: ms, MinMs: minMs, MaxMs: maxMs, OK: ok, Probes: 1}
 		}(i, srv)
 	}
