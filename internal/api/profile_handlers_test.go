@@ -2,11 +2,15 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
+	"proxyclient/internal/apprules"
+	"proxyclient/internal/config"
 	"proxyclient/internal/logger"
 )
 
@@ -45,5 +49,94 @@ func TestProfilePathRejectsWindowsDeviceNames(t *testing.T) {
 		if path, err := profilePath(name); err == nil {
 			t.Fatalf("profilePath(%q) = %q, want error", name, path)
 		}
+	}
+}
+
+func TestProfilesSaveFullModelRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	srv := NewServer(Config{Logger: &logger.NoOpLogger{}}, context.Background())
+	SetupProfileRoutes(srv)
+
+	payload := map[string]interface{}{
+		"id":          "work",
+		"name":        "Work",
+		"description": "Corporate profile",
+		"icon":        "briefcase",
+		"color":       "#3366ff",
+		"server_selector": map[string]string{
+			"mode":      "specific",
+			"server_id": "srv1",
+		},
+		"app_rules": []apprules.Rule{{
+			ID:      "app1",
+			Name:    "Browser",
+			Pattern: "chrome.exe",
+			Action:  apprules.ActionProxy,
+			Enabled: true,
+		}},
+		"routing_rules": []config.RoutingRule{{
+			Value:  "Example.COM",
+			Type:   config.RuleTypeDomain,
+			Action: config.ActionProxy,
+		}},
+		"dns_config": map[string]interface{}{
+			"remote_dns": "https://1.1.1.1/dns-query",
+			"direct_dns": "udp://8.8.8.8",
+		},
+		"kill_switch":  "always",
+		"split_tunnel": []string{"10.0.0.0/8"},
+		"auto_connect": true,
+		"hotkey":       "Ctrl+Alt+W",
+	}
+	w := postJSON(t, srv.router, "/api/profiles", payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/profiles = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	w = getJSON(t, srv.router, "/api/profiles/Work")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/profiles/Work = %d, body=%s", w.Code, w.Body.String())
+	}
+	var p Profile
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if p.ID != "work" || p.Description != "Corporate profile" || p.ServerSelector.ServerID != "srv1" || !p.AutoConnect {
+		t.Fatalf("profile metadata not preserved: %+v", p)
+	}
+	if len(p.AppRules) != 1 || p.AppRules[0].Pattern != "chrome.exe" {
+		t.Fatalf("app rules not preserved: %+v", p.AppRules)
+	}
+	if len(p.RoutingRules) != 1 || p.RoutingRules[0].Value != "example.com" {
+		t.Fatalf("routing rules not normalized/preserved: %+v", p.RoutingRules)
+	}
+	if p.DNSConfig == nil || p.DNSConfig.DirectDNS != "udp://8.8.8.8" || p.KillSwitch != KillSwitchAlways {
+		t.Fatalf("dns/kill switch not preserved: dns=%+v kill=%s", p.DNSConfig, p.KillSwitch)
+	}
+}
+
+func TestProfilesSaveRejectsSpecificSelectorWithoutServer(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	srv := NewServer(Config{Logger: &logger.NoOpLogger{}}, context.Background())
+	SetupProfileRoutes(srv)
+	w := postJSON(t, srv.router, "/api/profiles", map[string]interface{}{
+		"name":            "Broken",
+		"server_selector": map[string]string{"mode": "specific"},
+		"routing":         config.RoutingConfig{DefaultAction: config.ActionProxy},
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/profiles specific without server = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 }
