@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -42,6 +43,10 @@ func ParseServerContent(content string) (*ParsedServer, error) {
 		return parseHysteria2URL(content)
 	case strings.HasPrefix(content, "tuic://"):
 		return parseTUICURL(content)
+	case strings.HasPrefix(content, "wireguard://"):
+		return parseWireGuardURL(content)
+	case strings.Contains(content, "[Interface]") && strings.Contains(content, "[Peer]"):
+		return parseWireGuardConf(content)
 	default:
 		return nil, fmt.Errorf("unsupported server protocol")
 	}
@@ -230,6 +235,121 @@ func parseTUICURL(raw string) (*ParsedServer, error) {
 		},
 	}
 	return &ParsedServer{Proto: "tuic", DisplayName: displayName(u, host), Address: host, Port: port, Outbound: out}, nil
+}
+
+type wireGuardParams struct {
+	Name          string
+	PrivateKey    string
+	Address       []string
+	DNS           []string
+	MTU           int
+	PeerPublicKey string
+	PresharedKey  string
+	Endpoint      string
+	Reserved      []int
+}
+
+func parseWireGuardConf(content string) (*ParsedServer, error) {
+	var section string
+	var p wireGuardParams
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(strings.Trim(line, "[]"))
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		switch section + "." + key {
+		case "interface.privatekey":
+			p.PrivateKey = value
+		case "interface.address":
+			p.Address = splitQueryList(value)
+		case "interface.dns":
+			p.DNS = splitQueryList(value)
+		case "interface.mtu":
+			p.MTU = intQuery(value)
+		case "peer.publickey":
+			if p.PeerPublicKey == "" {
+				p.PeerPublicKey = value
+			}
+		case "peer.presharedkey":
+			if p.PresharedKey == "" {
+				p.PresharedKey = value
+			}
+		case "peer.endpoint":
+			if p.Endpoint == "" {
+				p.Endpoint = value
+			}
+		}
+	}
+	return buildWireGuardServer(p)
+}
+
+func parseWireGuardURL(raw string) (*ParsedServer, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard parse: %w", err)
+	}
+	q := u.Query()
+	p := wireGuardParams{
+		Name:          displayName(u, u.Hostname()),
+		PrivateKey:    u.User.Username(),
+		Address:       splitQueryList(q.Get("address")),
+		MTU:           intQuery(q.Get("mtu")),
+		PeerPublicKey: firstNonEmpty(q.Get("publickey"), q.Get("peer_public_key")),
+		PresharedKey:  firstNonEmpty(q.Get("presharedkey"), q.Get("pre_shared_key")),
+		Endpoint:      net.JoinHostPort(u.Hostname(), u.Port()),
+	}
+	if reserved := splitQueryList(q.Get("reserved")); len(reserved) == 3 {
+		p.Reserved = []int{intQuery(reserved[0]), intQuery(reserved[1]), intQuery(reserved[2])}
+	}
+	return buildWireGuardServer(p)
+}
+
+func buildWireGuardServer(p wireGuardParams) (*ParsedServer, error) {
+	if p.PrivateKey == "" {
+		return nil, fmt.Errorf("wireguard private key is required")
+	}
+	if len(p.Address) == 0 {
+		return nil, fmt.Errorf("wireguard address is required")
+	}
+	if p.PeerPublicKey == "" {
+		return nil, fmt.Errorf("wireguard peer public key is required")
+	}
+	host, portText, err := net.SplitHostPort(p.Endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("wireguard endpoint must be host:port")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port <= 0 || port > 65535 {
+		return nil, fmt.Errorf("wireguard endpoint port is invalid")
+	}
+	if p.MTU <= 0 {
+		p.MTU = 1408
+	}
+	out := SBOutbound{
+		Type:            "wireguard",
+		Tag:             "proxy-out",
+		Server:          host,
+		ServerPort:      port,
+		SystemInterface: ptrBool(false),
+		InterfaceName:   "wg0",
+		LocalAddress:    p.Address,
+		PrivateKey:      p.PrivateKey,
+		PeerPublicKey:   p.PeerPublicKey,
+		PreSharedKey:    p.PresharedKey,
+		MTU:             p.MTU,
+		Reserved:        p.Reserved,
+	}
+	return &ParsedServer{Proto: "wireguard", DisplayName: firstNonEmpty(p.Name, host), Address: host, Port: port, Outbound: out}, nil
 }
 
 func parseSSUserInfo(u *url.URL) (string, string, error) {

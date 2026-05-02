@@ -93,6 +93,13 @@ type SBOutbound struct {
 	UUID              string       `json:"uuid,omitempty"`
 	Password          string       `json:"password,omitempty"`
 	Method            string       `json:"method,omitempty"`
+	SystemInterface   *bool        `json:"system_interface,omitempty"`
+	InterfaceName     string       `json:"interface_name,omitempty"`
+	LocalAddress      []string     `json:"local_address,omitempty"`
+	PrivateKey        string       `json:"private_key,omitempty"`
+	PeerPublicKey     string       `json:"peer_public_key,omitempty"`
+	PreSharedKey      string       `json:"pre_shared_key,omitempty"`
+	Reserved          []int        `json:"reserved,omitempty"`
 	Obfs              *SBObfs      `json:"obfs,omitempty"`
 	UpMbps            int          `json:"up_mbps,omitempty"`
 	DownMbps          int          `json:"down_mbps,omitempty"`
