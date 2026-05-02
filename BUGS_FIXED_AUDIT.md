@@ -1,7 +1,8 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 31 (Critical: 0, High: 7, Medium: 23, Low: 1)
+- Fixed: 29 (Critical: 0, High: 8, Medium: 20, Low: 1)
+- Audit confirmations: 3 (F-050..F-052, not counted as fixes)
 - Skipped (in BUG_REVIEW_NEEDED.md): 1; additional endpoint/lint review items tracked separately.
 - Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 128 findings; golangci-lint clean; govulncheck clean with Go 1.26.2.
 
@@ -553,6 +554,21 @@ Summary:
 - **Fix:** Track icon ownership, destroy replaced owned icons, and release cached menu brush/fonts on tray exit.
 - **Test:** existing tray package tests
 - **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/tray/... -count=1 -race -timeout=180s`
+
+## CodeRabbit follow-up
+
+### [F-053] Tray icon update avoids stale destroyed handle
+- **Severity:** High
+- **Category:** B
+- **File(s):** internal/tray/tray_win32.go
+- **Commit:** c4dd14e
+- **Symptom:** CodeRabbit found `win32hicon` could point to a destroyed owned icon if a health icon update raced with tray shutdown.
+- **Root cause:** `win32SetIconForHealth` stored the new icon in globals before checking whether `win32hwnd` was already zero.
+- **Fix:** Check `win32hwnd` while holding `win32mu`; if the tray window is gone, do not update global icon state and destroy the transient owned icon immediately.
+- **Test:** existing tray package tests
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/tray/... -count=1 -race -timeout=180s`
+
+## Audit confirmations
 
 ### [F-050] UI listener lifecycle audit
 - **Severity:** Medium
