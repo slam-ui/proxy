@@ -23,6 +23,7 @@ type AppSettings struct {
 	DNSGuard             DNSGuardSettings          `json:"dns_guard"`
 	NetworkProtection    NetworkProtectionSettings `json:"network_protection"`
 	TrafficBudget        TrafficBudgetSettings     `json:"traffic_budget"`
+	Updates              UpdateSettings            `json:"updates"`
 }
 
 func DefaultAppSettings() AppSettings {
@@ -45,6 +46,12 @@ func DefaultAppSettings() AppSettings {
 		},
 		TrafficBudget: TrafficBudgetSettings{
 			WarnPercent: 80,
+		},
+		Updates: UpdateSettings{
+			Enabled:     true,
+			Channel:     "stable",
+			BaseURL:     "https://example.com/safesky",
+			AutoInstall: false,
 		},
 	}
 }
@@ -83,6 +90,13 @@ type TrafficBudgetSettings struct {
 	BlockWhenExceeded bool  `json:"block_when_exceeded"`
 }
 
+type UpdateSettings struct {
+	Enabled     bool   `json:"enabled"`
+	Channel     string `json:"channel"`
+	BaseURL     string `json:"base_url"`
+	AutoInstall bool   `json:"auto_install"`
+}
+
 func LoadAppSettings(path string) (AppSettings, error) {
 	settings := DefaultAppSettings()
 	data, err := os.ReadFile(path)
@@ -105,6 +119,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 		DNSGuard             *DNSGuardSettings          `json:"dns_guard"`
 		NetworkProtection    *NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *TrafficBudgetSettings     `json:"traffic_budget"`
+		Updates              *UpdateSettings            `json:"updates"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return settings, fmt.Errorf("неверный формат настроек: %w", err)
@@ -142,6 +157,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	if raw.TrafficBudget != nil {
 		settings.TrafficBudget = *raw.TrafficBudget
 	}
+	if raw.Updates != nil {
+		settings.Updates = *raw.Updates
+	}
 	if settings.KeepaliveIntervalSec <= 0 {
 		settings.KeepaliveIntervalSec = 120
 	}
@@ -170,6 +188,12 @@ func normalizeAppSettings(settings *AppSettings) {
 	}
 	if settings.TrafficBudget.WarnPercent <= 0 || settings.TrafficBudget.WarnPercent > 100 {
 		settings.TrafficBudget.WarnPercent = 80
+	}
+	if settings.Updates.Channel != "beta" {
+		settings.Updates.Channel = "stable"
+	}
+	if settings.Updates.BaseURL == "" {
+		settings.Updates.BaseURL = "https://example.com/safesky"
 	}
 }
 

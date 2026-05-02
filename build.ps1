@@ -44,6 +44,9 @@
 .PARAMETER GoExePath
     Явный путь к go.exe (определяется автоматически если не указан).
 
+.PARAMETER Version
+    Версия приложения для встраивания через linker flags.
+
 .EXAMPLE
     .\build.ps1                          # Debug-сборка, данные сохраняются
     .\build.ps1 -Release                 # Release для раздачи
@@ -57,7 +60,8 @@ param(
     [switch]$NoGui,
     [switch]$SkipTests,
     [switch]$NoPause,
-    [string]$GoExePath = ""
+    [string]$GoExePath = "",
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,7 +75,9 @@ $DATA_DIR      = "$DIST_DIR\data"
 $GEOSITE_DIR   = "geosite"
 $TEMPLATES_DIR = "templates"
 $BINARY        = "SafeSky.exe"
+$UPDATER       = "proxy-updater.exe"
 $MAIN_PATH     = ".\cmd\proxy-client"
+$UPDATER_PATH  = ".\cmd\proxy-updater"
 
 function Write-Banner([string]$text) {
     $w = $text.Length + 4
@@ -111,6 +117,7 @@ if (-not $isAdmin) {
     if ($NoGui)     { $argList += "-NoGui"     }
     if ($SkipTests) { $argList += "-SkipTests" }
     if ($NoPause)   { $argList += "-NoPause"   }
+    if ($Version)   { $argList += @("-Version", "`"$Version`"") }
     Start-Process powershell -Verb RunAs -ArgumentList $argList
     exit 0
 }
@@ -285,15 +292,25 @@ if ($goversioninfoExe -and (Test-Path $viJson) -and (Test-Path $icoPath)) {
 
 # Compile
 Write-Step "Compiling $BINARY..."
+$gitCommit = "unknown"
+try { $gitCommit = (& git rev-parse --short=12 HEAD 2>$null).Trim() } catch {}
+if (-not $Version) {
+    try { $Version = (& git describe --tags --always --dirty 2>$null).Trim() } catch {}
+}
+if (-not $Version) { $Version = "0.0.0-dev" }
+$buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$versionFlags = "-X 'proxyclient/internal/version.Version=$Version' -X 'proxyclient/internal/version.Commit=$gitCommit' -X 'proxyclient/internal/version.BuildTime=$buildTime'"
 $ldflags = ""
 if ($Release) {
-    $ldflags = "-s -w"
+    $ldflags = "-s -w $versionFlags"
     if (-not $NoGui) { $ldflags += " -H windowsgui" }
     Write-Skip "Mode: Release (stripped$(if (-not $NoGui){', no console window'}))"
 } else {
-    if (-not $NoGui) { $ldflags = "-H windowsgui" }
+    $ldflags = $versionFlags
+    if (-not $NoGui) { $ldflags += " -H windowsgui" }
     Write-Skip "Mode: Debug"
 }
+Write-Skip "Version: $Version ($gitCommit, $buildTime)"
 $env:GOOS = "windows"; $env:GOARCH = "amd64"; $env:CGO_ENABLED = "0"
 $buildArgs = @("build", "-o", "$DIST_DIR\$BINARY")
 if ($ldflags -ne "") { $buildArgs += @("-ldflags", $ldflags) }
@@ -302,6 +319,14 @@ $buildArgs += $MAIN_PATH
 if ($LASTEXITCODE -ne 0) { Write-Fail "Compilation failed"; Exit-Build 1 }
 $sizeMB = [math]::Round((Get-Item "$DIST_DIR\$BINARY").Length / 1MB, 2)
 Write-OK "$BINARY  ($sizeMB MB)"
+
+Write-Step "Compiling $UPDATER..."
+$updaterLdflags = "-s -w"
+$updaterArgs = @("build", "-o", "$DIST_DIR\$UPDATER", "-ldflags", $updaterLdflags, $UPDATER_PATH)
+& $GoExePath @updaterArgs
+if ($LASTEXITCODE -ne 0) { Write-Fail "Updater compilation failed"; Exit-Build 1 }
+$updaterSizeMB = [math]::Round((Get-Item "$DIST_DIR\$UPDATER").Length / 1MB, 2)
+Write-OK "$UPDATER  ($updaterSizeMB MB)"
 
 # Сбрасываем кэш иконок Explorer чтобы новая иконка .exe отображалась сразу в проводнике.
 # ie4uinit.exe -show — стандартный механизм Windows 10/11.
