@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"proxyclient/internal/config"
@@ -498,17 +499,15 @@ func (s *Server) handleNetworkProtectionGet(w http.ResponseWriter, _ *http.Reque
 
 func (s *Server) startNetworkProtection(ctx context.Context) {
 	go func() {
-		last := networkFingerprint()
+		tracker := newNetworkChangeTracker(networkFingerprint)
 		_ = netwatch.Watch(ctx, func() {
 			settings, _ := config.LoadAppSettings(config.AppSettingsFile)
 			if !settings.NetworkProtection.Enabled {
 				return
 			}
-			cur := networkFingerprint()
-			if cur == "" || cur == last {
+			if !tracker.changed() {
 				return
 			}
-			last = cur
 			connhistory.Global.Add(connhistory.Event{Time: time.Now(), Kind: connhistory.EventNetChange, Reason: "network fingerprint changed"})
 			s.logger.Info("Network protection: сетевой интерфейс изменился")
 			if settings.NetworkProtection.StrictOnChange {
@@ -519,6 +518,30 @@ func (s *Server) startNetworkProtection(ctx context.Context) {
 			}
 		})
 	}()
+}
+
+type networkChangeTracker struct {
+	mu          sync.Mutex
+	last        string
+	fingerprint func() string
+}
+
+func newNetworkChangeTracker(fingerprint func() string) *networkChangeTracker {
+	return &networkChangeTracker{
+		last:        fingerprint(),
+		fingerprint: fingerprint,
+	}
+}
+
+func (t *networkChangeTracker) changed() bool {
+	cur := t.fingerprint()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cur == "" || cur == t.last {
+		return false
+	}
+	t.last = cur
+	return true
 }
 
 func networkFingerprint() string {
