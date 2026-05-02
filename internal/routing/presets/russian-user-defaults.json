@@ -1,0 +1,40 @@
+{
+  "id": "russian-user-defaults",
+  "name": "Russian user defaults",
+  "description": "Proxy streaming services, keep Russian/local sites and private networks direct.",
+  "default_action": "proxy",
+  "rules": [
+    {
+      "id": "ru-streaming",
+      "name": "Streaming through proxy",
+      "enabled": true,
+      "priority": 10,
+      "match": { "type": "domain_suffix", "values": ["netflix.com", "youtube.com", "twitch.tv", "spotify.com", "discord.com"] },
+      "action": "proxy"
+    },
+    {
+      "id": "ru-local-sites",
+      "name": "Russian local sites",
+      "enabled": true,
+      "priority": 20,
+      "match": { "type": "geosite", "values": ["ru"] },
+      "action": "direct"
+    },
+    {
+      "id": "ru-private-nets",
+      "name": "Private networks",
+      "enabled": true,
+      "priority": 30,
+      "match": { "type": "ip_cidr", "values": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"] },
+      "action": "direct"
+    },
+    {
+      "id": "ru-banks",
+      "name": "Banks and public services",
+      "enabled": true,
+      "priority": 40,
+      "match": { "type": "domain_suffix", "values": ["sberbank.ru", "vtb.ru", "tinkoff.ru", "gosuslugi.ru", "nalog.gov.ru"] },
+      "action": "direct"
+    }
+  ]
+}

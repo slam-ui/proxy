@@ -1,0 +1,16 @@
+{
+  "id": "privacy-maximum",
+  "name": "Privacy maximum",
+  "description": "Proxy everything except local private networks needed for LAN access.",
+  "default_action": "proxy",
+  "rules": [
+    {
+      "id": "privacy-private",
+      "name": "Private networks",
+      "enabled": true,
+      "priority": 10,
+      "match": { "type": "ip_cidr", "values": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"] },
+      "action": "direct"
+    }
+  ]
+}

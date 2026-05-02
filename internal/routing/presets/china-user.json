@@ -1,0 +1,32 @@
+{
+  "id": "china-user",
+  "name": "China user",
+  "description": "Direct local China sites and private networks, proxy global services.",
+  "default_action": "proxy",
+  "rules": [
+    {
+      "id": "cn-sites",
+      "name": "China sites",
+      "enabled": true,
+      "priority": 10,
+      "match": { "type": "geosite", "values": ["cn"] },
+      "action": "direct"
+    },
+    {
+      "id": "cn-private",
+      "name": "Private networks",
+      "enabled": true,
+      "priority": 20,
+      "match": { "type": "ip_cidr", "values": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"] },
+      "action": "direct"
+    },
+    {
+      "id": "cn-streaming",
+      "name": "Streaming through proxy",
+      "enabled": true,
+      "priority": 30,
+      "match": { "type": "domain_suffix", "values": ["youtube.com", "netflix.com", "twitch.tv", "spotify.com"] },
+      "action": "proxy"
+    }
+  ]
+}

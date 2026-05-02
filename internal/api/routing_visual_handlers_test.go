@@ -136,3 +136,47 @@ func TestVisualRoutingConflictCheck(t *testing.T) {
 		t.Fatalf("conflicts len=%d, want 1: %+v", len(resp.Conflicts), resp.Conflicts)
 	}
 }
+
+func TestVisualRoutingPresets(t *testing.T) {
+	srv, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	w := getJSON(t, srv.router, "/api/routing/visual/presets")
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/routing/visual/presets = %d, body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Presets []routing.Preset `json:"presets"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Presets) != 4 {
+		t.Fatalf("presets len=%d, want 4", len(resp.Presets))
+	}
+}
+
+func TestVisualRoutingImportPreset(t *testing.T) {
+	srv, h, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	w := postJSON(t, srv.router, "/api/routing/visual/presets/developer/import", map[string]any{})
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST preset import = %d, body=%s", w.Code, w.Body.String())
+	}
+	if h.routing.DefaultAction != config.ActionProxy {
+		t.Fatalf("default action = %q, want proxy", h.routing.DefaultAction)
+	}
+	if len(h.routing.Rules) == 0 {
+		t.Fatal("developer preset did not import rules")
+	}
+	foundGit := false
+	for _, rule := range h.routing.Rules {
+		if rule.Value == "github.com" && rule.Action == config.ActionDirect {
+			foundGit = true
+		}
+	}
+	if !foundGit {
+		t.Fatalf("developer preset did not persist github.com direct rule: %+v", h.routing.Rules)
+	}
+}
