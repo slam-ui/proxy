@@ -158,6 +158,16 @@ func buildTransport(params *VLESSParams) *SBTransport {
 			Path:   params.Path,
 			Method: "GET",
 		}
+	case "httpupgrade":
+		path := params.Path
+		if path == "" {
+			path = "/"
+		}
+		t := &SBTransport{Type: "httpupgrade", Path: path}
+		if len(params.Host) > 0 && params.Host[0] != "" {
+			t.Headers = map[string]string{"Host": params.Host[0]}
+		}
+		return t
 	}
 	// Невалидные или ещё не реализованные типы должны были отсеяться парсером.
 	return nil
