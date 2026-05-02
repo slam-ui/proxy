@@ -25,6 +25,7 @@ type AppSettings struct {
 	TrafficBudget        TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              UpdateSettings            `json:"updates"`
 	LeakTest             LeakTestSettings          `json:"leak_test"`
+	Hotkeys              HotkeySettings            `json:"hotkeys"`
 }
 
 func DefaultAppSettings() AppSettings {
@@ -62,6 +63,7 @@ func DefaultAppSettings() AppSettings {
 			ExpectedResolvers:   []string{},
 			DisableIPv6OnTunnel: false,
 		},
+		Hotkeys: DefaultHotkeySettings(),
 	}
 }
 
@@ -115,6 +117,37 @@ type LeakTestSettings struct {
 	DisableIPv6OnTunnel bool     `json:"disable_ipv6_on_tunnel"`
 }
 
+type HotkeySettings struct {
+	Enabled  bool            `json:"enabled"`
+	Bindings []HotkeyBinding `json:"bindings"`
+}
+
+type HotkeyBinding struct {
+	Action      string `json:"action"`
+	Accelerator string `json:"accelerator"`
+	Enabled     bool   `json:"enabled"`
+}
+
+func DefaultHotkeySettings() HotkeySettings {
+	return HotkeySettings{
+		Enabled: true,
+		Bindings: []HotkeyBinding{
+			{Action: "toggle_connection", Accelerator: "Ctrl+Alt+P", Enabled: true},
+			{Action: "next_server", Accelerator: "Ctrl+Alt+S", Enabled: true},
+			{Action: "show_hide_window", Accelerator: "Ctrl+Alt+L", Enabled: true},
+			{Action: "profile_1", Accelerator: "Ctrl+Alt+1", Enabled: true},
+			{Action: "profile_2", Accelerator: "Ctrl+Alt+2", Enabled: true},
+			{Action: "profile_3", Accelerator: "Ctrl+Alt+3", Enabled: true},
+			{Action: "profile_4", Accelerator: "Ctrl+Alt+4", Enabled: true},
+			{Action: "profile_5", Accelerator: "Ctrl+Alt+5", Enabled: true},
+			{Action: "profile_6", Accelerator: "Ctrl+Alt+6", Enabled: true},
+			{Action: "profile_7", Accelerator: "Ctrl+Alt+7", Enabled: true},
+			{Action: "profile_8", Accelerator: "Ctrl+Alt+8", Enabled: true},
+			{Action: "profile_9", Accelerator: "Ctrl+Alt+9", Enabled: true},
+		},
+	}
+}
+
 func LoadAppSettings(path string) (AppSettings, error) {
 	settings := DefaultAppSettings()
 	data, err := os.ReadFile(path)
@@ -139,6 +172,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 		TrafficBudget        *TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *UpdateSettings            `json:"updates"`
 		LeakTest             *LeakTestSettings          `json:"leak_test"`
+		Hotkeys              *HotkeySettings            `json:"hotkeys"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return settings, fmt.Errorf("неверный формат настроек: %w", err)
@@ -181,6 +215,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	}
 	if raw.LeakTest != nil {
 		settings.LeakTest = *raw.LeakTest
+	}
+	if raw.Hotkeys != nil {
+		settings.Hotkeys = *raw.Hotkeys
 	}
 	if settings.KeepaliveIntervalSec <= 0 {
 		settings.KeepaliveIntervalSec = 120
@@ -225,6 +262,9 @@ func normalizeAppSettings(settings *AppSettings) {
 	}
 	if settings.LeakTest.CheckIntervalMin < 5 {
 		settings.LeakTest.CheckIntervalMin = 30
+	}
+	if len(settings.Hotkeys.Bindings) == 0 {
+		settings.Hotkeys = DefaultHotkeySettings()
 	}
 }
 
