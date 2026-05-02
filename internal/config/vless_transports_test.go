@@ -76,6 +76,34 @@ func TestParseVLESSURL_WS(t *testing.T) {
 	}
 }
 
+func TestBuildVLESSOutbound_WS(t *testing.T) {
+	params := &VLESSParams{
+		Address:   "example.com",
+		Port:      443,
+		UUID:      "uuid",
+		SNI:       "sni.example.com",
+		Security:  "tls",
+		Type:      "ws",
+		Path:      "/edge",
+		Host:      []string{"cdn.example.com"},
+		EarlyData: 2048,
+	}
+	out := buildVLESSOutbound(params)
+	if out.Transport == nil {
+		t.Fatal("Transport должен быть задан для ws")
+	}
+	want := &SBTransport{
+		Type:                "ws",
+		Path:                "/edge",
+		Headers:             map[string]string{"Host": "cdn.example.com"},
+		MaxEarlyData:        2048,
+		EarlyDataHeaderName: "Sec-WebSocket-Protocol",
+	}
+	if !reflect.DeepEqual(out.Transport, want) {
+		t.Fatalf("Transport = %#v, want %#v", out.Transport, want)
+	}
+}
+
 func TestParseVLESSURL_GRPC(t *testing.T) {
 	log := &captureVLESSLogger{}
 	restore := setVLESSLoggerForTest(log)
