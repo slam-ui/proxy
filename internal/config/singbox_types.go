@@ -93,6 +93,7 @@ type SBOutbound struct {
 	UUID       string       `json:"uuid,omitempty"`
 	Flow       string       `json:"flow,omitempty"`
 	TLS        *SBTLS       `json:"tls,omitempty"`
+	Transport  *SBTransport `json:"transport,omitempty"`
 	Multiplex  *SBMultiplex `json:"multiplex,omitempty"`
 	// tcp_fast_open — валидный dial-field в sing-box v1.10+.
 	// tcp_no_delay, tcp_keep_alive, connect_timeout удалены: не существуют в схеме
@@ -109,6 +110,18 @@ type SBTLS struct {
 	UTLS       *SBUTLS    `json:"utls,omitempty"`
 	ALPN       []string   `json:"alpn,omitempty"`
 	MinVersion string     `json:"min_version,omitempty"`
+	Insecure   bool       `json:"insecure,omitempty"`
+}
+
+type SBTransport struct {
+	Type                string            `json:"type"`
+	Path                string            `json:"path,omitempty"`
+	Headers             map[string]string `json:"headers,omitempty"`
+	MaxEarlyData        int               `json:"max_early_data,omitempty"`
+	EarlyDataHeaderName string            `json:"early_data_header_name,omitempty"`
+	Host                []string          `json:"host,omitempty"`
+	Method              string            `json:"method,omitempty"`
+	ServiceName         string            `json:"service_name,omitempty"`
 }
 
 // SBTLSFragment configures ClientHello fragmentation for sing-box.
