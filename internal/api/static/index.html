@@ -704,6 +704,11 @@
           <button class="pg-btn" onclick="fixRuleAnalyze()">Исправить</button>
         </div>
         <div class="pg-row">
+          <div><div class="pg-lbl">Диагностика подключения</div><div class="pg-sub" id="diagnoseResult">—</div></div>
+          <button class="pg-btn acc" id="diagnoseBtn" onclick="runDiagnose()">Diagnose</button>
+          <button class="pg-btn" onclick="openLogFolder()">Логи</button>
+        </div>
+        <div class="pg-row">
           <div><div class="pg-lbl">Проверка целостности</div><div class="pg-sub" id="integrityResult">—</div></div>
           <button class="pg-btn" onclick="runIntegrityCheck()">Проверить</button>
         </div>

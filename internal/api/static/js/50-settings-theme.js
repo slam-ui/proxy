@@ -257,6 +257,39 @@ function downloadDiagnosticsPackage() {
   window.location.href = API + '/diagnostics/package';
 }
 
+async function runDiagnose() {
+  const btn = $id('diagnoseBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+  try {
+    const r = await fetch(API + '/diagnose', { method: 'POST', timeoutMs: 45000 });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    const failed = (d.steps || []).filter(s => !s.ok);
+    if ($id('diagnoseResult')) {
+      $id('diagnoseResult').textContent = failed.length
+        ? `${failed[0].message || failed[0].code}: ${failed[0].hint || ''}`
+        : `OK · ${d.duration_ms || 0} мс`;
+    }
+    showToast(failed.length ? 'Диагностика нашла проблему' : 'Диагностика без ошибок', failed.length ? 'warn' : 'on');
+  } catch(e) {
+    if ($id('diagnoseResult')) $id('diagnoseResult').textContent = 'ошибка';
+    showToast('Диагностика: ' + e.message, 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Diagnose'; }
+  }
+}
+
+async function openLogFolder() {
+  try {
+    const r = await fetch(API + '/diagnostics/log-folder', { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    showToast(d.opened ? 'Папка логов открыта' : 'Папка логов: ' + (d.path || 'logs'), 'info');
+  } catch(e) {
+    showToast('Логи: ' + e.message, 'off');
+  }
+}
+
 function applyRoutingControls() {
   $id('blockQuicToggle')?.classList.toggle('on', _routingConfig.block_quic !== false);
   $id('blockTelemetryToggle')?.classList.toggle('on', !!_routingConfig.block_telemetry);

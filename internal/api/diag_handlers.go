@@ -9,14 +9,20 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"proxyclient/internal/config"
+	"proxyclient/internal/errcodes"
+	"proxyclient/internal/leaktest"
 	"proxyclient/internal/netutil"
+	"proxyclient/internal/singbox"
 	"proxyclient/internal/trafficstats"
 )
 
@@ -58,6 +64,8 @@ func SetupDiagRoutes(s *Server, ctx context.Context) {
 	s.router.HandleFunc("/api/traffic/by-process", h.handleTrafficByProcess).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/test", handleDiagTest).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/diagnostics/ports", handlePortStatus).Methods("GET", "OPTIONS") // БАГ #2B
+	s.router.HandleFunc("/api/diagnose", s.handleDiagnose).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/diagnostics/log-folder", s.handleOpenLogFolder).Methods("POST", "OPTIONS")
 }
 
 // ── Total traffic: streaming /traffic ────────────────────────────────────────
@@ -599,4 +607,122 @@ func handlePortStatus(w http.ResponseWriter, r *http.Request) {
 		"max_port":          stats.MaxPort,
 		"warning":           warning,
 	})
+}
+
+type diagnoseStep struct {
+	Name     string          `json:"name"`
+	OK       bool            `json:"ok"`
+	Code     errcodes.Code   `json:"code,omitempty"`
+	Message  string          `json:"message,omitempty"`
+	Hint     string          `json:"hint,omitempty"`
+	Duration int64           `json:"duration_ms"`
+	Details  json.RawMessage `json:"details,omitempty"`
+}
+
+func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	var steps []diagnoseStep
+
+	mgr := s.GetXRayManager()
+	if mgr == nil {
+		e := errcodes.New(errcodes.SingboxStartFailed, "startup", "sing-box manager is not initialized", "Подождите завершения инициализации или перезапустите клиент.", nil)
+		steps = append(steps, stepFromError("sing-box", e, 0))
+	} else {
+		logErr := singbox.ParseLogTail(mgr.LastOutput())
+		if logErr != nil {
+			steps = append(steps, stepFromError("sing-box log", logErr, 0))
+		} else {
+			steps = append(steps, diagnoseStep{Name: "sing-box log", OK: true})
+		}
+	}
+
+	portStarted := time.Now()
+	if stats, err := netutil.GetPortStats(); err == nil {
+		raw, _ := json.Marshal(stats)
+		steps = append(steps, diagnoseStep{Name: "ports", OK: !stats.IsCritical, Duration: time.Since(portStarted).Milliseconds(), Details: raw})
+	} else {
+		steps = append(steps, stepFromError("ports", errcodes.New(errcodes.InternalError, "diagnostics", err.Error(), "Не удалось прочитать состояние ephemeral ports.", err), time.Since(portStarted).Milliseconds()))
+	}
+
+	leakStarted := time.Now()
+	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	dns, dnsErr := leaktest.RunDNSLeakTest(ctx, leaktest.DNSConfig{
+		Domain:            settings.LeakTest.Domain,
+		ReportURL:         settings.LeakTest.ReportURL,
+		ExpectedResolvers: settings.LeakTest.ExpectedResolvers,
+	})
+	if dnsErr != nil {
+		steps = append(steps, stepFromError("dns leak", errcodes.New(errcodes.DNSResolveFailed, "dns", dnsErr.Error(), "Проверьте доступность leak-test сервера или отключите DNS leak test.", dnsErr), time.Since(leakStarted).Milliseconds()))
+	} else {
+		raw, _ := json.Marshal(dns)
+		steps = append(steps, diagnoseStep{Name: "dns leak", OK: !dns.Leaked, Duration: time.Since(leakStarted).Milliseconds(), Details: raw})
+	}
+
+	ipv6Started := time.Now()
+	ipv6, ipv6Err := leaktest.RunIPv6LeakTest(ctx, nil)
+	if ipv6Err != nil {
+		steps = append(steps, stepFromError("ipv6", errcodes.New(errcodes.InternalError, "ipv6", ipv6Err.Error(), "IPv6 check вернул неожиданный ответ.", ipv6Err), time.Since(ipv6Started).Milliseconds()))
+	} else {
+		raw, _ := json.Marshal(ipv6)
+		steps = append(steps, diagnoseStep{Name: "ipv6", OK: !ipv6.Leaked, Duration: time.Since(ipv6Started).Milliseconds(), Details: raw})
+	}
+
+	ok := true
+	for _, step := range steps {
+		if !step.OK {
+			ok = false
+			break
+		}
+	}
+	report := map[string]interface{}{
+		"ok":           ok,
+		"generated_at": time.Now().UTC(),
+		"duration_ms":  time.Since(started).Milliseconds(),
+		"steps":        steps,
+	}
+	saveDiagnosticReport(report)
+	s.respondJSON(w, http.StatusOK, report)
+}
+
+func stepFromError(name string, e *errcodes.Error, dur int64) diagnoseStep {
+	msg := errcodes.MessageRU(e.Code)
+	hint := e.Hint
+	if hint == "" {
+		hint = msg.Body
+	}
+	return diagnoseStep{Name: name, OK: false, Code: e.Code, Message: msg.Title, Hint: hint, Duration: dur}
+}
+
+func saveDiagnosticReport(report map[string]interface{}) {
+	dir := filepath.Join(config.DataDir, "diagnostics")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	name := "diagnostic_" + time.Now().UTC().Format("20060102_150405") + ".json"
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, name), data, 0644)
+}
+
+func (s *Server) handleOpenLogFolder(w http.ResponseWriter, _ *http.Request) {
+	exe, err := os.Executable()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	dir := filepath.Join(filepath.Dir(exe), "logs")
+	if runtime.GOOS == "windows" {
+		_ = os.MkdirAll(dir, 0755)
+		if err := exec.Command("cmd", "/c", "start", "", dir).Start(); err != nil {
+			s.respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.respondJSON(w, http.StatusOK, map[string]bool{"opened": true})
+		return
+	}
+	s.respondJSON(w, http.StatusOK, map[string]interface{}{"opened": false, "path": dir})
 }
