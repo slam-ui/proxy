@@ -151,6 +151,13 @@ func buildTransport(params *VLESSParams) *SBTransport {
 			Type:        "grpc",
 			ServiceName: params.ServiceName,
 		}
+	case "http":
+		return &SBTransport{
+			Type:   "http",
+			Host:   params.Host,
+			Path:   params.Path,
+			Method: "GET",
+		}
 	}
 	// Невалидные или ещё не реализованные типы должны были отсеяться парсером.
 	return nil
