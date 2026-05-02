@@ -312,14 +312,19 @@ func (s *Server) FinalizeRoutes() {
 	s.router.PathPrefix("/").Handler(staticHandler())
 }
 
-func (s *Server) Start(ctx context.Context) error {
-	s.httpServer = &http.Server{
+func (s *Server) newHTTPServer() *http.Server {
+	return &http.Server{
 		Addr:              s.config.ListenAddress,
 		Handler:           s.router,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+}
+
+func (s *Server) Start(ctx context.Context) error {
+	s.httpServer = s.newHTTPServer()
 
 	errChan := make(chan error, 1)
 	var wg sync.WaitGroup
