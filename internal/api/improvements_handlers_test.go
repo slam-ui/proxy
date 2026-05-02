@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -60,5 +62,44 @@ func TestBudgetExceededDoesNotOverflowLimit(t *testing.T) {
 	}
 	if !budgetExceeded(maxInt64, maxInt64) {
 		t.Fatal("max usage should exceed the clamped max limit")
+	}
+}
+
+func TestHandleImportRulesRejectsUnknownFields(t *testing.T) {
+	s, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tun/rules/import",
+		strings.NewReader(`{"format":"text","content":"example.com","unexpected":true}`))
+	w := httptest.NewRecorder()
+	s.handleImportRules(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImportRulesRejectsOversizedBody(t *testing.T) {
+	s, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	body := `{"format":"text","content":"` + strings.Repeat("a", int(maxImportRulesRequestBytes)) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/tun/rules/import", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.handleImportRules(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleImportRulesRejectsTrailingData(t *testing.T) {
+	s, _, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/tun/rules/import",
+		strings.NewReader(`{"format":"text","content":"example.com"}{}`))
+	w := httptest.NewRecorder()
+	s.handleImportRules(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
 }
