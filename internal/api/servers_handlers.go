@@ -783,7 +783,10 @@ func pingServerWithProbes(ctx context.Context, vlessURL string, probes int) (int
 		return 0, 0, 0, false
 	}
 
-	const pauseBetweenProbes = 200 * time.Millisecond
+	const (
+		pauseBetweenProbes = 200 * time.Millisecond
+		pingProbeTimeout   = 2 * time.Second
+	)
 
 	var measurements []int64
 	successCount := 0
@@ -807,8 +810,10 @@ probeLoop:
 
 		// БАГ 12: используем DialContext вместо DialTimeout — прерывается по ctx.
 		start := time.Now()
+		probeCtx, cancel := context.WithTimeout(ctx, pingProbeTimeout)
 		var d net.Dialer
-		conn, err := d.DialContext(ctx, "tcp", addr)
+		conn, err := d.DialContext(probeCtx, "tcp", addr)
+		cancel()
 		if err != nil {
 			continue
 		}
