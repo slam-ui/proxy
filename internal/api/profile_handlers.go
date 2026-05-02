@@ -103,6 +103,99 @@ func SetupProfileRoutes(s *Server) {
 	s.router.HandleFunc("/api/profiles/{name}", h.handleDelete).Methods("DELETE", "OPTIONS")
 }
 
+func ensureDefaultProfiles() error {
+	entries, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			return nil
+		}
+	}
+	now := time.Now()
+	presets := []Profile{
+		{
+			ID:             "default",
+			Name:           "Default",
+			Description:    "Default routing and automatic server selection",
+			Icon:           "shield",
+			Color:          "#38c8ff",
+			ServerSelector: ServerSelector{Mode: "auto"},
+			Routing:        *config.DefaultRoutingConfig(),
+			RoutingRules:   []config.RoutingRule{},
+			KillSwitch:     KillSwitchConnected,
+			AutoConnect:    true,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		{
+			ID:             "browser-only",
+			Name:           "Только браузер",
+			Description:    "Proxy browser processes and send everything else direct",
+			Icon:           "globe",
+			Color:          "#2de89a",
+			ServerSelector: ServerSelector{Mode: "auto"},
+			Routing: config.RoutingConfig{DefaultAction: config.ActionDirect, Rules: []config.RoutingRule{
+				{Value: "chrome.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+				{Value: "firefox.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+				{Value: "msedge.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+			}, BlockQUIC: true},
+			KillSwitch:  KillSwitchConnected,
+			AutoConnect: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:             "streaming",
+			Name:           "Стриминг",
+			Description:    "Proxy media apps and common streaming domains",
+			Icon:           "play",
+			Color:          "#ffbe50",
+			ServerSelector: ServerSelector{Mode: "auto"},
+			Routing: config.RoutingConfig{DefaultAction: config.ActionDirect, Rules: []config.RoutingRule{
+				{Value: "youtube.com", Type: config.RuleTypeDomain, Action: config.ActionProxy},
+				{Value: "netflix.com", Type: config.RuleTypeDomain, Action: config.ActionProxy},
+				{Value: "chrome.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+				{Value: "firefox.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+				{Value: "msedge.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
+			}, BlockQUIC: true},
+			KillSwitch:  KillSwitchConnected,
+			AutoConnect: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:             "work",
+			Name:           "Работа",
+			Description:    "Corporate apps direct, everything else proxy",
+			Icon:           "briefcase",
+			Color:          "#7c8cff",
+			ServerSelector: ServerSelector{Mode: "auto"},
+			Routing: config.RoutingConfig{DefaultAction: config.ActionProxy, Rules: []config.RoutingRule{
+				{Value: "teams.exe", Type: config.RuleTypeProcess, Action: config.ActionDirect},
+				{Value: "outlook.exe", Type: config.RuleTypeProcess, Action: config.ActionDirect},
+				{Value: "zoom.exe", Type: config.RuleTypeProcess, Action: config.ActionDirect},
+			}, BlockQUIC: true},
+			KillSwitch:  KillSwitchConnected,
+			AutoConnect: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+	for _, preset := range presets {
+		preset.RoutingRules = preset.Routing.Rules
+		data, err := json.MarshalIndent(preset, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := fileutil.WriteAtomic(filepath.Join(profilesDir, sanitizeFilename(preset.Name)+".json"), data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *ProfileHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxProfileSaveRequestBytes)
 	dec := json.NewDecoder(r.Body)

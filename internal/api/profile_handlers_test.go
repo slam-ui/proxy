@@ -183,3 +183,35 @@ func TestProfilesImportExportRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected exported profile: %+v", exported)
 	}
 }
+
+func TestEnsureDefaultProfilesCreatesPresetsOnlyWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+	if err := os.MkdirAll(profilesDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := ensureDefaultProfiles(); err != nil {
+		t.Fatalf("ensureDefaultProfiles: %v", err)
+	}
+	entries, err := os.ReadDir(profilesDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("preset count=%d, want 4", len(entries))
+	}
+	if err := ensureDefaultProfiles(); err != nil {
+		t.Fatalf("second ensureDefaultProfiles: %v", err)
+	}
+	entries2, err := os.ReadDir(profilesDir)
+	if err != nil {
+		t.Fatalf("ReadDir2: %v", err)
+	}
+	if len(entries2) != 4 {
+		t.Fatalf("second preset count=%d, want 4", len(entries2))
+	}
+}

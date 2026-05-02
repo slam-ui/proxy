@@ -296,6 +296,9 @@ func (s *Server) setupRoutes() {
 
 func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupProfileRoutes(s)
+	if err := ensureDefaultProfiles(); err != nil {
+		s.logger.Warn("profiles presets: %v", err)
+	}
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
