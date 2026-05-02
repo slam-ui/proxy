@@ -1,8 +1,8 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 13 (Critical: 0, High: 3, Medium: 9, Low: 1)
-- Skipped (in BUG_REVIEW_NEEDED.md): 6
+- Fixed: 19 (Critical: 0, High: 3, Medium: 15, Low: 1)
+- Skipped (in BUG_REVIEW_NEEDED.md): 4
 - Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 289 findings; golangci-lint and govulncheck had baseline failures not introduced here.
 
 ## Fixes
@@ -149,6 +149,74 @@
 - **Fix:** Added narrow `#nosec G103` justifications for DPAPI-owned native buffer cleanup and explicitly discarded `LocalFree`'s returned handle.
 - **Test:** `TestRoundTrip`
 - **Verified:** go build ok, go test -race ok, GOOS=windows/linux build ok
+
+## Decoder follow-up (R-001, R-002)
+
+### [F-014] Strict app proxy request bodies
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/app_proxy_handlers.go, internal/api/app_proxy_handlers_test.go
+- **Commit:** cd5c29c
+- **Symptom:** App proxy POST/PUT handlers accepted oversized, unknown-field, or multi-value JSON bodies.
+- **Root cause:** Handlers decoded `r.Body` directly without per-handler request caps or strict decoder settings.
+- **Fix:** Added 64 KiB body caps, `DisallowUnknownFields`, and trailing-value rejection.
+- **Test:** `TestHandleCreateRuleRejectsUnknownFields`, `TestHandleCreateRuleRejectsOversizedBody`, `TestHandleUpdateRuleRejectsUnknownFields`, `TestHandleUpdateRuleRejectsOversizedBody`, `TestHandleLaunchRejectsUnknownFields`, `TestHandleLaunchRejectsOversizedBody`, `TestHandleMatchRuleRejectsUnknownFields`, `TestHandleMatchRuleRejectsOversizedBody`
+- **Verified:** targeted strict decoder tests ok
+
+### [F-015] Strict client feature request bodies
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/client_features_handlers.go, internal/api/client_features_handlers_test.go
+- **Commit:** ba85126
+- **Symptom:** Client feature POST handlers accepted oversized, unknown-field, or multi-value JSON bodies.
+- **Root cause:** Handlers decoded `r.Body` directly without per-handler request caps or strict decoder settings.
+- **Fix:** Added 4 KiB body caps, `DisallowUnknownFields`, and trailing-value rejection.
+- **Test:** `TestHandleConnectionRuleRejectsUnknownFields`, `TestHandleConnectionRuleRejectsOversizedBody`, `TestHandleDNSGuardSetRejectsUnknownFields`, `TestHandleDNSGuardSetRejectsOversizedBody`, `TestHandleTrafficBudgetSetRejectsUnknownFields`, `TestHandleTrafficBudgetSetRejectsOversizedBody`
+- **Verified:** targeted strict decoder tests ok
+
+### [F-016] Strict settings request bodies
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/settings_handlers.go, internal/api/settings_handlers_strict_test.go
+- **Commit:** b069634
+- **Symptom:** Settings POST handlers accepted oversized, unknown-field, or multi-value JSON bodies.
+- **Root cause:** Handlers decoded `r.Body` directly without per-handler request caps or strict decoder settings.
+- **Fix:** Added 64 KiB caps for full settings/DNS payloads, 4 KiB caps for toggles, `DisallowUnknownFields`, and trailing-value rejection through a shared settings decoder.
+- **Test:** `TestHandleSetSettingsRejectsUnknownFields`, `TestHandleSetSettingsRejectsOversizedBody`, `TestHandleSetProxyGuardRejectsUnknownFields`, `TestHandleSetProxyGuardRejectsOversizedBody`, `TestHandleSetAutorunRejectsUnknownFields`, `TestHandleSetAutorunRejectsOversizedBody`, `TestHandleSetStartupProxyRejectsUnknownFields`, `TestHandleSetStartupProxyRejectsOversizedBody`, `TestHandleSetKillSwitchRejectsUnknownFields`, `TestHandleSetKillSwitchRejectsOversizedBody`, `TestHandleSetDNSRejectsUnknownFields`, `TestHandleSetDNSRejectsOversizedBody`, `TestHandleSetGeositeUpdateRejectsUnknownFields`, `TestHandleSetGeositeUpdateRejectsOversizedBody`, `TestSettingsHandlersRejectTrailingData`
+- **Verified:** targeted strict decoder tests ok
+
+### [F-017] Strict TUN request bodies
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/tun_handlers.go, internal/api/tun_handlers_strict_test.go
+- **Commit:** 1d10c0a
+- **Symptom:** TUN rule mutation/import endpoints accepted loose JSON bodies.
+- **Root cause:** Rule add, bulk replace, default-action update, and routing import decoded request JSON without strict schema checks.
+- **Fix:** Added 4 KiB caps for small mutations, 1 MiB caps for list/import payloads, `DisallowUnknownFields`, and trailing-value rejection. Routing import now applies strict decoding to both direct JSON and multipart-uploaded JSON.
+- **Test:** `TestHandleAddRuleRejectsUnknownFields`, `TestHandleAddRuleRejectsOversizedBody`, `TestHandleBulkReplaceRulesRejectsUnknownFields`, `TestHandleBulkReplaceRulesRejectsOversizedBody`, `TestHandleSetDefaultRejectsUnknownFields`, `TestHandleSetDefaultRejectsOversizedBody`, `TestHandleImportRejectsUnknownFields`, `TestHandleImportRejectsOversizedBody`, `TestTunHandlersRejectTrailingData`
+- **Verified:** targeted strict decoder tests ok
+
+### [F-018] Strict imported-rules request body
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/improvements_handlers.go, internal/api/improvements_handlers_test.go
+- **Commit:** 01b8908
+- **Symptom:** `/api/tun/rules/import` accepted oversized, unknown-field, or multi-value JSON bodies.
+- **Root cause:** Handler decoded `r.Body` directly without a request cap or strict decoder settings.
+- **Fix:** Added a 1 MiB body cap, `DisallowUnknownFields`, and trailing-value rejection.
+- **Test:** `TestHandleImportRulesRejectsUnknownFields`, `TestHandleImportRulesRejectsOversizedBody`, `TestHandleImportRulesRejectsTrailingData`
+- **Verified:** targeted strict decoder tests ok
+
+### [F-019] HTTP server ReadTimeout
+- **Severity:** Medium
+- **Category:** D
+- **File(s):** internal/api/server.go, internal/api/server_timeout_test.go
+- **Commit:** 587dc9c
+- **Symptom:** API server had `ReadHeaderTimeout`, `WriteTimeout`, and `IdleTimeout`, but no full request `ReadTimeout`.
+- **Root cause:** `http.Server` construction did not bound time spent reading request bodies.
+- **Fix:** Added a 30 second `ReadTimeout`, keeping it greater than the 5 second `ReadHeaderTimeout`. No streaming/upload route needed a disabled read deadline; API uploads are bounded JSON or multipart bodies.
+- **Test:** `TestServerHasReadTimeout`
+- **Verified:** targeted timeout test ok
 
 ## Test-only commits
 
