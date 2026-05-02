@@ -487,7 +487,7 @@ func run(output io.Writer) error {
 	}()
 
 	tray.SetProxyAddr(proxyConfig.Address)
-	// Регистрируем callback для переноса окна на передний план (правый клик по трею).
+	// Регистрируем callback для переноса окна на передний план (двойной клик по трею).
 	tray.SetBringToFront(func() { window.BringToFront(cfg.WebUIURL) })
 
 	// BUG FIX #NEW-3: OnQuit callback трея не был защищён sync.Once.

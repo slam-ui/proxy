@@ -5,8 +5,9 @@
 // Owner-drawn меню с тёмной темой:
 //   - Полный контроль над рендерингом (MF_OWNERDRAW + WM_DRAWITEM)
 //   - Кастомные цвета, шрифт Segoe UI, акценты
-//   - Левый клик по иконке → показ меню
-//   - Правый клик по иконке → вызов OnOpen (переводит окно на передний план)
+//   - Левый клик по иконке → toggle connect/disconnect
+//   - Двойной клик по иконке → вызов OnOpen (переводит окно на передний план)
+//   - Правый клик по иконке → показ меню
 package tray
 
 import (
@@ -89,6 +90,7 @@ const (
 	wmShowMenu   = wmUser + 2
 	wmBringFront = wmUser + 3
 	wmQuitLoop   = wmUser + 4
+	wmToggle     = wmUser + 5
 
 	nimAdd        = 0
 	nimModify     = 1
@@ -499,18 +501,24 @@ func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) (ret uintptr) {
 	case wmTrayIcon:
 		mouseMsg := lParam & 0xFFFF
 		switch mouseMsg {
-		case wmLButtonUp, wmLButtonDblCk, ninSelect:
+		case wmLButtonUp, ninSelect:
 			// NIN_SELECT: NOTIFYICON_VERSION_4 отправляет его вместо WM_LBUTTONUP
-			// при одинарном клике. Без этого меню не открывается на Windows 10/11.
-			ignoreWin32Call(pPostMessageW, hwnd, wmShowMenu, 0, 0)
+			// при одинарном клике.
+			ignoreWin32Call(pPostMessageW, hwnd, wmToggle, 0, 0)
+		case wmLButtonDblCk:
+			ignoreWin32Call(pPostMessageW, hwnd, wmBringFront, 0, 0)
 		case wmRButtonUp, wmContextMenu:
 			// WM_CONTEXTMENU: NOTIFYICON_VERSION_4 отправляет его вместо WM_RBUTTONUP.
-			ignoreWin32Call(pPostMessageW, hwnd, wmBringFront, 0, 0)
+			ignoreWin32Call(pPostMessageW, hwnd, wmShowMenu, 0, 0)
 		}
 		return 0
 
 	case wmShowMenu:
 		showTrayMenu(hwnd)
+		return 0
+
+	case wmToggle:
+		go handleTrayToggle()
 		return 0
 
 	case wmBringFront:
