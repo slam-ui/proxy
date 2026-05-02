@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"proxyclient/internal/apprules"
 	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
 
@@ -24,21 +26,54 @@ const maxProfileSaveRequestBytes = 1 << 20
 
 var reValidName = regexp.MustCompile(`^[\p{L}\p{N} _-]{1,64}$`) // letters, digits, space, _, -
 
+type ServerSelector struct {
+	Mode     string `json:"mode"` // specific|auto|subscription_auto
+	ServerID string `json:"server_id,omitempty"`
+	SubID    string `json:"sub_id,omitempty"`
+}
+
+type KillSwitchMode string
+
+const (
+	KillSwitchOff       KillSwitchMode = "off"
+	KillSwitchConnected KillSwitchMode = "connected"
+	KillSwitchAlways    KillSwitchMode = "always"
+)
+
 // Profile сохранённый набор правил маршрутизации с именем
 type Profile struct {
-	Name      string               `json:"name"`
-	CreatedAt time.Time            `json:"created_at"`
-	UpdatedAt time.Time            `json:"updated_at"`
-	Routing   config.RoutingConfig `json:"routing"`
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	Description    string               `json:"description,omitempty"`
+	Icon           string               `json:"icon,omitempty"`
+	Color          string               `json:"color,omitempty"`
+	ServerSelector ServerSelector       `json:"server_selector"`
+	AppRules       []apprules.Rule      `json:"app_rules,omitempty"`
+	RoutingRules   []config.RoutingRule `json:"routing_rules,omitempty"`
+	Routing        config.RoutingConfig `json:"routing"`
+	DNSConfig      *config.DNSConfig    `json:"dns_config,omitempty"`
+	KillSwitch     KillSwitchMode       `json:"kill_switch,omitempty"`
+	SplitTunnel    []string             `json:"split_tunnel,omitempty"`
+	AutoConnect    bool                 `json:"auto_connect"`
+	Hotkey         string               `json:"hotkey,omitempty"`
+	CreatedAt      time.Time            `json:"created_at"`
+	UpdatedAt      time.Time            `json:"updated_at"`
 }
 
 // profileMeta — лёгкие метаданные профиля для кэша (не хранит полный Routing).
 type profileMeta struct {
-	Name      string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	RuleCount int
-	mtime     time.Time // mtime файла на момент последнего чтения
+	ID             string
+	Name           string
+	Description    string
+	Icon           string
+	Color          string
+	ServerSelector ServerSelector
+	AutoConnect    bool
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	RuleCount      int
+	AppRuleCount   int
+	mtime          time.Time // mtime файла на момент последнего чтения
 }
 
 // ProfileHandlers обработчики для профилей правил
@@ -106,10 +141,17 @@ func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
 		// OPT #6: проверяем кэш — если mtime не изменился, используем кэшированные метаданные.
 		if cached, ok := h.metaCache[e.Name()]; ok && cached.mtime.Equal(mtime) {
 			profiles = append(profiles, map[string]interface{}{
-				"name":       cached.Name,
-				"created_at": cached.CreatedAt,
-				"updated_at": cached.UpdatedAt,
-				"rule_count": cached.RuleCount,
+				"id":              cached.ID,
+				"name":            cached.Name,
+				"description":     cached.Description,
+				"icon":            cached.Icon,
+				"color":           cached.Color,
+				"server_selector": cached.ServerSelector,
+				"auto_connect":    cached.AutoConnect,
+				"created_at":      cached.CreatedAt,
+				"updated_at":      cached.UpdatedAt,
+				"rule_count":      cached.RuleCount,
+				"app_rule_count":  cached.AppRuleCount,
 			})
 			continue
 		}
@@ -120,18 +162,32 @@ func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
 			continue
 		}
 		meta := profileMeta{
-			Name:      p.Name,
-			CreatedAt: p.CreatedAt,
-			UpdatedAt: p.UpdatedAt,
-			RuleCount: len(p.Routing.Rules),
-			mtime:     mtime,
+			ID:             p.ID,
+			Name:           p.Name,
+			Description:    p.Description,
+			Icon:           p.Icon,
+			Color:          p.Color,
+			ServerSelector: p.ServerSelector,
+			AutoConnect:    p.AutoConnect,
+			CreatedAt:      p.CreatedAt,
+			UpdatedAt:      p.UpdatedAt,
+			RuleCount:      len(profileRoutingRules(p)),
+			AppRuleCount:   len(p.AppRules),
+			mtime:          mtime,
 		}
 		h.metaCache[e.Name()] = meta
 		profiles = append(profiles, map[string]interface{}{
-			"name":       meta.Name,
-			"created_at": meta.CreatedAt,
-			"updated_at": meta.UpdatedAt,
-			"rule_count": meta.RuleCount,
+			"id":              meta.ID,
+			"name":            meta.Name,
+			"description":     meta.Description,
+			"icon":            meta.Icon,
+			"color":           meta.Color,
+			"server_selector": meta.ServerSelector,
+			"auto_connect":    meta.AutoConnect,
+			"created_at":      meta.CreatedAt,
+			"updated_at":      meta.UpdatedAt,
+			"rule_count":      meta.RuleCount,
+			"app_rule_count":  meta.AppRuleCount,
 		})
 	}
 	if profiles == nil {
@@ -144,8 +200,20 @@ func (h *ProfileHandlers) handleList(w http.ResponseWriter, _ *http.Request) {
 // Body: {"name": "Работа", "routing": {...}}
 func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name    string               `json:"name"`
-		Routing config.RoutingConfig `json:"routing"`
+		ID             string               `json:"id"`
+		Name           string               `json:"name"`
+		Description    string               `json:"description"`
+		Icon           string               `json:"icon"`
+		Color          string               `json:"color"`
+		ServerSelector ServerSelector       `json:"server_selector"`
+		AppRules       []apprules.Rule      `json:"app_rules"`
+		RoutingRules   []config.RoutingRule `json:"routing_rules"`
+		Routing        config.RoutingConfig `json:"routing"`
+		DNSConfig      *config.DNSConfig    `json:"dns_config"`
+		KillSwitch     KillSwitchMode       `json:"kill_switch"`
+		SplitTunnel    []string             `json:"split_tunnel"`
+		AutoConnect    bool                 `json:"auto_connect"`
+		Hotkey         string               `json:"hotkey"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxProfileSaveRequestBytes)
 	dec := json.NewDecoder(r.Body)
@@ -174,6 +242,12 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 	if req.Routing.DefaultAction == "" {
 		req.Routing.DefaultAction = config.ActionProxy
 	}
+	if len(req.RoutingRules) > 0 {
+		req.Routing.Rules = req.RoutingRules
+	}
+	if req.DNSConfig != nil {
+		req.Routing.DNS = req.DNSConfig
+	}
 	if !isValidAction(req.Routing.DefaultAction) {
 		h.server.respondError(w, http.StatusBadRequest, "default_action: proxy | direct | block")
 		return
@@ -183,6 +257,17 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	config.SanitizeRoutingConfig(&req.Routing)
+	if err := validateServerSelector(req.ServerSelector); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if req.KillSwitch == "" {
+		req.KillSwitch = KillSwitchConnected
+	}
+	if !validKillSwitchMode(req.KillSwitch) {
+		h.server.respondError(w, http.StatusBadRequest, "kill_switch: off | connected | always")
+		return
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -192,10 +277,22 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	p := Profile{
-		Name:      req.Name,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Routing:   req.Routing,
+		ID:             firstNonEmptyAPI(req.ID, sanitizeFilename(req.Name)),
+		Name:           req.Name,
+		Description:    strings.TrimSpace(req.Description),
+		Icon:           strings.TrimSpace(req.Icon),
+		Color:          strings.TrimSpace(req.Color),
+		ServerSelector: req.ServerSelector,
+		AppRules:       req.AppRules,
+		RoutingRules:   req.Routing.Rules,
+		Routing:        req.Routing,
+		DNSConfig:      req.Routing.DNS,
+		KillSwitch:     req.KillSwitch,
+		SplitTunnel:    req.SplitTunnel,
+		AutoConnect:    req.AutoConnect,
+		Hotkey:         strings.TrimSpace(req.Hotkey),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 	if existing != nil {
 		p.CreatedAt = existing.CreatedAt
@@ -274,11 +371,105 @@ func (h *ProfileHandlers) handleApply(w http.ResponseWriter, r *http.Request) {
 	if applyErr != "" {
 		h.server.logger.Warn("handleApplyProfile: TriggerApply: %v", applyErr)
 	}
+	appRulesApplied := false
+	if len(p.AppRules) > 0 {
+		storage := apprules.NewFileStorage(filepath.Join(config.DataDir, "app_rules.json"))
+		if err := storage.Save(p.AppRules); err != nil {
+			h.server.respondError(w, http.StatusInternalServerError, "app rules: "+err.Error())
+			return
+		}
+		appRulesApplied = true
+	}
+	connectedID, connectErr := h.applyProfileServerSelector(r.Context(), p)
+	if connectErr != nil {
+		h.server.respondError(w, http.StatusConflict, connectErr.Error())
+		return
+	}
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
-		"message":     fmt.Sprintf("профиль %q применён", p.Name),
-		"count":       count,
-		"apply_error": applyErr,
+		"message":           fmt.Sprintf("профиль %q применён", p.Name),
+		"count":             count,
+		"apply_error":       applyErr,
+		"app_rules_applied": appRulesApplied,
+		"connected_id":      connectedID,
 	})
+}
+
+func (h *ProfileHandlers) applyProfileServerSelector(ctx context.Context, p *Profile) (string, error) {
+	if !p.AutoConnect || h.server.serversHandlers == nil {
+		return "", nil
+	}
+	switch p.ServerSelector.Mode {
+	case "", "auto":
+		resp, _, err := h.server.serversHandlers.doAutoConnect(ctx)
+		if err != nil {
+			return "", err
+		}
+		id, _ := resp["connected_id"].(string)
+		return id, nil
+	case "specific":
+		return h.activateProfileServerByID(p.ServerSelector.ServerID)
+	case "subscription_auto":
+		return h.activateProfileSubscriptionServer(p.ServerSelector.SubID)
+	default:
+		return "", fmt.Errorf("unsupported server selector")
+	}
+}
+
+func (h *ProfileHandlers) activateProfileSubscriptionServer(subID string) (string, error) {
+	if subID == "" {
+		return h.applyProfileServerSelector(context.Background(), &Profile{AutoConnect: true, ServerSelector: ServerSelector{Mode: "auto"}})
+	}
+	h.server.serversHandlers.mu.RLock()
+	list, err := loadServers()
+	h.server.serversHandlers.mu.RUnlock()
+	if err != nil {
+		return "", err
+	}
+	for _, server := range visibleServers(list) {
+		if server.SubscriptionID == subID {
+			return h.activateProfileServer(server)
+		}
+	}
+	return "", fmt.Errorf("subscription server not found")
+}
+
+func (h *ProfileHandlers) activateProfileServerByID(id string) (string, error) {
+	if id == "" {
+		return "", fmt.Errorf("profile server not selected")
+	}
+	h.server.serversHandlers.mu.RLock()
+	list, err := loadServers()
+	h.server.serversHandlers.mu.RUnlock()
+	if err != nil {
+		return "", err
+	}
+	for _, server := range visibleServers(list) {
+		if server.ID == id {
+			return h.activateProfileServer(server)
+		}
+	}
+	resp, _, err := h.server.serversHandlers.doAutoConnect(context.Background())
+	if err != nil {
+		return "", fmt.Errorf("profile server not found and auto fallback failed: %w", err)
+	}
+	id, _ = resp["connected_id"].(string)
+	return id, nil
+}
+
+func (h *ProfileHandlers) activateProfileServer(server ServerEntry) (string, error) {
+	if err := config.WriteSecretKey(h.server.serversHandlers.secretKey, server.URL); err != nil {
+		return "", err
+	}
+	config.InvalidateVLESSCache()
+	if h.server.config.SecretKeyUpdatedFn != nil {
+		h.server.config.SecretKeyUpdatedFn()
+	}
+	if h.server.tunHandlers != nil {
+		if err := h.server.tunHandlers.TriggerApplyFull(); err != nil {
+			h.server.logger.Warn("profile activate server: TriggerApplyFull: %v", err)
+		}
+	}
+	return server.ID, nil
 }
 
 // handleDelete DELETE /api/profiles/{name} — удаляет профиль
@@ -316,7 +507,58 @@ func loadProfile(filename string) (*Profile, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, err
 	}
+	normalizeProfile(&p)
 	return &p, nil
+}
+
+func normalizeProfile(p *Profile) {
+	if p.ID == "" {
+		p.ID = sanitizeFilename(p.Name)
+	}
+	if len(p.RoutingRules) == 0 && len(p.Routing.Rules) > 0 {
+		p.RoutingRules = p.Routing.Rules
+	}
+	if p.Routing.DefaultAction == "" {
+		p.Routing.DefaultAction = config.ActionProxy
+	}
+	if p.Routing.DNS != nil && p.DNSConfig == nil {
+		p.DNSConfig = p.Routing.DNS
+	}
+	if p.KillSwitch == "" {
+		p.KillSwitch = KillSwitchConnected
+	}
+}
+
+func profileRoutingRules(p *Profile) []config.RoutingRule {
+	if len(p.RoutingRules) > 0 {
+		return p.RoutingRules
+	}
+	return p.Routing.Rules
+}
+
+func validateServerSelector(sel ServerSelector) error {
+	switch sel.Mode {
+	case "", "auto":
+		return nil
+	case "specific":
+		if strings.TrimSpace(sel.ServerID) == "" {
+			return errors.New("server_selector.server_id is required")
+		}
+	case "subscription_auto":
+		return nil
+	default:
+		return errors.New("server_selector.mode: specific | auto | subscription_auto")
+	}
+	return nil
+}
+
+func validKillSwitchMode(mode KillSwitchMode) bool {
+	switch mode {
+	case KillSwitchOff, KillSwitchConnected, KillSwitchAlways:
+		return true
+	default:
+		return false
+	}
 }
 
 func profilePath(filename string) (string, error) {
