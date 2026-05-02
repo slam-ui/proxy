@@ -101,16 +101,42 @@ func ignoreWin32Call(proc *windows.LazyProc, args ...uintptr) {
 	_, _, _ = proc.Call(args...)
 }
 
-func applySquareWindowCorners(hwnd uintptr) {
-	cornerPref := dwmWindowCornerDoNotRound
+func setDWMUint32Attr(hwnd, attr uintptr, value uint32) {
 	ignoreWin32Call(
 		dwmSetAttr,
 		hwnd,
-		dwmwaWindowCornerPref,
-		uintptr(unsafe.Pointer(&cornerPref)),
-		uintptr(unsafe.Sizeof(cornerPref)),
+		attr,
+		uintptr(unsafe.Pointer(&value)), // #nosec G103 -- DwmSetWindowAttribute synchronously reads a DWORD pointer.
+		uintptr(unsafe.Sizeof(value)),
 	)
-	runtime.KeepAlive(cornerPref)
+	runtime.KeepAlive(value)
+}
+
+func getWindowRectValues(hwnd uintptr, rect *[4]int32) bool {
+	ret, _, _ := getWindowRect.Call(
+		hwnd,
+		uintptr(unsafe.Pointer(&rect[0])), // #nosec G103 -- GetWindowRect synchronously fills this fixed stack buffer.
+	)
+	runtime.KeepAlive(rect)
+	return ret != 0
+}
+
+func getWindowPlacementState(hwnd uintptr, placement *[12]uint32) {
+	placement[0] = uint32(unsafe.Sizeof(*placement))
+	ignoreWin32Call(
+		getWindowPlacement,
+		hwnd,
+		uintptr(unsafe.Pointer(&placement[0])), // #nosec G103 -- GetWindowPlacement synchronously fills this fixed stack buffer.
+	)
+	runtime.KeepAlive(placement)
+}
+
+func hwndFromWebView(w webview2.WebView) uintptr {
+	return uintptr(unsafe.Pointer(w.Window())) // #nosec G103 -- WebView2 exposes the native HWND pointer for Win32 calls.
+}
+
+func applySquareWindowCorners(hwnd uintptr) {
+	setDWMUint32Attr(hwnd, dwmwaWindowCornerPref, dwmWindowCornerDoNotRound)
 }
 
 // setAppIcon загружает иконку из ресурсов .exe (ID=1, вставляется goversioninfo)
@@ -145,40 +171,36 @@ func setAppIcon(hwnd uintptr) {
 }
 
 func applyDarkTitle(hwnd uintptr) {
-	dark := uint32(1)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 1)
 	// Caption (title bar background): почти чёрный — сливается с UI
 	capColor := colorref(0x0c, 0x0c, 0x12)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	// Title text: акцентный фиолетовый
 	textColor := colorref(0x7c, 0x6c, 0xff)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	// Border: тёмная акцентная рамка
 	borderColor := colorref(0x2a, 0x2a, 0x40)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
 	// Пробуем Mica backdrop (Windows 11 22H2+) — при неудаче молча игнорируется
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 func applyLightTitle(hwnd uintptr) {
-	dark := uint32(0)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 0)
 	// Caption: светлый фон — сливается с UI
 	capColor := colorref(0xf0, 0xf2, 0xf8)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	// Title text: тёмный акцентный
 	textColor := colorref(0x5b, 0x4d, 0xcc)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	// Border: светлая рамка
 	borderColor := colorref(0xc8, 0xcc, 0xe0)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 // applyThemeByName применяет стили titlebar по имени пресета.
@@ -206,77 +228,59 @@ func applyThemeByName(hwnd uintptr, name string) {
 //	--on:        #2de89a  → title-text (зелёный акцент, виден только в панели задач)
 //	--hairline2: ~#1e1e30 → бордер рамки
 func applyAxiomTitle(hwnd uintptr) {
-	dark := uint32(1)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 1)
 	// Caption: --bg #070713
 	capColor := colorref(0x07, 0x07, 0x13)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	// Title text (виден только в Alt+Tab / панели задач): --on #2de89a
 	textColor := colorref(0x2d, 0xe8, 0x9a)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	// Border: --s1 #0c0c1d (темнее фона, соответствует hairline)
 	borderColor := colorref(0x0c, 0x0c, 0x1d)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	// Прямые углы окна (Windows 11)
 	applySquareWindowCorners(hwnd)
 	// Mica backdrop — прозрачность за окном, если поддерживается (Win 11 22H2+)
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 // applyHackerTitle применяет DWM-цвета для «хакерской» темы:
 //
 //	--bg: #000000 (чёрный фон), --on: #00ff41 (зелёный текст)
 func applyHackerTitle(hwnd uintptr) {
-	dark := uint32(1)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 1)
 	capColor := colorref(0x00, 0x00, 0x00)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	textColor := colorref(0x00, 0xff, 0x41)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	borderColor := colorref(0x0d, 0x22, 0x00)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	applySquareWindowCorners(hwnd)
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 func applyMidnightTitle(hwnd uintptr) {
-	dark := uint32(1)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
-	runtime.KeepAlive(dark)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 1)
 	capColor := colorref(0x08, 0x08, 0x18)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
-	runtime.KeepAlive(capColor)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	textColor := colorref(0xa7, 0x8b, 0xfa)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
-	runtime.KeepAlive(textColor)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	borderColor := colorref(0x1a, 0x1a, 0x40)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	runtime.KeepAlive(borderColor)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	applySquareWindowCorners(hwnd)
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
-	runtime.KeepAlive(backdrop)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 func applySepiaTitle(hwnd uintptr) {
-	dark := uint32(1)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaImmersiveDarkMode, uintptr(unsafe.Pointer(&dark)), 4)
-	runtime.KeepAlive(dark)
+	setDWMUint32Attr(hwnd, dwmwaImmersiveDarkMode, 1)
 	capColor := colorref(0x1c, 0x15, 0x10)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaCaptionColor, uintptr(unsafe.Pointer(&capColor)), 4)
-	runtime.KeepAlive(capColor)
+	setDWMUint32Attr(hwnd, dwmwaCaptionColor, capColor)
 	textColor := colorref(0xc4, 0x93, 0x3f)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaTextColor, uintptr(unsafe.Pointer(&textColor)), 4)
-	runtime.KeepAlive(textColor)
+	setDWMUint32Attr(hwnd, dwmwaTextColor, textColor)
 	borderColor := colorref(0x3a, 0x2e, 0x1e)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaBorderColor, uintptr(unsafe.Pointer(&borderColor)), 4)
-	runtime.KeepAlive(borderColor)
+	setDWMUint32Attr(hwnd, dwmwaBorderColor, borderColor)
 	applySquareWindowCorners(hwnd)
-	backdrop := uint32(backdropMica)
-	ignoreWin32Call(dwmSetAttr, hwnd, dwmwaSystemBackdropType, uintptr(unsafe.Pointer(&backdrop)), 4)
-	runtime.KeepAlive(backdrop)
+	setDWMUint32Attr(hwnd, dwmwaSystemBackdropType, uint32(backdropMica))
 }
 
 // Размеры окна под axiom-ui: первый запуск открывается шире, чем мобильная карточка,
@@ -319,8 +323,7 @@ func readRect(hwnd uintptr) (windowState, bool) {
 		return windowState{}, false
 	}
 	var r [4]int32
-	ret, _, _ := getWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r[0])))
-	if ret == 0 {
+	if !getWindowRectValues(hwnd, &r) {
 		return windowState{}, false
 	}
 	w := r[2] - r[0]
@@ -341,8 +344,7 @@ func writeState(s windowState) {
 
 func isZoomed(hwnd uintptr) bool {
 	var wp [12]uint32
-	wp[0] = uint32(unsafe.Sizeof(wp))
-	ignoreWin32Call(getWindowPlacement, hwnd, uintptr(unsafe.Pointer(&wp[0])))
+	getWindowPlacementState(hwnd, &wp)
 	return wp[2] == showStateMaximized
 }
 
@@ -368,7 +370,7 @@ func BringToFront(url string) {
 	}
 
 	// Окно открыто — находим HWND и переводим на передний план
-	childHwnd := uintptr(unsafe.Pointer(win.Window()))
+	childHwnd := hwndFromWebView(win)
 	rootHwnd, _, _ := getAncestor.Call(childHwnd, 2) // GA_ROOT
 	if rootHwnd == 0 {
 		rootHwnd = childHwnd
@@ -429,7 +431,7 @@ func Open(url string) {
 		instance = w
 		mu.Unlock()
 
-		childHwnd := uintptr(unsafe.Pointer(w.Window()))
+		childHwnd := hwndFromWebView(w)
 		rootHwnd, _, _ := getAncestor.Call(childHwnd, 2) // GA_ROOT
 		if rootHwnd == 0 {
 			rootHwnd = childHwnd
@@ -442,7 +444,7 @@ func Open(url string) {
 		ignoreWin32Call(setWindowLong, rootHwnd, gwlStyleIdx, style&^wsCaption)
 		// Перерасчёт рамки и принудительная переотрисовка клиентской области.
 		var rect [4]int32
-		ignoreWin32Call(getWindowRect, rootHwnd, uintptr(unsafe.Pointer(&rect[0])))
+		getWindowRectValues(rootHwnd, &rect)
 		ignoreWin32Call(setWindowPos, rootHwnd, 0,
 			win32IntArg(rect[0]), win32IntArg(rect[1]),
 			win32IntArg(rect[2]-rect[0]), win32IntArg(rect[3]-rect[1]),
