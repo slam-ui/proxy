@@ -435,19 +435,21 @@ func win32SetIconForHealth(enabled bool, state HealthState) {
 	if h == 0 && !preferResource {
 		h, owned = buildIconHandleOwned(iconOn(), true)
 	}
+	hwnd := win32hwnd
+	if hwnd == 0 {
+		win32mu.Unlock()
+		if owned {
+			ignoreWin32Call(pDestroyIcon, h)
+		}
+		return
+	}
 	oldIcon := win32hicon
 	oldOwned := win32IconOwned
 	win32hicon = h
 	win32IconOwned = owned
 	win32mu.Unlock()
 
-	if win32hwnd == 0 {
-		if owned {
-			ignoreWin32Call(pDestroyIcon, h)
-		}
-		return
-	}
-	nid := buildNID(win32hwnd, h, win32tooltipOff)
+	nid := buildNID(hwnd, h, win32tooltipOff)
 	if enabled {
 		copyUTF16(&nid.SzTip, "SafeSky — туннель включён")
 	}
