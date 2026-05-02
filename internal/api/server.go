@@ -306,6 +306,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupLeakTestRoutes(s)
 	SetupImprovementRoutes(s)
 	SetupClientFeatureRoutes(s, ctx)
+	SetupRoutingVisualRoutes(s)
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
 	if s.config.SecretKeyPath != "" {
 		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
