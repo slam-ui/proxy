@@ -1,0 +1,32 @@
+{
+  "id": "developer",
+  "name": "Developer",
+  "description": "Keep common development services direct while preserving proxy default.",
+  "default_action": "proxy",
+  "rules": [
+    {
+      "id": "dev-services",
+      "name": "Development services",
+      "enabled": true,
+      "priority": 10,
+      "match": { "type": "domain_suffix", "values": ["github.com", "githubusercontent.com", "docker.com", "docker.io", "golang.org", "go.dev", "npmjs.org"] },
+      "action": "direct"
+    },
+    {
+      "id": "dev-processes",
+      "name": "Development tools",
+      "enabled": true,
+      "priority": 20,
+      "match": { "type": "process", "values": ["git.exe", "docker.exe", "code.exe"] },
+      "action": "direct"
+    },
+    {
+      "id": "dev-private",
+      "name": "Private networks",
+      "enabled": true,
+      "priority": 30,
+      "match": { "type": "ip_cidr", "values": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] },
+      "action": "direct"
+    }
+  ]
+}

@@ -9,6 +9,8 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/routing"
+
+	"github.com/gorilla/mux"
 )
 
 const maxRoutingVisualRequestBytes = 1 << 20
@@ -28,6 +30,8 @@ func SetupRoutingVisualRoutes(s *Server) {
 	api := s.router.PathPrefix("/api").Subrouter()
 	api.HandleFunc("/routing/visual", s.handleVisualRoutingGet).Methods("GET", "OPTIONS")
 	api.HandleFunc("/routing/visual", s.handleVisualRoutingPut).Methods("PUT", "OPTIONS")
+	api.HandleFunc("/routing/visual/presets", s.handleVisualRoutingPresets).Methods("GET", "OPTIONS")
+	api.HandleFunc("/routing/visual/presets/{id}/import", s.handleVisualRoutingImportPreset).Methods("POST", "OPTIONS")
 	api.HandleFunc("/routing/visual/conflicts", s.handleVisualRoutingConflicts).Methods("GET", "OPTIONS")
 	api.HandleFunc("/routing/visual/conflicts", s.handleVisualRoutingCheckConflicts).Methods("POST", "OPTIONS")
 	api.HandleFunc("/routing/visual/test", s.handleVisualRoutingTest).Methods("POST", "OPTIONS")
@@ -87,6 +91,41 @@ func (s *Server) handleVisualRoutingCheckConflicts(w http.ResponseWriter, r *htt
 		return
 	}
 	s.respondJSON(w, http.StatusOK, map[string]any{"conflicts": routing.DetectConflicts(req.Rules)})
+}
+
+func (s *Server) handleVisualRoutingPresets(w http.ResponseWriter, _ *http.Request) {
+	presets, err := routing.LoadPresets()
+	if err != nil {
+		s.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.respondJSON(w, http.StatusOK, map[string]any{"presets": presets})
+}
+
+func (s *Server) handleVisualRoutingImportPreset(w http.ResponseWriter, r *http.Request) {
+	preset, err := routing.LoadPreset(mux.Vars(r)["id"])
+	if err != nil {
+		s.respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	nextRules, err := visualRulesToConfig(preset.Rules)
+	if err != nil {
+		s.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defaultAction := config.RuleAction(normalizeVisualAction(preset.DefaultAction))
+	if err := s.mutateRoutingSnapshot(func(cfg *config.RoutingConfig) (bool, error) {
+		cfg.DefaultAction = defaultAction
+		cfg.Rules = nextRules
+		return true, nil
+	}); err != nil {
+		s.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.respondJSON(w, http.StatusOK, visualRoutingResponse{
+		DefaultAction: defaultAction,
+		Rules:         visualRulesFromConfig(s.currentRoutingSnapshot()),
+	})
 }
 
 func (s *Server) handleVisualRoutingTest(w http.ResponseWriter, r *http.Request) {
@@ -208,8 +247,10 @@ func visualRuleName(rule config.RoutingRule, value string) string {
 
 func configTypeForVisualMatch(matchType string) (config.RuleType, error) {
 	switch matchType {
-	case "domain", "domain_suffix", "domain_keyword":
+	case "domain", "domain_suffix":
 		return config.RuleTypeDomain, nil
+	case "domain_keyword":
+		return "", fmt.Errorf("domain_keyword persistence requires sing-box route builder support")
 	case "ip", "ip_cidr":
 		return config.RuleTypeIP, nil
 	case "process":
