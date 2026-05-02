@@ -107,6 +107,9 @@ type ServerEntry struct {
 	CountryCode     string `json:"country_code"` // RU, DE, NL, US, ...
 	AddedAt         int64  `json:"added_at"`
 	SubscriptionURL string `json:"subscription_url,omitempty"` // C-5: URL субскрипции для /refresh
+	SubscriptionID  string `json:"subscription_id,omitempty"`
+	SubscriptionKey string `json:"subscription_key,omitempty"`
+	Deleted         bool   `json:"deleted,omitempty"`
 }
 
 // ServersHandlers управляет списком серверов и активным подключением
@@ -209,6 +212,16 @@ func saveServers(list []ServerEntry) error {
 	// BUG FIX: os.WriteFile не атомарен — при крэше в середине записи servers.json
 	// будет повреждён. fileutil.WriteAtomic использует MoveFileExW (NTFS-транзакция).
 	return fileutil.WriteAtomic(serversFile, data, 0644)
+}
+
+func visibleServers(list []ServerEntry) []ServerEntry {
+	out := make([]ServerEntry, 0, len(list))
+	for _, server := range list {
+		if !server.Deleted {
+			out = append(out, server)
+		}
+	}
+	return out
 }
 
 // activeServerIDFromList возвращает ID активного сервера из уже загруженного списка.
@@ -379,7 +392,7 @@ func (h *ServersHandlers) handleConnect(w http.ResponseWriter, r *http.Request) 
 	}
 	var target *ServerEntry
 	for i := range list {
-		if list[i].ID == id {
+		if list[i].ID == id && !list[i].Deleted {
 			target = &list[i]
 			break
 		}
@@ -444,7 +457,7 @@ func (h *ServersHandlers) handlePing(w http.ResponseWriter, r *http.Request) {
 
 	var target *ServerEntry
 	for i := range list {
-		if list[i].ID == id {
+		if list[i].ID == id && !list[i].Deleted {
 			target = &list[i]
 			break
 		}
@@ -478,7 +491,7 @@ func (h *ServersHandlers) handleRealPing(w http.ResponseWriter, r *http.Request)
 
 	var target *ServerEntry
 	for i := range list {
-		if list[i].ID == id {
+		if list[i].ID == id && !list[i].Deleted {
 			target = &list[i]
 			break
 		}
@@ -517,6 +530,7 @@ func (h *ServersHandlers) doAutoConnect(ctx context.Context) (map[string]interfa
 	h.mu.RLock()
 	list, _ := loadServers()
 	h.mu.RUnlock()
+	list = visibleServers(list)
 
 	if len(list) == 0 {
 		return nil, http.StatusBadRequest, fmt.Errorf("нет доступных серверов")
@@ -721,6 +735,7 @@ func (h *ServersHandlers) handlePingAll(w http.ResponseWriter, r *http.Request) 
 	h.mu.RLock()
 	list, _ := loadServers()
 	h.mu.RUnlock()
+	list = visibleServers(list)
 
 	type result struct {
 		ID        string `json:"id"`
