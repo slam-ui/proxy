@@ -22,6 +22,38 @@ import (
 	"time"
 )
 
+func mustCreateZipEntry(t testing.TB, w *zip.Writer, name string, data []byte) {
+	t.Helper()
+	fw, err := w.Create(name)
+	if err != nil {
+		t.Fatalf("zip.Create(%q): %v", name, err)
+	}
+	if _, err := fw.Write(data); err != nil {
+		t.Fatalf("zip entry Write(%q): %v", name, err)
+	}
+}
+
+func mustCloseZip(t testing.TB, w *zip.Writer) {
+	t.Helper()
+	if err := w.Close(); err != nil {
+		t.Fatalf("zip.Close: %v", err)
+	}
+}
+
+func mustHTTPWrite(t testing.TB, w http.ResponseWriter, data []byte) {
+	t.Helper()
+	if _, err := w.Write(data); err != nil {
+		t.Errorf("http response Write: %v", err)
+	}
+}
+
+func mustEncodeJSON(t testing.TB, w http.ResponseWriter, value any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Errorf("json Encode: %v", err)
+	}
+}
+
 // ── NeedsDownload Tests ────────────────────────────────────────────────────────
 
 func TestNeedsDownload_ReturnsTrue_WhenFileNotExists(t *testing.T) {
@@ -243,9 +275,8 @@ func TestExtractExeFromZip_ReturnsError_WhenNoExe(t *testing.T) {
 	// Create zip without sing-box.exe
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
-	fw, _ := w.Create("readme.txt")
-	fw.Write([]byte("readme content"))
-	w.Close()
+	mustCreateZipEntry(t, w, "readme.txt", []byte("readme content"))
+	mustCloseZip(t, w)
 
 	err := extractExeFromZip(buf.Bytes(), dest)
 	if err == nil {
@@ -263,9 +294,8 @@ func TestExtractExeFromZip_ExtractsExe(t *testing.T) {
 	// Create zip with sing-box.exe
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
-	fw, _ := w.Create("sing-box.exe")
-	fw.Write([]byte("fake exe content"))
-	w.Close()
+	mustCreateZipEntry(t, w, "sing-box.exe", []byte("fake exe content"))
+	mustCloseZip(t, w)
 
 	err := extractExeFromZip(buf.Bytes(), dest)
 	if err != nil {
@@ -289,9 +319,8 @@ func TestExtractExeFromZip_ExtractsFromSubdirectory(t *testing.T) {
 	// Create zip with sing-box.exe in subdirectory
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
-	fw, _ := w.Create("sing-box-1.0.0/sing-box.exe")
-	fw.Write([]byte("exe in subdir"))
-	w.Close()
+	mustCreateZipEntry(t, w, "sing-box-1.0.0/sing-box.exe", []byte("exe in subdir"))
+	mustCloseZip(t, w)
 
 	err := extractExeFromZip(buf.Bytes(), dest)
 	if err != nil {
@@ -382,7 +411,7 @@ func TestFetchLatestAsset_ReturnsError_OnHTTPError(t *testing.T) {
 
 func TestFetchLatestAsset_ReturnsError_OnInvalidJSON(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("invalid json"))
+		mustHTTPWrite(t, w, []byte("invalid json"))
 	}))
 	defer ts.Close()
 
@@ -404,7 +433,7 @@ func TestFetchLatestAsset_ReturnsError_OnNoWindowsAsset(t *testing.T) {
 				{Name: "sing-box-1.0.0-linux-amd64.zip", DownloadURL: "http://example.com/linux.zip"},
 			},
 		}
-		json.NewEncoder(w).Encode(release)
+		mustEncodeJSON(t, w, release)
 	}))
 	defer ts.Close()
 
@@ -426,7 +455,7 @@ func TestFetchLatestAsset_ReturnsAsset_OnSuccess(t *testing.T) {
 				{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: "http://example.com/windows.zip", Size: 1024},
 			},
 		}
-		json.NewEncoder(w).Encode(release)
+		mustEncodeJSON(t, w, release)
 	}))
 	defer ts.Close()
 
@@ -454,7 +483,7 @@ func TestFetchLatestAsset_FetchesChecksum(t *testing.T) {
 	var ts *httptest.Server
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, ".sha256") {
-			w.Write([]byte(expectedSum + "  sing-box-1.13.7-windows-amd64.zip"))
+			mustHTTPWrite(t, w, []byte(expectedSum+"  sing-box-1.13.7-windows-amd64.zip"))
 			return
 		}
 
@@ -465,7 +494,7 @@ func TestFetchLatestAsset_FetchesChecksum(t *testing.T) {
 				{Name: "sing-box-1.13.7-windows-amd64.zip.sha256", DownloadURL: ts.URL + "/checksum.sha256"},
 			},
 		}
-		json.NewEncoder(w).Encode(release)
+		mustEncodeJSON(t, w, release)
 	}))
 	defer ts.Close()
 
@@ -547,7 +576,7 @@ func TestDownloadWithProgress_RejectsOversizedContentLength(t *testing.T) {
 func TestDownloadWithProgress_ReturnsData_OnSuccess(t *testing.T) {
 	content := []byte("downloaded content")
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(content)
+		mustHTTPWrite(t, w, content)
 	}))
 	defer ts.Close()
 
@@ -569,7 +598,7 @@ func TestDownloadWithProgress_ReportsProgress(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
-		w.Write(content)
+		mustHTTPWrite(t, w, content)
 	}))
 	defer ts.Close()
 
@@ -598,7 +627,7 @@ func TestDownloadWithProgress_ReportsProgress(t *testing.T) {
 func TestDownloadWithProgress_ContextCancellation(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second) // Slow response
-		w.Write([]byte("data"))
+		mustHTTPWrite(t, w, []byte("data"))
 	}))
 	defer ts.Close()
 
@@ -646,19 +675,18 @@ func TestEnsureEngine_SendsProgress(t *testing.T) {
 					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
 				},
 			}
-			json.NewEncoder(w).Encode(release)
+			mustEncodeJSON(t, w, release)
 			return
 		}
 
 		// Create zip with sing-box.exe
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe"))
-		zw.Close()
+		mustCreateZipEntry(t, zw, "sing-box.exe", []byte("fake exe"))
+		mustCloseZip(t, zw)
 
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", buf.Len()))
-		w.Write(buf.Bytes())
+		mustHTTPWrite(t, w, buf.Bytes())
 	}))
 	defer ts.Close()
 
@@ -802,7 +830,7 @@ func TestProgressReader_HandlesNilCallback(t *testing.T) {
 func TestFetchChecksumFile_ReturnsChecksum(t *testing.T) {
 	expectedSum := strings.Repeat("a", 64)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(expectedSum + "  filename.zip"))
+		mustHTTPWrite(t, w, []byte(expectedSum+"  filename.zip"))
 	}))
 	defer ts.Close()
 
@@ -830,7 +858,7 @@ func TestFetchChecksumFile_ReturnsError_OnHTTPError(t *testing.T) {
 
 func TestFetchChecksumFile_ReturnsError_OnInvalidFormat(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("too short"))
+		mustHTTPWrite(t, w, []byte("too short"))
 	}))
 	defer ts.Close()
 
@@ -865,16 +893,15 @@ func TestEnsureEngine_CreatesDirectory(t *testing.T) {
 					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/download"},
 				},
 			}
-			json.NewEncoder(w).Encode(release)
+			mustEncodeJSON(t, w, release)
 			return
 		}
 
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe"))
-		zw.Close()
-		w.Write(buf.Bytes())
+		mustCreateZipEntry(t, zw, "sing-box.exe", []byte("fake exe"))
+		mustCloseZip(t, zw)
+		mustHTTPWrite(t, w, buf.Bytes())
 	}))
 	defer ts.Close()
 
@@ -1024,16 +1051,15 @@ func TestEnsureEngine_Retries_OnServerErrors(t *testing.T) {
 					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
 				},
 			}
-			json.NewEncoder(w).Encode(release)
+			mustEncodeJSON(t, w, release)
 			return
 		}
 		// Download endpoint
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe v1.13.7"))
-		zw.Close()
-		w.Write(buf.Bytes())
+		mustCreateZipEntry(t, zw, "sing-box.exe", []byte("fake exe v1.13.7"))
+		mustCloseZip(t, zw)
+		mustHTTPWrite(t, w, buf.Bytes())
 	}))
 	defer ts.Close()
 
@@ -1090,15 +1116,14 @@ func TestEnsureEngine_WritesVersionFile(t *testing.T) {
 					{Name: "sing-box-1.13.7-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
 				},
 			}
-			json.NewEncoder(w).Encode(release)
+			mustEncodeJSON(t, w, release)
 			return
 		}
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe"))
-		zw.Close()
-		w.Write(buf.Bytes())
+		mustCreateZipEntry(t, zw, "sing-box.exe", []byte("fake exe"))
+		mustCloseZip(t, zw)
+		mustHTTPWrite(t, w, buf.Bytes())
 	}))
 	defer ts.Close()
 
@@ -1141,15 +1166,14 @@ func TestEnsureEngine_BinaryVerificationFails(t *testing.T) {
 					{Name: "sing-box-1.13.5-windows-amd64.zip", DownloadURL: ts.URL + "/dl"},
 				},
 			}
-			json.NewEncoder(w).Encode(release)
+			mustEncodeJSON(t, w, release)
 			return
 		}
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
-		fw, _ := zw.Create("sing-box.exe")
-		fw.Write([]byte("fake exe"))
-		zw.Close()
-		w.Write(buf.Bytes())
+		mustCreateZipEntry(t, zw, "sing-box.exe", []byte("fake exe"))
+		mustCloseZip(t, zw)
+		mustHTTPWrite(t, w, buf.Bytes())
 	}))
 	defer ts.Close()
 

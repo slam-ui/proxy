@@ -143,7 +143,9 @@ func TestHandleApply_InvalidConfigReturnsBadRequest(t *testing.T) {
 	// buildTunServer меняет CWD → создаём заглушку ConfigPath в этом CWD.
 	// GenerateSingBoxConfig упадёт (пустой SecretKeyPath) и handleApply должен
 	// вернуть ошибку, а не молча применить старый конфиг.
-	os.WriteFile("config.singbox.json", []byte("{}"), 0644)
+	if err := os.WriteFile("config.singbox.json", []byte("{}"), 0644); err != nil {
+		t.Fatalf("WriteFile config.singbox.json: %v", err)
+	}
 	h.xrayConfig.ConfigPath = "config.singbox.json"
 
 	// Устанавливаем lastApplied с 2 правилами

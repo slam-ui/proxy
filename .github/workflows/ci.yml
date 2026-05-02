@@ -27,7 +27,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.26.2'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
@@ -82,15 +82,8 @@ jobs:
 
       - name: Run tests (race + coverage)
         run: |
-          go test -race -timeout=120s \
-            -coverprofile=coverage.out -covermode=atomic \
-            ./internal/anomalylog/... \
-            ./internal/apprules/... \
-            ./internal/config/... \
-            ./internal/eventlog/... \
-            ./internal/fileutil/... \
-            ./internal/logger/... \
-            ./internal/netutil/...
+          go test ./... -count=1 -race -timeout=10m \
+            -coverprofile=coverage.out -covermode=atomic
           go tool cover -func=coverage.out | tail -1
 
       - uses: actions/upload-artifact@v4
@@ -188,7 +181,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
 
       - name: Run staticcheck (Windows target)
         env:
@@ -217,16 +210,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - name: Run gosec (Windows target)
-        uses: securego/gosec@v2.21.4
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+
+      - name: Run gosec high severity gate (Windows target)
         env:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: '0'
-        with:
-          args: >-
-            -no-fail -exclude=G304,G306
-            -fmt sarif -out gosec.sarif ./...
+        run: gosec -quiet -severity high ./...
+
+      - name: Run gosec SARIF (Windows target)
+        if: always()
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: gosec -quiet -severity high -fmt sarif -out gosec.sarif ./...
 
       - uses: github/codeql-action/upload-sarif@v3
         if: always()
@@ -234,7 +234,7 @@ jobs:
           sarif_file: gosec.sarif
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.3
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
 
       - name: Run govulncheck (Windows target)
         env:
@@ -242,7 +242,7 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: '0'
         run: |
-          govulncheck -json ./... > govulncheck.json 2>&1 || true
+          govulncheck -json ./... > govulncheck.json 2>&1
           python3 - <<'EOF'
           import json
           data = []

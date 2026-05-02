@@ -61,7 +61,9 @@ func TestHandleEvents_NoEventLog_Returns200Empty(t *testing.T) {
 		t.Errorf("GET /api/events = %d, want 200", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	if resp["events"] == nil {
 		t.Error("events field должен присутствовать")
 	}
@@ -86,7 +88,9 @@ func TestHandleEvents_WithEventLog_ReturnsSince(t *testing.T) {
 		t.Fatalf("GET /api/events = %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	events := resp["events"].([]interface{})
 	if len(events) < 2 {
 		t.Errorf("events len = %d, want >= 2", len(events))
@@ -114,7 +118,9 @@ func TestHandleEvents_SinceParam_FiltersOld(t *testing.T) {
 		t.Errorf("events with high since = %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
 	events := resp["events"].([]interface{})
 	if len(events) != 0 {
 		t.Errorf("events с since=999999 должен вернуть пустой список, got %d", len(events))
@@ -154,8 +160,8 @@ func TestHandleEventsClear_WithEventLog_Clears(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("POST /api/events/clear = %d, want 200", w.Code)
 	}
-	if evLog.GetLatestID() != 0 {
-		// после Clear новые ID продолжаются, но буфер пуст
+	if events := evLog.GetSince(0); len(events) != 0 {
+		t.Fatalf("после Clear буфер должен быть пустым, получено %d событий", len(events))
 	}
 }
 
@@ -249,7 +255,9 @@ func TestTunImport_ValidJSON_Returns200(t *testing.T) {
 	// Проверяем что правила применились
 	wGet := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&resp)
+	if err := json.NewDecoder(wGet.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if resp.DefaultAction != "direct" {
 		t.Errorf("default_action после import = %q, want direct", resp.DefaultAction)
 	}
@@ -319,7 +327,9 @@ func TestTunImport_NormalizesURLs(t *testing.T) {
 
 	wGet := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&resp)
+	if err := json.NewDecoder(wGet.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) == 0 {
 		t.Fatal("после import правил нет")
 	}
@@ -341,7 +351,9 @@ func TestTunApplyStatus_NotRunning_Returns200(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode apply status response: %v", err)
+	}
 
 	if resp["running"] == nil {
 		t.Error("running поле должно быть в ответе")
@@ -377,7 +389,9 @@ func TestEngineStatus_Returns200(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode engine status response: %v", err)
+	}
 	if resp["running"] == nil {
 		t.Error("running поле должно присутствовать")
 	}
@@ -455,7 +469,9 @@ func TestHandleStatus_Restarting_ShowsWarmingTrue(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if !resp.XRay.Warming {
 		t.Error("warming должен быть true при restarting=true")
 	}
@@ -474,7 +490,9 @@ func TestHandleStatus_NilXRayManager_ShowsWarmingTrue(t *testing.T) {
 		t.Fatalf("status с nil xray = %d", w.Code)
 	}
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if !resp.XRay.Warming {
 		t.Error("warming должен быть true когда XRayManager=nil")
 	}
@@ -491,7 +509,9 @@ func TestHandleStatus_ContainsConfigPath(t *testing.T) {
 
 	w := getJSON(t, srv.router, "/api/status")
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if resp.ConfigPath != "/path/to/config.json" {
 		t.Errorf("config_path = %q, want /path/to/config.json", resp.ConfigPath)
 	}
@@ -659,7 +679,9 @@ func TestTunAddRule_CIDR_DetectsIPType(t *testing.T) {
 
 	wGet := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&resp)
+	if err := json.NewDecoder(wGet.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) == 0 {
 		t.Fatal("правило не добавлено")
 	}
@@ -682,7 +704,9 @@ func TestTunAddRule_GeoSiteValue_DetectsGeoType(t *testing.T) {
 
 	wGet := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&resp)
+	if err := json.NewDecoder(wGet.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) == 0 {
 		t.Fatal("правило не добавлено")
 	}
@@ -710,7 +734,9 @@ func TestTunDeleteRule_CIDR_WithSlash(t *testing.T) {
 	// Проверяем что удалено
 	wGet := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&resp)
+	if err := json.NewDecoder(wGet.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	for _, r := range resp.Rules {
 		if r.Value == "10.0.0.0/8" {
 			t.Error("CIDR правило должно быть удалено")
@@ -814,7 +840,9 @@ func TestHandleStatus_XRayUptime_FromManager(t *testing.T) {
 		t.Fatalf("status = %d", w.Code)
 	}
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if !resp.XRay.Running {
 		t.Error("xray.running должен быть true")
 	}
@@ -849,7 +877,9 @@ func TestBulkReplaceExportRoundTrip(t *testing.T) {
 
 	// 3. Парсим экспорт и проверяем round-trip
 	var exported config.RoutingConfig
-	json.NewDecoder(wExport.Body).Decode(&exported)
+	if err := json.NewDecoder(wExport.Body).Decode(&exported); err != nil {
+		t.Fatalf("decode export response: %v", err)
+	}
 
 	if exported.DefaultAction != "direct" {
 		t.Errorf("exported default_action = %q, want direct", exported.DefaultAction)
@@ -869,7 +899,9 @@ func TestBulkReplaceExportRoundTrip(t *testing.T) {
 
 	wGet := getJSON(t, srv2.router, "/api/tun/rules")
 	var result RulesResponse
-	json.NewDecoder(wGet.Body).Decode(&result)
+	if err := json.NewDecoder(wGet.Body).Decode(&result); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(result.Rules) != 4 {
 		t.Errorf("rules после import = %d, want 4", len(result.Rules))
 	}

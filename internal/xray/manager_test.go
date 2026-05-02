@@ -20,8 +20,8 @@ func TestTailWriter_CrashMessageNotCut(t *testing.T) {
 	// The crash detector looks for "Cannot create a file when that file already exists".
 	tw := newTailWriter(64)
 	padding := bytes.Repeat([]byte("x"), 30)
-	tw.Write(padding)
-	tw.Write([]byte("\nFATAL[0015] Cannot create a file when that file already exists\n"))
+	mustWriteTail(t, tw, padding)
+	mustWriteTail(t, tw, []byte("\nFATAL[0015] Cannot create a file when that file already exists\n"))
 
 	if !strings.Contains(tw.String(), "Cannot create a file") {
 		t.Error("crash message should be fully retained in tail buffer")

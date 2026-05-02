@@ -199,7 +199,9 @@ func TestHandleSetGeositeUpdate_DisablesUpdater(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode settings response: %v", err)
+	}
 	if resp["applied"] != true {
 		t.Errorf("applied должен быть true, got %v", resp["applied"])
 	}

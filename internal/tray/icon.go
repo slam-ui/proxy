@@ -62,6 +62,9 @@ func makeStatusIcon(fill color.RGBA) []byte {
 		return iconOn()
 	}
 	pngBytes := pngBuf.Bytes()
+	if uint64(len(pngBytes)) > uint64(^uint32(0)) {
+		return iconOn()
+	}
 	ico := make([]byte, 22+len(pngBytes))
 	binary.LittleEndian.PutUint16(ico[2:], 1)
 	binary.LittleEndian.PutUint16(ico[4:], 1)
@@ -69,7 +72,8 @@ func makeStatusIcon(fill color.RGBA) []byte {
 	ico[7] = size
 	binary.LittleEndian.PutUint16(ico[10:], 1)
 	binary.LittleEndian.PutUint16(ico[12:], 32)
-	binary.LittleEndian.PutUint32(ico[14:], uint32(len(pngBytes)))
+	pngLen := uint32(len(pngBytes)) // #nosec G115 -- bounded by the uint64 check above.
+	binary.LittleEndian.PutUint32(ico[14:], pngLen)
 	binary.LittleEndian.PutUint32(ico[18:], 22)
 	copy(ico[22:], pngBytes)
 	return ico

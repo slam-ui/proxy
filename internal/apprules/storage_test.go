@@ -78,7 +78,9 @@ func TestFileStorage_Load_MissingFile_ReturnsEmpty(t *testing.T) {
 
 func TestFileStorage_Load_EmptyFile_ReturnsEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
-	os.WriteFile(path, []byte{}, 0644)
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatalf("WriteFile empty rules: %v", err)
+	}
 	s := NewFileStorage(path)
 	rules, err := s.Load()
 	if err != nil {
@@ -91,7 +93,9 @@ func TestFileStorage_Load_EmptyFile_ReturnsEmpty(t *testing.T) {
 
 func TestFileStorage_Load_InvalidJSON_ReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
-	os.WriteFile(path, []byte("{not valid json"), 0644)
+	if err := os.WriteFile(path, []byte("{not valid json"), 0644); err != nil {
+		t.Fatalf("WriteFile invalid JSON: %v", err)
+	}
 	s := NewFileStorage(path)
 	_, err := s.Load()
 	if err == nil {
@@ -210,7 +214,9 @@ func TestPersistentEngine_LoadExistingRules_PreservesIDs(t *testing.T) {
 		{ID: "stable-id-1", Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true},
 		{ID: "stable-id-2", Pattern: "firefox.exe", Action: ActionDirect, Priority: 5, Enabled: true},
 	}
-	s.Save(original)
+	if err := s.Save(original); err != nil {
+		t.Fatalf("Save original: %v", err)
+	}
 
 	// Создаём новый engine — он должен загрузить сохранённые правила
 	pe, err := NewPersistentEngine(s)
@@ -236,9 +242,11 @@ func TestPersistentEngine_LoadedRules_CanMatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "rules.json")
 	s := NewFileStorage(path)
 
-	s.Save([]Rule{
+	if err := s.Save([]Rule{
 		{ID: "r1", Pattern: "chrome.exe", Action: ActionProxy, Priority: 10, Enabled: true},
-	})
+	}); err != nil {
+		t.Fatalf("Save loaded rules: %v", err)
+	}
 
 	pe, _ := NewPersistentEngine(s)
 	m := pe.Match("chrome.exe")
@@ -325,7 +333,9 @@ func TestPersistentEngine_EnableRule_SaveFailure_RollsBack(t *testing.T) {
 	pe, _ := NewPersistentEngine(fs)
 
 	r, _ := pe.AddRule(Rule{Pattern: "app.exe", Action: ActionProxy, Enabled: true})
-	pe.DisableRule(r.ID) // вначале выключаем успешно
+	if err := pe.DisableRule(r.ID); err != nil { // вначале выключаем успешно
+		t.Fatalf("DisableRule: %v", err)
+	}
 
 	fs.failOnSave = true
 	if err := pe.EnableRule(r.ID); err == nil {
@@ -396,7 +406,7 @@ func TestPersistentEngine_ConcurrentOps_NoRace(t *testing.T) {
 			defer wg.Done()
 			r, err := pe.AddRule(newTestRule("app.exe", ActionProxy, 1))
 			if err == nil {
-				pe.DeleteRule(r.ID)
+				_ = pe.DeleteRule(r.ID)
 			}
 		}()
 	}
@@ -424,7 +434,7 @@ func TestFileStorage_ConcurrentSave_NoCorruption(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.Save(rules)
+			_ = s.Save(rules)
 		}()
 	}
 	wg.Wait()

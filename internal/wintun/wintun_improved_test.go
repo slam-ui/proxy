@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+func mustWriteFile(t testing.TB, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatalf("os.WriteFile(%q) failed: %v", path, err)
+	}
+}
+
 // ── SleepCtx Tests ────────────────────────────────────────────────────────────────
 
 func TestSleepCtx_ReturnsTrue_OnNormalCompletion(t *testing.T) {
@@ -162,7 +169,7 @@ func TestReadAdaptiveGap_ReturnsValue_WhenValid(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write valid value above MinGapBase so it's not clamped
-	os.WriteFile(gapFile, []byte("2m"), 0644)
+	mustWriteFile(t, gapFile, []byte("2m"))
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap != 2*time.Minute {
@@ -175,7 +182,7 @@ func TestReadAdaptiveGap_ReturnsBase_WhenInvalidContent(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write invalid content
-	os.WriteFile(gapFile, []byte("invalid"), 0644)
+	mustWriteFile(t, gapFile, []byte("invalid"))
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap != MinGapBase {
@@ -188,7 +195,7 @@ func TestReadAdaptiveGap_ClampsToMax(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write value exceeding max
-	os.WriteFile(gapFile, []byte("10h"), 0644)
+	mustWriteFile(t, gapFile, []byte("10h"))
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap > MaxGap {
@@ -201,7 +208,7 @@ func TestReadAdaptiveGap_ClampsToMin(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write value below minimum
-	os.WriteFile(gapFile, []byte("100ms"), 0644)
+	mustWriteFile(t, gapFile, []byte("100ms"))
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap < MinGapBase {
@@ -244,7 +251,7 @@ func TestIncreaseAdaptiveGap_ClampsToMax(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write value close to max
-	os.WriteFile(gapFile, []byte(MaxGap.String()), 0644)
+	mustWriteFile(t, gapFile, []byte(MaxGap.String()))
 
 	gap := IncreaseAdaptiveGap(gapFile)
 	if gap > MaxGap {
@@ -259,7 +266,7 @@ func TestResetAdaptiveGap_RemovesFile(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Create file
-	os.WriteFile(gapFile, []byte("10s"), 0644)
+	mustWriteFile(t, gapFile, []byte("10s"))
 
 	ResetAdaptiveGap(gapFile)
 
@@ -294,7 +301,7 @@ func TestRecordStop_OverwritesExisting(t *testing.T) {
 	stopFile := filepath.Join(dir, "stop.txt")
 
 	// Create existing file
-	os.WriteFile(stopFile, []byte("old content"), 0644)
+	mustWriteFile(t, stopFile, []byte("old content"))
 
 	RecordStop(stopFile)
 
@@ -356,7 +363,7 @@ func TestReadSettleDelay_GrowsWithGap(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write large gap
-	os.WriteFile(gapFile, []byte("30s"), 0644)
+	mustWriteFile(t, gapFile, []byte("30s"))
 
 	settle := ReadSettleDelay(gapFile)
 
@@ -371,7 +378,7 @@ func TestReadSettleDelay_MaxCap(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write very large gap
-	os.WriteFile(gapFile, []byte("10m"), 0644)
+	mustWriteFile(t, gapFile, []byte("10m"))
 
 	settle := ReadSettleDelay(gapFile)
 
@@ -505,7 +512,7 @@ func FuzzReadAdaptiveGap(f *testing.F) {
 		dir := t.TempDir()
 		gapFile := filepath.Join(dir, "gap.txt")
 
-		os.WriteFile(gapFile, []byte(content), 0644)
+		mustWriteFile(t, gapFile, []byte(content))
 
 		// Should not panic
 		gap := ReadAdaptiveGap(gapFile)
@@ -542,7 +549,7 @@ func FuzzCleanSCOutput(f *testing.F) {
 func BenchmarkReadAdaptiveGap(b *testing.B) {
 	dir := b.TempDir()
 	gapFile := filepath.Join(dir, "gap.txt")
-	os.WriteFile(gapFile, []byte("5s"), 0644)
+	mustWriteFile(b, gapFile, []byte("5s"))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -606,7 +613,7 @@ func TestReadAdaptiveGap_Table(t *testing.T) {
 			gapFile := filepath.Join(dir, "gap.txt")
 
 			if tc.content != "" {
-				os.WriteFile(gapFile, []byte(tc.content), 0644)
+				mustWriteFile(t, gapFile, []byte(tc.content))
 			}
 
 			gap := ReadAdaptiveGap(gapFile)
@@ -628,7 +635,7 @@ func TestReadAdaptiveGap_CorruptFile(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write binary garbage
-	os.WriteFile(gapFile, []byte{0x00, 0x01, 0x02, 0xFF}, 0644)
+	mustWriteFile(t, gapFile, []byte{0x00, 0x01, 0x02, 0xFF})
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap != MinGapBase {
@@ -640,7 +647,7 @@ func TestReadAdaptiveGap_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	gapFile := filepath.Join(dir, "gap.txt")
 
-	os.WriteFile(gapFile, []byte{}, 0644)
+	mustWriteFile(t, gapFile, []byte{})
 
 	gap := ReadAdaptiveGap(gapFile)
 	if gap != MinGapBase {
@@ -653,7 +660,7 @@ func TestIncreaseAdaptiveGap_FromZero(t *testing.T) {
 	gapFile := filepath.Join(dir, "gap.txt")
 
 	// Write zero gap
-	os.WriteFile(gapFile, []byte("0s"), 0644)
+	mustWriteFile(t, gapFile, []byte("0s"))
 
 	gap := IncreaseAdaptiveGap(gapFile)
 	// Should start from base

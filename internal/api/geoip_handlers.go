@@ -200,13 +200,18 @@ func resolveGeoIP(ctx context.Context, host string) string {
 // Используется только когда PTR не содержит паттернов страны.
 // Таймаут: минимум из (оставшегося времени ctx, 3s) — вписываемся в общий бюджет handleGeoIP.
 func countryFromIPAPI(ctx context.Context, ipStr string) string {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return ""
+	}
+	safeIP := ip.String()
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, geoIPAPIURL(ipStr), nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, geoIPAPIURL(safeIP), nil) // #nosec G704 -- safeIP is normalized by net.ParseIP above and targets a fixed geo API host.
 	if err != nil {
 		return ""
 	}
-	resp, err := geoIPHTTPClient.Do(req)
+	resp, err := geoIPHTTPClient.Do(req) // #nosec G704 -- request URL is built from the fixed geo API host and a parsed IP literal.
 	if err != nil {
 		return ""
 	}

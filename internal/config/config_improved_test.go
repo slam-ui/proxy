@@ -1,7 +1,6 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -30,7 +29,7 @@ func TestParseVLESSKey_Concurrent_NoCacheCorruption(t *testing.T) {
 	paths := make([]string, len(urls))
 	for i, u := range urls {
 		p := filepath.Join(dir, "key-"+string(rune('a'+i))+".key")
-		os.WriteFile(p, []byte(u), 0644)
+		mustWriteFile(t, p, []byte(u))
 		paths[i] = p
 	}
 
@@ -70,7 +69,7 @@ func TestParseVLESSKey_BOMWithCRLFAndComments(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "messy.key")
 	// BOM + CRLF + комментарий + пустая строка + URL с CRLF
 	content := "\ufeff# comment\r\n\r\nvless://uuid@host.com:443?sni=x.com&pbk=k&sid=s\r\n"
-	os.WriteFile(path, []byte(content), 0644)
+	mustWriteFile(t, path, []byte(content))
 
 	params, err := parseVLESSKey(path)
 	if err != nil {
@@ -91,7 +90,7 @@ func TestParseVLESSKey_UUID_WithDashes(t *testing.T) {
 	uuid := "550e8400-e29b-41d4-a716-446655440000"
 	path := filepath.Join(t.TempDir(), "uuid.key")
 	url := "vless://" + uuid + "@host.com:443?sni=x.com&pbk=k&sid=s"
-	os.WriteFile(path, []byte(url), 0644)
+	mustWriteFile(t, path, []byte(url))
 
 	params, err := parseVLESSKey(path)
 	if err != nil {
@@ -111,7 +110,7 @@ func TestParseVLESSKey_UUID_WithDashes(t *testing.T) {
 func TestParseVLESSKey_WildcardSNI_Accepted(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "wildcard.key")
 	url := "vless://uuid@host.com:443?sni=*.example.com&pbk=k&sid=s"
-	os.WriteFile(path, []byte(url), 0644)
+	mustWriteFile(t, path, []byte(url))
 
 	params, err := parseVLESSKey(path)
 	if err != nil {
@@ -140,7 +139,7 @@ func TestParseVLESSKey_PortBoundaries(t *testing.T) {
 	for _, tc := range cases {
 		path := filepath.Join(t.TempDir(), "port-"+tc.port+".key")
 		url := "vless://uuid@host.com:" + tc.port + "?sni=x.com&pbk=k&sid=s"
-		os.WriteFile(path, []byte(url), 0644)
+		mustWriteFile(t, path, []byte(url))
 
 		_, err := parseVLESSKey(path)
 		if (err != nil) != tc.wantErr {

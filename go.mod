@@ -2,6 +2,8 @@ module proxyclient
 
 go 1.24
 
+toolchain go1.26.2
+
 require (
 	github.com/gorilla/mux v1.8.1
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808

@@ -145,6 +145,7 @@ func ReadSecretKey(path string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("dpapi decrypt: %w", err)
 		}
+		defer zeroBytes(plain)
 		return strings.TrimSpace(string(plain)), nil
 	}
 	return content, nil
@@ -152,12 +153,22 @@ func ReadSecretKey(path string) (string, error) {
 
 // WriteSecretKey writes a VLESS URL to secret.key using DPAPI when available.
 func WriteSecretKey(path, vlessURL string) error {
-	enc, err := dpapi.Encrypt([]byte(vlessURL))
-	content := []byte(vlessURL)
+	plain := []byte(vlessURL)
+	defer zeroBytes(plain)
+
+	enc, err := dpapi.Encrypt(plain)
+	content := append([]byte(nil), plain...)
+	defer zeroBytes(content)
 	if err == nil {
 		content = []byte(dpapiMagic + base64.StdEncoding.EncodeToString(enc))
 	}
 	return fileutil.WriteAtomic(path, content, 0600)
+}
+
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // ParseVLESSContent парсит содержимое VLESS-файла переданное как строка.

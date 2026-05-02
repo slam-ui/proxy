@@ -533,13 +533,16 @@ func TestGenerateSingBoxConfig_NilRouting_NoPanic(t *testing.T) {
 
 	dir := t.TempDir()
 	secretPath := filepath.Join(dir, "secret.key")
-	os.WriteFile(secretPath, []byte(
+	mustWriteFile(t, secretPath, []byte(
 		"vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=testkey&sid=abc",
-	), 0644)
+	))
 
-	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	mustChdir(t, dir)
+	defer mustChdir(t, old)
 
 	outputPath := filepath.Join(dir, "out.json")
 	// nil routing должен работать без паники
@@ -552,17 +555,20 @@ func TestGenerateSingBoxConfig_NilRouting_NoPanic(t *testing.T) {
 func TestGenerateSingBoxConfig_OutputIsValidJSON(t *testing.T) {
 	dir := t.TempDir()
 	secretPath := filepath.Join(dir, "secret.key")
-	os.WriteFile(secretPath, []byte(
+	mustWriteFile(t, secretPath, []byte(
 		"vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=testkey&sid=abc",
-	), 0644)
+	))
 
-	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	mustChdir(t, dir)
+	defer mustChdir(t, old)
 
 	outputPath := filepath.Join(dir, "out.json")
 	cfg := &RoutingConfig{DefaultAction: ActionProxy, Rules: []RoutingRule{}}
-	err := GenerateSingBoxConfig(secretPath, outputPath, cfg)
+	err = GenerateSingBoxConfig(secretPath, outputPath, cfg)
 	if err != nil {
 		t.Skipf("GenerateSingBoxConfig вернул ошибку (нет geosite): %v", err)
 	}
@@ -583,7 +589,7 @@ func TestGenerateSingBoxConfig_OutputIsValidJSON(t *testing.T) {
 func TestParseVLESSKey_IPv6Address(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ipv6.key")
 	url := "vless://uuid@[2001:db8::1]:443?sni=x.com&pbk=k&sid=s"
-	os.WriteFile(path, []byte(url), 0644)
+	mustWriteFile(t, path, []byte(url))
 
 	p, err := parseVLESSKey(path)
 	if err != nil {
@@ -601,7 +607,7 @@ func TestParseVLESSKey_IPv6Address(t *testing.T) {
 
 func TestParseVLESSKey_MuxParam_False(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mux.key")
-	os.WriteFile(path, []byte("vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&mux=false"), 0644)
+	mustWriteFile(t, path, []byte("vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&mux=false"))
 
 	p, err := parseVLESSKey(path)
 	if err != nil {
@@ -614,7 +620,7 @@ func TestParseVLESSKey_MuxParam_False(t *testing.T) {
 
 func TestParseVLESSKey_MuxParam_Zero(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mux.key")
-	os.WriteFile(path, []byte("vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&mux=0"), 0644)
+	mustWriteFile(t, path, []byte("vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s&mux=0"))
 
 	p, err := parseVLESSKey(path)
 	if err != nil {

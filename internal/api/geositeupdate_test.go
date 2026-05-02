@@ -31,7 +31,7 @@ func TestGeoAutoUpdater_DownloadsStaleFile(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	// Создаём data/ и устаревший geosite файл
 	if err := os.MkdirAll("data", 0755); err != nil {
@@ -84,7 +84,7 @@ func TestGeoAutoUpdater_SkipsFreshFile(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	if err := os.MkdirAll("data", 0755); err != nil {
 		t.Fatalf("MkdirAll data/: %v", err)
@@ -131,9 +131,11 @@ func TestGeoAutoUpdater_SaveLoadMeta(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
 
 	g := NewGeoAutoUpdater(&logger.NoOpLogger{}, 7*24*time.Hour)
 	g.ctx, g.cancel = context.WithCancel(context.Background())
@@ -157,9 +159,11 @@ func TestGeoAutoUpdateSettings_LoadSave(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
 
 	// Defaults при отсутствии файла
 	s := loadGeoAutoUpdateSettings()
@@ -241,8 +245,10 @@ func TestGeoAutoUpdater_StartupDelay(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
-	os.MkdirAll("data", 0755)
+	defer func() { _ = os.Chdir(old) }()
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
 
 	var mu sync.Mutex
 	var callCount int
@@ -288,15 +294,21 @@ func TestGeoAutoUpdater_ErrNotFound_SuppressesRepeatAttempt(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
 
 	// Создаём стейл файл < 512 байт (имитация HTML-страницы с ошибкой)
 	stalePath := filepath.Join("data", "geosite-discord.bin")
-	os.WriteFile(stalePath, []byte("<!DOCTYPE html>"), 0644)
+	if err := os.WriteFile(stalePath, []byte("<!DOCTYPE html>"), 0644); err != nil {
+		t.Fatalf("WriteFile stale geosite: %v", err)
+	}
 	staleTime := time.Now().Add(-8 * 24 * time.Hour)
-	os.Chtimes(stalePath, staleTime, staleTime)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatalf("Chtimes stale geosite: %v", err)
+	}
 
 	var callCount int
 	mockDownload := func(_ context.Context, name string) error {
@@ -342,9 +354,11 @@ func TestGeoAutoUpdater_SmallFileUpdated(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
-	os.MkdirAll("data", 0755)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
 	// Создаём устаревший маленький файл (< 512 байт, mtime > interval).
 	// Стейл + маленький → должен обновиться (mtime старый — не 404-подавлённый).
 	smallPath := filepath.Join("data", "geosite-discord.bin")
@@ -352,7 +366,9 @@ func TestGeoAutoUpdater_SmallFileUpdated(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	staleTime := time.Now().Add(-8 * 24 * time.Hour)
-	os.Chtimes(smallPath, staleTime, staleTime)
+	if err := os.Chtimes(smallPath, staleTime, staleTime); err != nil {
+		t.Fatalf("Chtimes small geosite: %v", err)
+	}
 
 	var mu sync.Mutex
 	var downloaded []string
@@ -384,7 +400,7 @@ func TestDownloadGeositeFile_DirectFallbackDoesNotUseProxy(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(oldWD)
+	defer func() { _ = os.Chdir(oldWD) }()
 
 	payload := validTestSRS(159)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

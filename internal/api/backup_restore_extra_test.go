@@ -67,7 +67,7 @@ func TestHandleBackupRestore_RejectsMissingMeta(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	srv, cleanup := newProxySrv(t)
 	defer cleanup()
@@ -91,7 +91,7 @@ func TestHandleBackupRestore_ZipSlipEntrySkipped(t *testing.T) {
 	if err := os.Chdir(workDir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	srv, cleanup := newProxySrv(t)
 	defer cleanup()
@@ -118,13 +118,43 @@ func TestHandleBackupRestore_ZipSlipEntrySkipped(t *testing.T) {
 	}
 }
 
+func TestHandleBackupRestore_SkipsUnexpectedRootFiles(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	srv, cleanup := newProxySrv(t)
+	defer cleanup()
+
+	meta, _ := json.Marshal(map[string]int{"schema_version": 1})
+	zipData := makeBackupZip(t, map[string][]byte{
+		"backup_meta.json": meta,
+		"build.ps1":        []byte("owned"),
+		"profiles/ok.json": []byte(`{"name":"ok","routing":{"rules":[]}}`),
+	})
+
+	w := postBackupRestore(t, srv, zipData, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d, want 200: %s", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "build.ps1")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected root file was restored, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "profiles", "ok.json")); err != nil {
+		t.Fatalf("allowed profile was not restored: %v", err)
+	}
+}
+
 func TestBackupRestoreRoute_AllowsFiveMegabyteUploads(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},

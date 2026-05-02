@@ -226,6 +226,11 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if !isAllowedBackupRestorePath(cleanName) {
+			skipped++
+			continue
+		}
+
 		// B-8: Проверяем параметр overwrite
 		if !overwrite && fileExists(absDestPath) {
 			skipped++
@@ -315,6 +320,19 @@ func (s *Server) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func isAllowedBackupRestorePath(name string) bool {
+	clean := filepath.ToSlash(filepath.Clean(name))
+	switch clean {
+	case "servers.json", "data/settings.json", "data/routing.json":
+		return true
+	}
+	if strings.HasPrefix(clean, "profiles/") && strings.HasSuffix(clean, ".json") {
+		base := strings.TrimPrefix(clean, "profiles/")
+		return base != "" && base == filepath.Base(base)
+	}
+	return false
 }
 
 func pathHasSymlink(root, target string) bool {

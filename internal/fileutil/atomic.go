@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	kernel32dll = windows.NewLazyDLL("kernel32.dll")
+	kernel32dll = windows.NewLazySystemDLL("kernel32.dll")
 	moveFileExW = kernel32dll.NewProc("MoveFileExW")
 )
 

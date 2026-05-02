@@ -70,6 +70,16 @@ var (
 // wmTaskbarCreated — идентификатор зарегистрированного сообщения "TaskbarCreated".
 var wmTaskbarCreated uintptr
 
+var trayWndProcCallback = syscall.NewCallback(trayWndProc)
+
+func win32IntArg(v int32) uintptr {
+	return uintptr(v) // #nosec G115 -- Win32 syscall slots encode signed int parameters as uintptr.
+}
+
+func ignoreWin32Call(proc *windows.LazyProc, args ...uintptr) {
+	_, _, _ = proc.Call(args...)
+}
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const (
@@ -330,11 +340,11 @@ func win32Run(onReady func(), onExit func()) {
 
 	wcx := wndClassEx{
 		CbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-		LpfnWndProc:   syscall.NewCallback(trayWndProc),
+		LpfnWndProc:   trayWndProcCallback,
 		HInstance:     hInstance,
 		LpszClassName: className,
 	}
-	pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wcx)))
+	ignoreWin32Call(pRegisterClassEx, uintptr(unsafe.Pointer(&wcx)))
 
 	hwnd, _, _ := pCreateWindowEx.Call(
 		0, uintptr(unsafe.Pointer(className)), 0,
@@ -347,14 +357,16 @@ func win32Run(onReady func(), onExit func()) {
 			0, 0, 0, 0, 0,
 			0, 0, hInstance, 0)
 	}
+	runtime.KeepAlive(className)
 	win32hwnd = hwnd
 
 	// Dark mode
 	if pAllowDarkModeForWindow.Find() == nil {
-		pAllowDarkModeForWindow.Call(hwnd, 1)
+		ignoreWin32Call(pAllowDarkModeForWindow, hwnd, 1)
 	}
 	themeStr, _ := windows.UTF16PtrFromString("DarkMode_Explorer")
-	pSetWindowTheme.Call(hwnd, uintptr(unsafe.Pointer(themeStr)), 0)
+	ignoreWin32Call(pSetWindowTheme, hwnd, uintptr(unsafe.Pointer(themeStr)), 0)
+	runtime.KeepAlive(themeStr)
 
 	initialIcon := buildIconHandle(iconOff())
 	win32mu.Lock()
@@ -362,7 +374,7 @@ func win32Run(onReady func(), onExit func()) {
 	win32mu.Unlock()
 
 	nid := buildNID(hwnd, initialIcon, win32tooltipOff)
-	pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
+	ignoreWin32Call(pShellNotifyIcon, nimAdd, uintptr(unsafe.Pointer(&nid)))
 	win32SetTrayVersion(hwnd)
 
 	go onReady()
@@ -373,20 +385,20 @@ func win32Run(onReady func(), onExit func()) {
 		if r == 0 || r == ^uintptr(0) {
 			break
 		}
-		pTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-		pDispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
+		ignoreWin32Call(pTranslateMessage, uintptr(unsafe.Pointer(&m)))
+		ignoreWin32Call(pDispatchMessage, uintptr(unsafe.Pointer(&m)))
 	}
 
 	nid2 := buildNID(hwnd, 0, win32tooltipOff)
-	pShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&nid2)))
-	pDestroyWindow.Call(hwnd)
+	ignoreWin32Call(pShellNotifyIcon, nimDelete, uintptr(unsafe.Pointer(&nid2)))
+	ignoreWin32Call(pDestroyWindow, hwnd)
 
 	onExit()
 }
 
 func win32Quit() {
 	if win32hwnd != 0 {
-		pPostMessageW.Call(win32hwnd, wmQuitLoop, 0, 0)
+		ignoreWin32Call(pPostMessageW, win32hwnd, wmQuitLoop, 0, 0)
 	}
 }
 
@@ -428,7 +440,7 @@ func win32SetIconForHealth(enabled bool, state HealthState) {
 	if enabled {
 		copyUTF16(&nid.SzTip, "SafeSky — туннель включён")
 	}
-	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
 func win32SetTooltip(tip string) {
@@ -437,12 +449,18 @@ func win32SetTooltip(tip string) {
 	}
 	nid := buildNID(win32hwnd, win32hicon, win32tooltipOff)
 	copyUTF16(&nid.SzTip, tip)
-	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
 // ── Window procedure ──────────────────────────────────────────────────────
 
-func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
+func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) (ret uintptr) {
+	defer func() {
+		if recover() != nil {
+			ret = 0
+		}
+	}()
+
 	// WM_TASKBARCREATED — восстановление иконки после перезапуска Explorer
 	if wmTaskbarCreated != 0 && uMsg == wmTaskbarCreated {
 		win32mu.Lock()
@@ -456,7 +474,7 @@ func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 			tip = win32tooltipOn
 		}
 		nid := buildNID(hwnd, h, tip)
-		pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
+		ignoreWin32Call(pShellNotifyIcon, nimAdd, uintptr(unsafe.Pointer(&nid)))
 		win32SetTrayVersion(hwnd)
 		return 0
 	}
@@ -468,10 +486,10 @@ func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 		case wmLButtonUp, wmLButtonDblCk, ninSelect:
 			// NIN_SELECT: NOTIFYICON_VERSION_4 отправляет его вместо WM_LBUTTONUP
 			// при одинарном клике. Без этого меню не открывается на Windows 10/11.
-			pPostMessageW.Call(hwnd, wmShowMenu, 0, 0)
+			ignoreWin32Call(pPostMessageW, hwnd, wmShowMenu, 0, 0)
 		case wmRButtonUp, wmContextMenu:
 			// WM_CONTEXTMENU: NOTIFYICON_VERSION_4 отправляет его вместо WM_RBUTTONUP.
-			pPostMessageW.Call(hwnd, wmBringFront, 0, 0)
+			ignoreWin32Call(pPostMessageW, hwnd, wmBringFront, 0, 0)
 		}
 		return 0
 
@@ -486,7 +504,7 @@ func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) uintptr {
 		return 0
 
 	case wmQuitLoop:
-		pPostQuitMessage.Call(0)
+		ignoreWin32Call(pPostQuitMessage, 0)
 		return 0
 
 	case wmCommand:
@@ -529,11 +547,12 @@ func showTrayMenu(hwnd uintptr) {
 	if hMenu == 0 {
 		return
 	}
-	defer pDestroyMenu.Call(hMenu)
+	defer ignoreWin32Call(pDestroyMenu, hMenu)
 
 	// Dark mode theme для рамки меню
 	themeStr, _ := windows.UTF16PtrFromString("DarkMode_Explorer")
-	pSetWindowTheme.Call(hwnd, uintptr(unsafe.Pointer(themeStr)), 0)
+	ignoreWin32Call(pSetWindowTheme, hwnd, uintptr(unsafe.Pointer(themeStr)), 0)
+	runtime.KeepAlive(themeStr)
 
 	// Фон меню
 	setMenuBackground(hMenu)
@@ -591,13 +610,13 @@ func showTrayMenu(hwnd uintptr) {
 
 	// Показываем меню
 	var pt point
-	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	pSetForegroundWindow.Call(hwnd)
-	pTrackPopupMenu.Call(hMenu,
+	ignoreWin32Call(pGetCursorPos, uintptr(unsafe.Pointer(&pt)))
+	ignoreWin32Call(pSetForegroundWindow, hwnd)
+	ignoreWin32Call(pTrackPopupMenu, hMenu,
 		tpmLeftButton|tpmBottomAlign,
-		uintptr(pt.X), uintptr(pt.Y),
+		win32IntArg(pt.X), win32IntArg(pt.Y),
 		0, hwnd, 0)
-	pPostMessageW.Call(hwnd, 0, 0, 0)
+	ignoreWin32Call(pPostMessageW, hwnd, 0, 0, 0)
 }
 
 func handleMenuCommand(id int) {
@@ -649,20 +668,20 @@ func addOD(hMenu uintptr, item odItem) {
 	if !item.enabled {
 		flags |= mfGrayed
 	}
-	pAppendMenuW.Call(hMenu, flags, uintptr(item.id), uintptr(idx))
+	ignoreWin32Call(pAppendMenuW, hMenu, flags, uintptr(item.id), uintptr(idx))
 }
 
 func addODSep(hMenu uintptr) {
 	idx := len(currentODItems)
 	currentODItems = append(currentODItems, odItem{kind: odSep})
-	pAppendMenuW.Call(hMenu, uintptr(mfOwnerDraw), 0, uintptr(idx))
+	ignoreWin32Call(pAppendMenuW, hMenu, uintptr(mfOwnerDraw), 0, uintptr(idx))
 }
 
 func addODPopup(hMenu, hSub uintptr, item odItem) {
 	idx := len(currentODItems)
 	currentODItems = append(currentODItems, item)
 	flags := uintptr(mfOwnerDraw | mfPopup)
-	pAppendMenuW.Call(hMenu, flags, hSub, uintptr(idx))
+	ignoreWin32Call(pAppendMenuW, hMenu, flags, hSub, uintptr(idx))
 }
 
 // ── Owner-drawn: WM_MEASUREITEM ──────────────────────────────────────────
@@ -744,7 +763,7 @@ func handleDrawItem(lParam uintptr) {
 	}
 
 	// ── Текст ──
-	pSetBkMode.Call(hdc, transparent)
+	ignoreWin32Call(pSetBkMode, hdc, transparent)
 
 	// Выбираем цвет текста
 	textColor := uint32(clrText)
@@ -760,7 +779,7 @@ func handleDrawItem(lParam uintptr) {
 			}
 		}
 	}
-	pSetTextColor.Call(hdc, uintptr(textColor))
+	ignoreWin32Call(pSetTextColor, hdc, uintptr(textColor))
 
 	// Выбираем шрифт
 	font := getMenuFont()
@@ -797,19 +816,19 @@ func handleDrawItem(lParam uintptr) {
 		if selected && item.enabled {
 			dimColor = uint32(clrText)
 		}
-		pSetTextColor.Call(hdc, uintptr(dimColor))
+		ignoreWin32Call(pSetTextColor, hdc, uintptr(dimColor))
 		drawTextStr(hdc, "\u25B8", &arrowRC, dtRight|dtVCenter|dtSingleLine|dtNoPrefix)
 	} else if item.subtext != "" {
 		subtextColor := uint32(clrTextDim)
 		if selected && item.enabled {
 			subtextColor = uint32(clrText)
 		}
-		pSetTextColor.Call(hdc, uintptr(subtextColor))
+		ignoreWin32Call(pSetTextColor, hdc, uintptr(subtextColor))
 		drawTextStr(hdc, item.subtext, &textRC, dtRight|dtVCenter|dtSingleLine|dtNoPrefix)
 	}
 
 	// Восстанавливаем шрифт
-	pSelectObject.Call(hdc, oldFont)
+	ignoreWin32Call(pSelectObject, hdc, oldFont)
 }
 
 func win32MessageStruct[T any](addr uintptr) *T {
@@ -842,19 +861,19 @@ func createMenuFont(weight int) uintptr {
 	// Используем промежуточную переменную int32 → uintptr для корректного two's complement.
 	var nHeight int32 = -15
 	h, _, _ := pCreateFontDirect.Call(
-		uintptr(nHeight), // nHeight
-		0,                // nWidth
-		0,                // nEscapement
-		0,                // nOrientation
-		uintptr(weight),  // fnWeight
-		0,                // fdwItalic
-		0,                // fdwUnderline
-		0,                // fdwStrikeOut
-		1,                // fdwCharSet = DEFAULT_CHARSET
-		0,                // fdwOutputPrecision
-		0,                // fdwClipPrecision
-		5,                // fdwQuality = CLEARTYPE_QUALITY
-		0,                // fdwPitchAndFamily
+		win32IntArg(nHeight), // nHeight
+		0,                    // nWidth
+		0,                    // nEscapement
+		0,                    // nOrientation
+		uintptr(weight),      // fnWeight
+		0,                    // fdwItalic
+		0,                    // fdwUnderline
+		0,                    // fdwStrikeOut
+		1,                    // fdwCharSet = DEFAULT_CHARSET
+		0,                    // fdwOutputPrecision
+		0,                    // fdwClipPrecision
+		5,                    // fdwQuality = CLEARTYPE_QUALITY
+		0,                    // fdwPitchAndFamily
 		uintptr(unsafe.Pointer(name)),
 	)
 	runtime.KeepAlive(name)
@@ -866,8 +885,8 @@ func createMenuFont(weight int) uintptr {
 func fillRectColor(hdc uintptr, rc *rect, colorref uint32) {
 	brush, _, _ := pCreateSolidBrush.Call(uintptr(colorref))
 	if brush != 0 {
-		pFillRect.Call(hdc, uintptr(unsafe.Pointer(rc)), brush)
-		pDeleteObject.Call(brush)
+		ignoreWin32Call(pFillRect, hdc, uintptr(unsafe.Pointer(rc)), brush)
+		ignoreWin32Call(pDeleteObject, brush)
 	}
 }
 
@@ -875,10 +894,11 @@ func drawTextStr(hdc uintptr, text string, rc *rect, flags uint32) {
 	ptr, _ := windows.UTF16PtrFromString(text)
 	// Go 1.24+: отрицательные константы не конвертируются в uintptr напрямую.
 	var nCount int32 = -1 // null-terminated string
-	pDrawTextW.Call(
+	ignoreWin32Call(
+		pDrawTextW,
 		hdc,
 		uintptr(unsafe.Pointer(ptr)),
-		uintptr(nCount),
+		win32IntArg(nCount),
 		uintptr(unsafe.Pointer(rc)),
 		uintptr(flags),
 	)
@@ -894,7 +914,7 @@ func setMenuBackground(hMenu uintptr) {
 		FMask:   mimBackground,
 		HbrBack: menuBgBrush,
 	}
-	pSetMenuInfo.Call(hMenu, uintptr(unsafe.Pointer(&mi)))
+	ignoreWin32Call(pSetMenuInfo, hMenu, uintptr(unsafe.Pointer(&mi)))
 }
 
 // ── Icon helpers ──────────────────────────────────────────────────────────
@@ -928,7 +948,11 @@ func buildIconHandleWithResource(data []byte, preferResource bool) uintptr {
 	}
 	offset := uint32(data[18]) | uint32(data[19])<<8 | uint32(data[20])<<16 | uint32(data[21])<<24
 	size := uint32(data[14]) | uint32(data[15])<<8 | uint32(data[16])<<16 | uint32(data[17])<<24
-	if size == 0 || uint32(len(data)) < offset+size {
+	if uint64(len(data)) > uint64(^uint32(0)) {
+		return 0
+	}
+	dataLen := uint32(len(data)) // #nosec G115 -- bounded by the uint64 check above.
+	if size == 0 || dataLen < offset+size {
 		return 0
 	}
 	imgData := data[offset : offset+size]
@@ -966,7 +990,7 @@ func win32SetTrayVersion(hwnd uintptr) {
 		UTimeout: notifyIconVersion4,
 	}
 	nid.CbSize = uint32(unsafe.Sizeof(nid))
-	pShellNotifyIcon.Call(nimSetVersion, uintptr(unsafe.Pointer(&nid)))
+	ignoreWin32Call(pShellNotifyIcon, nimSetVersion, uintptr(unsafe.Pointer(&nid)))
 }
 
 func buildNID(hwnd, hicon uintptr, tip [128]uint16) notifyIconData {

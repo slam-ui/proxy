@@ -229,8 +229,12 @@ func buildServerRoutesServer(t *testing.T) (*Server, func()) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	os.MkdirAll("data", 0755)
-	os.WriteFile("secret.key", []byte(""), 0644)
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatalf("MkdirAll data: %v", err)
+	}
+	if err := os.WriteFile("secret.key", []byte(""), 0644); err != nil {
+		t.Fatalf("WriteFile secret.key: %v", err)
+	}
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -264,7 +268,7 @@ func TestFetchVLESSFromURL_PlainText(t *testing.T) {
 	const vlessLine = "vless://12345678-1234-1234-1234-123456789abc@example.com:443?security=reality&type=tcp#TestServer"
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("# список серверов\n" + vlessLine + "\n"))
+		_, _ = w.Write([]byte("# список серверов\n" + vlessLine + "\n"))
 	}))
 	defer ts.Close()
 
@@ -283,7 +287,7 @@ func TestFetchVLESSFromURL_Base64(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(vlessLine + "\n"))
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(encoded))
+		_, _ = w.Write([]byte(encoded))
 	}))
 	defer ts.Close()
 
@@ -320,7 +324,7 @@ func TestFindFirstVLESS_StripsBOM(t *testing.T) {
 // TestFetchVLESSFromURL_NoVLESS проверяет ошибку когда VLESS не найден.
 func TestFetchVLESSFromURL_NoVLESS(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("# пустой файл без vless"))
+		_, _ = w.Write([]byte("# пустой файл без vless"))
 	}))
 	defer ts.Close()
 
@@ -376,7 +380,9 @@ func TestHandleFetchURL_ValidVLESS(t *testing.T) {
 	}
 
 	var resp map[string]interface{}
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Unmarshal response: %v", err)
+	}
 
 	if resp["success"] != true {
 		t.Errorf("success=%v, ожидалось true", resp["success"])

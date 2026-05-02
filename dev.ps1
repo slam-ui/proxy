@@ -7,6 +7,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+$ProgressPreference = "SilentlyContinue"
+
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath,
+        [Parameter(ValueFromRemainingArguments=$true)]
+        [string[]]$Arguments
+    )
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath failed with exit code $LASTEXITCODE"
+    }
+}
 
 function Show-Help {
     Write-Host ""
@@ -53,7 +68,7 @@ function Show-Help {
 
 function Invoke-Build {
     Write-Host "Building application..." -ForegroundColor Yellow
-    go build -v -o build\proxy-client.exe .\cmd\proxy-client
+    Invoke-Native go build -v -o build\proxy-client.exe .\cmd\proxy-client
 }
 
 function Invoke-BuildRelease {
@@ -61,12 +76,10 @@ function Invoke-BuildRelease {
     if (-not (Test-Path build)) {
         New-Item -ItemType Directory build | Out-Null
     }
-    go build -ldflags="-s -w" -o build\proxy-client.exe .\cmd\proxy-client
+    Invoke-Native go build -ldflags="-s -w" -o build\proxy-client.exe .\cmd\proxy-client
 
-    if ($LASTEXITCODE -eq 0) {
-        $size = (Get-Item build\proxy-client.exe).Length / 1MB
-        Write-Host "[OK] Build complete: build\proxy-client.exe ($([math]::Round($size, 2)) MB)" -ForegroundColor Green
-    }
+    $size = (Get-Item build\proxy-client.exe).Length / 1MB
+    Write-Host "[OK] Build complete: build\proxy-client.exe ($([math]::Round($size, 2)) MB)" -ForegroundColor Green
 }
 
 function Invoke-Clean {
@@ -78,50 +91,49 @@ function Invoke-Clean {
 
 function Invoke-Test {
     Write-Host "Running all tests..." -ForegroundColor Yellow
-    go test -v ./...
+    Invoke-Native go test -v ./...
 }
 
 function Invoke-TestUnit {
     Write-Host "Running unit tests..." -ForegroundColor Yellow
-    go test -v -short ./internal/...
+    Invoke-Native go test -v -short ./internal/...
 }
 
 function Invoke-TestIntegration {
     Write-Host "Running integration tests..." -ForegroundColor Yellow
-    go test -v ./tests/...
+    Invoke-Native go test -v ./tests/...
 }
 
 function Invoke-TestCoverage {
     Write-Host "Running tests with coverage..." -ForegroundColor Yellow
-    go test -v -coverprofile=coverage.out -covermode=atomic ./...
-
-    if ($LASTEXITCODE -eq 0) {
-        go tool cover -html=coverage.out -o coverage.html
-        Write-Host ""
-        Write-Host "Coverage summary:" -ForegroundColor Cyan
-        go tool cover -func=coverage.out | Select-String "total"
-        Write-Host ""
-        Write-Host "[OK] Coverage report: coverage.html" -ForegroundColor Green
+    Invoke-Native go test -v -coverprofile=coverage.out -covermode=atomic ./...
+    Invoke-Native go tool cover -html=coverage.out -o coverage.html
+    Write-Host ""
+    Write-Host "Coverage summary:" -ForegroundColor Cyan
+    $coverageSummary = & go tool cover -func=coverage.out
+    if ($LASTEXITCODE -ne 0) {
+        throw "go failed with exit code $LASTEXITCODE"
     }
+    $coverageSummary | Select-String "total"
+    Write-Host ""
+    Write-Host "[OK] Coverage report: coverage.html" -ForegroundColor Green
 }
 
 function Invoke-TestBench {
     Write-Host "Running benchmarks..." -ForegroundColor Yellow
-    go test -bench=. -benchmem ./...
+    Invoke-Native go test -bench=. -benchmem ./...
 }
 
 function Invoke-Format {
     Write-Host "Formatting code..." -ForegroundColor Yellow
-    go fmt ./...
+    Invoke-Native go fmt ./...
     Write-Host "[OK] Format complete" -ForegroundColor Green
 }
 
 function Invoke-Vet {
     Write-Host "Running go vet..." -ForegroundColor Yellow
-    go vet ./...
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] Vet complete" -ForegroundColor Green
-    }
+    Invoke-Native go vet ./...
+    Write-Host "[OK] Vet complete" -ForegroundColor Green
 }
 
 function Invoke-Lint {
@@ -133,29 +145,27 @@ function Invoke-Lint {
         exit 1
     }
 
-    golangci-lint run ./...
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[OK] Lint complete" -ForegroundColor Green
-    }
+    Invoke-Native golangci-lint run ./...
+    Write-Host "[OK] Lint complete" -ForegroundColor Green
 }
 
 function Invoke-Deps {
     Write-Host "Installing dependencies..." -ForegroundColor Yellow
-    go mod download
-    go mod tidy
+    Invoke-Native go mod download
+    Invoke-Native go mod tidy
     Write-Host "[OK] Dependencies installed" -ForegroundColor Green
 }
 
 function Invoke-DepsUpdate {
     Write-Host "Updating dependencies..." -ForegroundColor Yellow
-    go get -u ./...
-    go mod tidy
+    Invoke-Native go get -u ./...
+    Invoke-Native go mod tidy
     Write-Host "[OK] Dependencies updated" -ForegroundColor Green
 }
 
 function Invoke-Run {
     Write-Host "Running application..." -ForegroundColor Yellow
-    go run .\cmd\proxy-client\main.go
+    Invoke-Native go run .\cmd\proxy-client\main.go
 }
 
 function Show-Info {

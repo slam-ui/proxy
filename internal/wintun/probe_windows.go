@@ -4,11 +4,16 @@ package wintun
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // ── Прямое зондирование kernel-объекта через wintun.dll ──────────────────────
@@ -22,11 +27,44 @@ import (
 // не существует — прямая проверка без угадывания через временной gap.
 
 var (
-	modwintun         = syscall.NewLazyDLL("wintun.dll")
-	procOpenAdapter   = modwintun.NewProc("WintunOpenAdapter")
-	procCloseAdapter  = modwintun.NewProc("WintunCloseAdapter")
-	procDeleteAdapter = modwintun.NewProc("WintunDeleteAdapter")
+	wintunLoadOnce    sync.Once
+	wintunLoadErr     error
+	procOpenAdapter   uintptr
+	procCloseAdapter  uintptr
+	procDeleteAdapter uintptr
 )
+
+func loadWintunDLL() error {
+	wintunLoadOnce.Do(func() {
+		exe, err := os.Executable()
+		if err != nil {
+			wintunLoadErr = fmt.Errorf("resolve executable path: %w", err)
+			return
+		}
+		dllPath := filepath.Join(filepath.Dir(exe), "wintun.dll")
+		h, err := windows.LoadLibraryEx(
+			dllPath,
+			0,
+			windows.LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|windows.LOAD_LIBRARY_SEARCH_SYSTEM32,
+		)
+		if err != nil {
+			wintunLoadErr = fmt.Errorf("load %s: %w", dllPath, err)
+			return
+		}
+		if procOpenAdapter, err = windows.GetProcAddress(h, "WintunOpenAdapter"); err != nil {
+			wintunLoadErr = fmt.Errorf("WintunOpenAdapter: %w", err)
+			return
+		}
+		if procCloseAdapter, err = windows.GetProcAddress(h, "WintunCloseAdapter"); err != nil {
+			wintunLoadErr = fmt.Errorf("WintunCloseAdapter: %w", err)
+			return
+		}
+		if procDeleteAdapter, err = windows.GetProcAddress(h, "WintunDeleteAdapter"); err != nil {
+			wintunLoadErr = fmt.Errorf("WintunDeleteAdapter: %w", err)
+		}
+	})
+	return wintunLoadErr
+}
 
 // kernelObjectFree возвращает true если wintun kernel-объект для ifName свободен.
 // Fail-open: если wintun.dll не найдена — возвращает true (не блокируем запуск).
@@ -48,7 +86,7 @@ var (
 // kernel-объект освобождён синхронно и PollUntilFree может пропустить длинный gap.
 // Возвращает false если DLL не найдена, адаптер не существовал, или Delete вернул ошибку.
 func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
-	if err := modwintun.Load(); err != nil {
+	if err := loadWintunDLL(); err != nil {
 		return false // wintun.dll не найдена
 	}
 	ptr, err := syscall.UTF16PtrFromString(ifName)
@@ -58,7 +96,7 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 	defer runtime.KeepAlive(ptr)
 
 	// Сначала открываем адаптер
-	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	r0, _, _ := syscall.SyscallN(procOpenAdapter, uintptr(unsafe.Pointer(ptr)))
 	if r0 == 0 {
 		// NULL на первый вызов может означать:
 		// 1. Адаптер не существует (успех)
@@ -72,7 +110,7 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 		if !SleepCtx(ctx, 100*time.Millisecond) {
 			return false
 		}
-		r0, _, _ = procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+		r0, _, _ = syscall.SyscallN(procOpenAdapter, uintptr(unsafe.Pointer(ptr)))
 		if r0 == 0 {
 			// По-прежнему не открывается → адаптер точно не существует
 			return true
@@ -82,9 +120,9 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 	}
 
 	// Удаляем: WintunDeleteAdapter(adapter) — освобождает kernel-объект синхронно
-	r1, _, _ := procDeleteAdapter.Call(r0)
+	r1, _, _ := syscall.SyscallN(procDeleteAdapter, r0)
 	// Закрываем handle (на случай если Delete не закрыл)
-	_, _, _ = procCloseAdapter.Call(r0)
+	_, _, _ = syscall.SyscallN(procCloseAdapter, r0)
 
 	// WintunDeleteAdapter возвращает TRUE (non-zero) при успехе
 	// БАГ #1: добавим финальную проверку что адаптер действительно удалён
@@ -97,10 +135,10 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 	if !SleepCtx(ctx, 100*time.Millisecond) {
 		return false
 	}
-	r2, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	r2, _, _ := syscall.SyscallN(procOpenAdapter, uintptr(unsafe.Pointer(ptr)))
 	if r2 != 0 {
 		// Адаптер всё ещё существует после "удаления" — не удалось
-		_, _, _ = procCloseAdapter.Call(r2)
+		_, _, _ = syscall.SyscallN(procCloseAdapter, r2)
 		return false
 	}
 
@@ -108,7 +146,7 @@ func ForceDeleteAdapter(ctx context.Context, ifName string) bool {
 }
 
 func kernelObjectFree(ifName string) bool {
-	if err := modwintun.Load(); err != nil {
+	if err := loadWintunDLL(); err != nil {
 		return true // wintun.dll не найдена, fail-open
 	}
 
@@ -128,13 +166,13 @@ func kernelObjectFree(ifName string) bool {
 	ptr := cachedIfNamePtr
 	cachedMu.Unlock()
 
-	r0, _, _ := procOpenAdapter.Call(uintptr(unsafe.Pointer(ptr)))
+	r0, _, _ := syscall.SyscallN(procOpenAdapter, uintptr(unsafe.Pointer(ptr)))
 	runtime.KeepAlive(ptr)
 	if r0 == 0 {
 		// NULL → kernel-объект не существует → свободен
 		return true
 	}
 	// Хэндл открыт → объект жив, закрываем немедленно
-	_, _, _ = procCloseAdapter.Call(r0)
+	_, _, _ = syscall.SyscallN(procCloseAdapter, r0)
 	return false
 }

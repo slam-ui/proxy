@@ -82,6 +82,23 @@ func TestStaticIndexUsesSplitAssets(t *testing.T) {
 		}
 		readStaticText(t, "static/"+path)
 	}
+	if strings.Contains(js, "document.write") {
+		t.Fatal("app.js must not use document.write for script loading")
+	}
+}
+
+func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
+	js := readStaticText(t, "static/js/00-core.js")
+	for _, required := range []string{
+		`const API = 'http://127.0.0.1:8080/api';`,
+		`const FETCH_TIMEOUT_MS = 10000;`,
+		`new AbortController()`,
+		`ctrl.abort()`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("00-core.js missing %q", required)
+		}
+	}
 }
 
 func TestRulesManualEditorModalUsesExistingJsonFunctions(t *testing.T) {

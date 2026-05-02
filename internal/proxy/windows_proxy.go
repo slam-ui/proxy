@@ -4,8 +4,8 @@ package proxy
 
 import (
 	"fmt"
-	"syscall"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	modWininet            = syscall.NewLazyDLL("wininet.dll")
+	modWininet            = windows.NewLazySystemDLL("wininet.dll")
 	procInternetSetOption = modWininet.NewProc("InternetSetOptionW")
 )
 

@@ -12,6 +12,8 @@ import (
 
 	"proxyclient/internal/apprules"
 	"proxyclient/internal/logger"
+
+	"golang.org/x/sys/windows"
 )
 
 // Monitor интерфейс для мониторинга процессов
@@ -163,7 +165,7 @@ func (m *monitor) refresh() error {
 	if err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
-	defer syscall.CloseHandle(snapshot)
+	defer func() { _ = syscall.CloseHandle(snapshot) }()
 
 	snaps, err := enumProcesses(snapshot)
 	if err != nil {
@@ -226,7 +228,7 @@ func (m *monitor) monitorLoop(ticker *time.Ticker, stopChan <-chan struct{}) {
 // Windows API functions and structures
 
 var (
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	kernel32             = windows.NewLazySystemDLL("kernel32.dll")
 	procCreateToolhelp32 = kernel32.NewProc("CreateToolhelp32Snapshot")
 	procProcess32First   = kernel32.NewProc("Process32FirstW")
 	procProcess32Next    = kernel32.NewProc("Process32NextW")
@@ -340,7 +342,7 @@ func getProcessInfo(snap processSnapshot) (*apprules.ProcessInfo, error) {
 			return nil, fmt.Errorf("failed to open process %d: %v", pid, err)
 		}
 	}
-	defer syscall.CloseHandle(syscall.Handle(handle))
+	defer func() { _ = syscall.CloseHandle(syscall.Handle(handle)) }()
 
 	// Получаем путь к executable
 	var pathBuf [MAX_PATH]uint16

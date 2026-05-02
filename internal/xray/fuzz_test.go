@@ -141,9 +141,13 @@ func FuzzTailWriter(f *testing.F) {
 		// Инвариант 3: если были переносы строк и произошла обрезка,
 		// результат должен начинаться с начала строки
 		if len(data) > maxSize && maxSize > 0 && bytes.Contains(data, []byte("\n")) {
-			if len(result) > 0 && !bytes.HasPrefix(data, []byte(result[:1])) {
-				// Проверяем что не начинается посередине строки
-				// (т.е. предыдущий символ — перенос строки, или это начало буфера)
+			trimmedStart := len(data) - maxSize
+			if idx := bytes.IndexByte(data[trimmedStart:], '\n'); idx >= 0 && result != "" {
+				expectedStart := trimmedStart + idx + 1
+				actualStart := len(data) - len([]byte(result))
+				if actualStart != expectedStart {
+					t.Errorf("tailWriter начал вывод с позиции %d, ожидали %d", actualStart, expectedStart)
+				}
 			}
 		}
 

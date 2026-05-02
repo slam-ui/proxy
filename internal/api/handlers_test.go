@@ -80,7 +80,7 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 	SetupSettingsRoutes(srv)
 	srv.FinalizeRoutes()
 
-	return srv, h, func() { os.Chdir(old) }
+	return srv, h, func() { _ = os.Chdir(old) }
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body interface{}) *httptest.ResponseRecorder {
@@ -116,7 +116,9 @@ func TestHandleHealth(t *testing.T) {
 		t.Errorf("GET /api/health = %d, want 200", w.Code)
 	}
 	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
 	if resp["status"] != "ok" {
 		t.Errorf("status = %q, want ok", resp["status"])
 	}
@@ -135,7 +137,9 @@ func TestHandleStatus_XrayRunning(t *testing.T) {
 		t.Errorf("GET /api/status = %d, want 200", w.Code)
 	}
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if !resp.XRay.Running {
 		t.Error("XRay.Running должен быть true")
 	}
@@ -154,7 +158,9 @@ func TestHandleStatus_XrayStopped(t *testing.T) {
 
 	w := getJSON(t, srv.router, "/api/status")
 	var resp StatusResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
 	if resp.XRay.Running {
 		t.Error("XRay.Running должен быть false")
 	}
@@ -172,7 +178,9 @@ func TestTunListRules_EmptyInitially(t *testing.T) {
 		t.Fatalf("GET /api/tun/rules = %d", w.Code)
 	}
 	var resp RulesResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) != 0 {
 		t.Errorf("Rules = %v, want empty", resp.Rules)
 	}
@@ -199,7 +207,9 @@ func TestTunAddRule_Domain_AutoDetectsType(t *testing.T) {
 	// Проверяем что правило появилось
 	w2 := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(w2.Body).Decode(&resp)
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) != 1 {
 		t.Fatalf("Rules count = %d, want 1", len(resp.Rules))
 	}
@@ -224,7 +234,9 @@ func TestTunAddRule_StripURL_KeepsHost(t *testing.T) {
 		t.Fatalf("POST = %d, body: %s", w.Code, w.Body)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode add rule response: %v", err)
+	}
 	rule := result["rule"].(map[string]interface{})
 	if rule["value"] != "youtube.com" {
 		t.Errorf("после stripping URL, value = %q, want youtube.com", rule["value"])
@@ -286,7 +298,9 @@ func TestTunAddRule_GeoSite_DetectsType(t *testing.T) {
 		t.Fatalf("POST geosite:youtube = %d", w.Code)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode add rule response: %v", err)
+	}
 	rule := result["rule"].(map[string]interface{})
 	if rule["type"] != "geosite" {
 		t.Errorf("Type = %q, want geosite", rule["type"])
@@ -306,7 +320,9 @@ func TestTunAddRule_Process_DetectsType(t *testing.T) {
 		t.Fatalf("POST Discord.exe = %d", w.Code)
 	}
 	var result map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&result)
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("decode add rule response: %v", err)
+	}
 	rule := result["rule"].(map[string]interface{})
 	if rule["type"] != "process" {
 		t.Errorf("Type = %q, want process", rule["type"])
@@ -332,7 +348,9 @@ func TestTunDeleteRule_ExistingRule_Removes(t *testing.T) {
 	// Подтверждаем удаление
 	w2 := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(w2.Body).Decode(&resp)
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) != 0 {
 		t.Errorf("после удаления Rules = %v, want empty", resp.Rules)
 	}
@@ -380,7 +398,9 @@ func TestTunBulkReplace_ReplacesAll(t *testing.T) {
 	// Проверяем что старое правило исчезло, новые появились
 	w2 := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(w2.Body).Decode(&resp)
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if len(resp.Rules) != 2 {
 		t.Errorf("Rules count = %d, want 2", len(resp.Rules))
 	}
@@ -443,7 +463,9 @@ func TestTunSetDefault_ChangesDefault(t *testing.T) {
 
 	w2 := getJSON(t, srv.router, "/api/tun/rules")
 	var resp RulesResponse
-	json.NewDecoder(w2.Body).Decode(&resp)
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode rules response: %v", err)
+	}
 	if resp.DefaultAction != config.ActionDirect {
 		t.Errorf("DefaultAction = %q, want direct", resp.DefaultAction)
 	}
@@ -465,8 +487,10 @@ func TestTunSetDefault_InvalidAction_Returns400(t *testing.T) {
 func TestProfiles_SaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -503,8 +527,10 @@ func TestProfiles_SaveAndLoad(t *testing.T) {
 func TestProfiles_SaveNormalizesRouting(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -547,8 +573,10 @@ func TestProfiles_SaveNormalizesRouting(t *testing.T) {
 func TestProfiles_SaveInvalidRoutingReturns400(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -621,8 +649,10 @@ func TestProfiles_ApplyReplacesTunRules(t *testing.T) {
 func TestProfiles_List(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -638,7 +668,9 @@ func TestProfiles_List(t *testing.T) {
 		t.Fatalf("GET /api/profiles = %d", w.Code)
 	}
 	var resp map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&resp)
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode profiles response: %v", err)
+	}
 	profiles := resp["profiles"].([]interface{})
 	if len(profiles) != 0 {
 		t.Errorf("profiles = %v, want empty", profiles)
@@ -652,7 +684,9 @@ func TestProfiles_List(t *testing.T) {
 
 	w2 := getJSON(t, srv.router, "/api/profiles")
 	var resp2 map[string]interface{}
-	json.NewDecoder(w2.Body).Decode(&resp2)
+	if err := json.NewDecoder(w2.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode profiles response: %v", err)
+	}
 	profiles2 := resp2["profiles"].([]interface{})
 	if len(profiles2) != 1 {
 		t.Errorf("после сохранения profiles count = %d, want 1", len(profiles2))
@@ -662,8 +696,10 @@ func TestProfiles_List(t *testing.T) {
 func TestProfiles_InvalidName_Returns400(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -692,8 +728,10 @@ func TestProfiles_InvalidName_Returns400(t *testing.T) {
 func TestProfiles_Delete(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -718,7 +756,9 @@ func TestProfiles_Delete(t *testing.T) {
 	// Убедимся что профиль пропал из списка
 	w2 := getJSON(t, srv.router, "/api/profiles")
 	var resp map[string]interface{}
-	json.NewDecoder(w2.Body).Decode(&resp)
+	if err := json.NewDecoder(w2.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode profiles response: %v", err)
+	}
 	profiles := resp["profiles"].([]interface{})
 	if len(profiles) != 0 {
 		t.Errorf("после удаления profiles = %v, want empty", profiles)
@@ -728,8 +768,10 @@ func TestProfiles_Delete(t *testing.T) {
 func TestProfiles_PathTraversal_LoadReturns400(t *testing.T) {
 	dir := t.TempDir()
 	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
 
 	srv := NewServer(Config{
 		XRayManager:  &stubXray{},
@@ -1076,7 +1118,7 @@ func TestHandleBackup_ValidZIP(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	srv, cleanup := newProxySrv(t)
 	defer cleanup()
@@ -1119,7 +1161,7 @@ func TestHandleBackupRestore_TooLargeFile(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("Chdir: %v", err)
 	}
-	defer os.Chdir(old)
+	defer func() { _ = os.Chdir(old) }()
 
 	// Пишем 6 MB мусора напрямую в multipart — incompressible, тело реально > 5MB.
 	// (6MB нулей сжались бы в ~5KB ZIP, обходя проверку размера.)

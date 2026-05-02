@@ -183,9 +183,15 @@ func TestEngine_UpdateRule(t *testing.T) {
 
 func TestEngine_ListRules_SortedByPriorityDesc(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(newTestRule("low.exe", ActionProxy, 1))
-	e.AddRule(newTestRule("high.exe", ActionProxy, 100))
-	e.AddRule(newTestRule("mid.exe", ActionProxy, 50))
+	if _, err := e.AddRule(newTestRule("low.exe", ActionProxy, 1)); err != nil {
+		t.Fatalf("AddRule low.exe: %v", err)
+	}
+	if _, err := e.AddRule(newTestRule("high.exe", ActionProxy, 100)); err != nil {
+		t.Fatalf("AddRule high.exe: %v", err)
+	}
+	if _, err := e.AddRule(newTestRule("mid.exe", ActionProxy, 50)); err != nil {
+		t.Fatalf("AddRule mid.exe: %v", err)
+	}
 
 	rules := e.ListRules()
 	if len(rules) != 3 {
@@ -202,7 +208,9 @@ func TestEngine_ListRules_SortedByPriorityDesc(t *testing.T) {
 
 func TestEngine_Match_ExactName(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(newTestRule("chrome.exe", ActionProxy, 10))
+	if _, err := e.AddRule(newTestRule("chrome.exe", ActionProxy, 10)); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
 
 	m := e.Match("chrome.exe")
 	if !m.Matched {
@@ -215,7 +223,9 @@ func TestEngine_Match_ExactName(t *testing.T) {
 
 func TestEngine_Match_NoMatch(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(newTestRule("chrome.exe", ActionProxy, 10))
+	if _, err := e.AddRule(newTestRule("chrome.exe", ActionProxy, 10)); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
 
 	m := e.Match("firefox.exe")
 	if m.Matched {
@@ -229,7 +239,9 @@ func TestEngine_Match_NoMatch(t *testing.T) {
 func TestEngine_Match_DisabledRuleSkipped(t *testing.T) {
 	e := NewEngine()
 	r, _ := e.AddRule(newTestRule("chrome.exe", ActionProxy, 10))
-	e.DisableRule(r.ID)
+	if err := e.DisableRule(r.ID); err != nil {
+		t.Fatalf("DisableRule: %v", err)
+	}
 
 	m := e.Match("chrome.exe")
 	if m.Matched {
@@ -239,8 +251,12 @@ func TestEngine_Match_DisabledRuleSkipped(t *testing.T) {
 
 func TestEngine_Match_HigherPriorityWins(t *testing.T) {
 	e := NewEngine()
-	e.AddRule(newTestRule("chrome.exe", ActionDirect, 1))  // низкий приоритет
-	e.AddRule(newTestRule("chrome.exe", ActionProxy, 100)) // высокий приоритет
+	if _, err := e.AddRule(newTestRule("chrome.exe", ActionDirect, 1)); err != nil {
+		t.Fatalf("AddRule direct: %v", err)
+	}
+	if _, err := e.AddRule(newTestRule("chrome.exe", ActionProxy, 100)); err != nil {
+		t.Fatalf("AddRule proxy: %v", err)
+	}
 
 	m := e.Match("chrome.exe")
 	if !m.Matched {
@@ -299,7 +315,7 @@ func TestEngine_ConcurrentAddMatchDelete(t *testing.T) {
 			})
 			if r != nil {
 				e.Match("app.exe")
-				e.DeleteRule(r.ID)
+				_ = e.DeleteRule(r.ID)
 			}
 		}(i)
 	}

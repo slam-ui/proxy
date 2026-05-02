@@ -97,7 +97,7 @@ func withRetry(ctx context.Context, attempts int, fn func() error) error {
 		if i < attempts {
 			// backoff: base * 2^(i-1) ± 20% jitter
 			base := retryBaseDelay * (1 << uint(i-1))
-			jitter := time.Duration(float64(base) * 0.4 * (rand.Float64() - 0.5)) //nolint:gosec
+			jitter := time.Duration(float64(base) * 0.4 * (rand.Float64() - 0.5)) // #nosec G404 -- non-cryptographic retry jitter.
 			wait := base + jitter
 			if wait < 0 {
 				wait = 0

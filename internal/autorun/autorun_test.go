@@ -73,9 +73,13 @@ func TestEnableDisable_RoundTrip(t *testing.T) {
 	// Cleanup at the end
 	defer func() {
 		if wasEnabled {
-			Enable()
+			if err := Enable(); err != nil {
+				t.Logf("restore Enable error: %v", err)
+			}
 		} else {
-			Disable()
+			if err := Disable(); err != nil {
+				t.Logf("restore Disable error: %v", err)
+			}
 		}
 	}()
 
@@ -102,7 +106,9 @@ func TestEnableDisable_RoundTrip(t *testing.T) {
 	}
 
 	// Cleanup
-	Disable()
+	if err := Disable(); err != nil {
+		t.Logf("cleanup Disable error: %v", err)
+	}
 }
 
 func TestIsEnabled_ReturnsFalse_WhenNotRegistered(t *testing.T) {
@@ -220,11 +226,11 @@ func TestEnableDisable_Concurrent(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			Enable()
+			_ = Enable()
 		}()
 		go func() {
 			defer wg.Done()
-			Disable()
+			_ = Disable()
 		}()
 	}
 
@@ -241,7 +247,7 @@ func TestEnableDisable_StateConsistency(t *testing.T) {
 	}
 
 	// Ensure clean state
-	Disable()
+	_ = Disable()
 
 	// Enable
 	if err := Enable(); err != nil {

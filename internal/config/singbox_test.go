@@ -175,9 +175,9 @@ func TestGenerateSingBoxConfig_MissingGeositeFile_SkippedSilently(t *testing.T) 
 
 	// Создаём валидный secret.key
 	secretPath := filepath.Join(dir, "secret.key")
-	os.WriteFile(secretPath, []byte(
+	mustWriteFile(t, secretPath, []byte(
 		"vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=testkey&sid=abc",
-	), 0644)
+	))
 
 	outputPath := filepath.Join(dir, "out.json")
 
@@ -190,11 +190,14 @@ func TestGenerateSingBoxConfig_MissingGeositeFile_SkippedSilently(t *testing.T) 
 	}
 
 	// Меняем CWD в dir чтобы GenerateSingBoxConfig искал .bin там
-	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	mustChdir(t, dir)
+	defer mustChdir(t, old)
 
-	err := GenerateSingBoxConfig(secretPath, outputPath, cfg)
+	err = GenerateSingBoxConfig(secretPath, outputPath, cfg)
 	if err != nil {
 		t.Fatalf("не ожидали ошибку при отсутствующем geosite файле, got: %v", err)
 	}
@@ -212,13 +215,16 @@ func TestGenerateSingBoxConfig_PartialMissingGeositeKeepsValidRuleSets(t *testin
 	dir := t.TempDir()
 
 	secretPath := filepath.Join(dir, "secret.key")
-	os.WriteFile(secretPath, []byte(
+	mustWriteFile(t, secretPath, []byte(
 		"vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=testkey&sid=abc",
-	), 0644)
+	))
 
-	old, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(old)
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd: %v", err)
+	}
+	mustChdir(t, dir)
+	defer mustChdir(t, old)
 
 	if err := os.MkdirAll("data", 0755); err != nil {
 		t.Fatalf("MkdirAll data: %v", err)
@@ -297,7 +303,7 @@ func TestGenerateSingBoxConfig_MissingSecretKey_ReturnsError(t *testing.T) {
 func TestGenerateSingBoxConfig_InvalidVLESS_ReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	secretPath := filepath.Join(dir, "bad.key")
-	os.WriteFile(secretPath, []byte("not-a-vless-url"), 0644)
+	mustWriteFile(t, secretPath, []byte("not-a-vless-url"))
 
 	err := GenerateSingBoxConfig(secretPath, filepath.Join(dir, "out.json"), DefaultRoutingConfig())
 	if err == nil {
@@ -310,7 +316,7 @@ func TestGenerateSingBoxConfig_InvalidVLESS_ReturnsError(t *testing.T) {
 func TestParseVLESSKey_Valid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.key")
 	url := "vless://12345678-1234-1234-1234-123456789abc@example.com:443?sni=www.google.com&pbk=mypubkey&sid=abc123"
-	os.WriteFile(path, []byte(url), 0644)
+	mustWriteFile(t, path, []byte(url))
 
 	p, err := parseVLESSKey(path)
 	if err != nil {
@@ -340,7 +346,7 @@ func TestParseVLESSKey_WithBOM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bom.key")
 	url := "vless://uuid@host.com:443?sni=x.com&pbk=k&sid=s"
 	// BOM + URL — должен быть стриппирован
-	os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, []byte(url)...), 0644)
+	mustWriteFile(t, path, append([]byte{0xEF, 0xBB, 0xBF}, []byte(url)...))
 
 	_, err := parseVLESSKey(path)
 	if err != nil {
@@ -350,7 +356,7 @@ func TestParseVLESSKey_WithBOM(t *testing.T) {
 
 func TestParseVLESSKey_WrongProtocol_ReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.key")
-	os.WriteFile(path, []byte("http://example.com:443"), 0644)
+	mustWriteFile(t, path, []byte("http://example.com:443"))
 	_, err := parseVLESSKey(path)
 	if err == nil {
 		t.Error("ожидали ошибку для non-vless URL")
@@ -359,7 +365,7 @@ func TestParseVLESSKey_WrongProtocol_ReturnsError(t *testing.T) {
 
 func TestParseVLESSKey_Empty_ReturnsError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "s.key")
-	os.WriteFile(path, []byte(""), 0644)
+	mustWriteFile(t, path, []byte(""))
 	_, err := parseVLESSKey(path)
 	if err == nil {
 		t.Error("ожидали ошибку для пустого файла")

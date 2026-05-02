@@ -93,16 +93,23 @@ func DefaultAppConfig() AppConfig {
 			"https://ifconfig.me/ip",
 		},
 		SecretFile:         "secret.key",
-		SingBoxPath:        "./sing-box.exe",
+		SingBoxPath:        defaultAppPath("sing-box.exe"),
 		ConfigPath:         "config.singbox.json",
 		RuntimeFile:        "config.runtime.json",
 		DataDir:            config.DataDir,
 		SettingsFile:       config.AppSettingsFile,
 		AppRulesFile:       config.DataDir + "/app_rules.json",
 		APIAddress:         config.APIAddress,
-		WebUIURL:           "http://localhost:8080",
+		WebUIURL:           "http://127.0.0.1:8080",
 		ProxyGuardInterval: 5 * time.Second, // B-2: проверка каждые 5 секунд
 	}
+}
+
+func defaultAppPath(name string) string {
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), name)
+	}
+	return "." + string(os.PathSeparator) + name
 }
 
 // App управляет полным жизненным циклом прокси-клиента.
@@ -732,7 +739,7 @@ func (a *App) runLatencyHistory() {
 		case <-a.lifecycleCtx.Done():
 			return
 		case <-t.C:
-			req, _ := http.NewRequestWithContext(a.lifecycleCtx, http.MethodGet, "http://localhost"+a.cfg.APIAddress+"/api/servers/ping-all", nil)
+			req, _ := http.NewRequestWithContext(a.lifecycleCtx, http.MethodGet, "http://"+apiTCPAddress(a.cfg.APIAddress)+"/api/servers/ping-all", nil)
 			resp, err := client.Do(req)
 			if err != nil {
 				continue
@@ -1112,7 +1119,7 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 		}
 	}
 	if processMonitor != nil {
-		processMonitor.Stop()
+		_ = processMonitor.Stop()
 	}
 
 	// BUG FIX #18: RecordStop() удаляет CleanShutdownFile — не вызываем его

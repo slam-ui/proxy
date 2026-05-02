@@ -23,7 +23,7 @@ func TestTailWriter_EmptyWrite_NoPanic(t *testing.T) {
 func TestTailWriter_UnicodeContent_NotCorrupted(t *testing.T) {
 	tw := newTailWriter(512)
 	msg := "Ошибка: невалидный конфиг sing-box. Проверьте параметры.\n"
-	tw.Write([]byte(msg))
+	mustWriteTail(t, tw, []byte(msg))
 
 	out := tw.String()
 	if !utf8.ValidString(out) {
@@ -38,7 +38,7 @@ func TestTailWriter_ExactlyMaxBytes_DoesNotExceed(t *testing.T) {
 	const maxBytes = 100
 	tw := newTailWriter(maxBytes)
 	data := strings.Repeat("x", maxBytes*3)
-	tw.Write([]byte(data))
+	mustWriteTail(t, tw, []byte(data))
 
 	out := tw.String()
 	if len(out) > maxBytes {
@@ -49,9 +49,9 @@ func TestTailWriter_ExactlyMaxBytes_DoesNotExceed(t *testing.T) {
 func TestTailWriter_ManyWrites_PreservesLastContent(t *testing.T) {
 	tw := newTailWriter(200)
 	for i := 0; i < 50; i++ {
-		tw.Write([]byte("обычная строка лога\n"))
+		mustWriteTail(t, tw, []byte("обычная строка лога\n"))
 	}
-	tw.Write([]byte("ФИНАЛЬНАЯ СТРОКА\n"))
+	mustWriteTail(t, tw, []byte("ФИНАЛЬНАЯ СТРОКА\n"))
 
 	out := tw.String()
 	if !strings.Contains(out, "ФИНАЛЬНАЯ") {
@@ -61,7 +61,7 @@ func TestTailWriter_ManyWrites_PreservesLastContent(t *testing.T) {
 
 func TestTailWriter_Reset_ClearsBuffer(t *testing.T) {
 	tw := newTailWriter(256)
-	tw.Write([]byte("данные до сброса\n"))
+	mustWriteTail(t, tw, []byte("данные до сброса\n"))
 	tw.Reset()
 	out := tw.String()
 	if strings.Contains(out, "данные до сброса") {
@@ -71,7 +71,7 @@ func TestTailWriter_Reset_ClearsBuffer(t *testing.T) {
 
 func TestTailWriter_String_IdempotentAfterSameWrite(t *testing.T) {
 	tw := newTailWriter(256)
-	tw.Write([]byte("тест\n"))
+	mustWriteTail(t, tw, []byte("тест\n"))
 	s1 := tw.String()
 	s2 := tw.String()
 	if s1 != s2 {
@@ -262,5 +262,16 @@ func TestManager_Uptime_WhenNotStarted_IsNearZero(t *testing.T) {
 // ─── вспомогательные типы ─────────────────────────────────────────────────────
 
 type simpleErr struct{ msg string }
+
+func mustWriteTail(t *testing.T, tw *tailWriter, data []byte) {
+	t.Helper()
+	n, err := tw.Write(data)
+	if err != nil {
+		t.Fatalf("tailWriter.Write вернул ошибку: %v", err)
+	}
+	if n != len(data) {
+		t.Fatalf("tailWriter.Write записал %d байт, ожидали %d", n, len(data))
+	}
+}
 
 func (e *simpleErr) Error() string { return e.msg }

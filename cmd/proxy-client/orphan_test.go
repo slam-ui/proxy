@@ -36,6 +36,8 @@ import (
 
 	"proxyclient/internal/fileutil"
 	"proxyclient/internal/logger"
+
+	"golang.org/x/sys/windows"
 )
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -82,7 +84,7 @@ var _ logger.Logger = (*captureLogger)(nil)
 // ══════════════════════════════════════════════════════════════════════════════
 
 var (
-	kernel32dll      = syscall.NewLazyDLL("kernel32.dll")
+	kernel32dll      = windows.NewLazySystemDLL("kernel32.dll")
 	procCreateMutex  = kernel32dll.NewProc("CreateMutexW")
 	procReleaseMutex = kernel32dll.NewProc("ReleaseMutex")
 )
@@ -101,7 +103,7 @@ func tryAcquireNamedMutex(name string) (syscall.Handle, error) {
 	}
 	const errAlreadyExists = syscall.Errno(183) // ERROR_ALREADY_EXISTS
 	if lastErr == errAlreadyExists {
-		syscall.CloseHandle(syscall.Handle(h))
+		_ = syscall.CloseHandle(syscall.Handle(h))
 		return 0, fmt.Errorf("already exists: %w", errAlreadyExists)
 	}
 	return syscall.Handle(h), nil
@@ -109,8 +111,8 @@ func tryAcquireNamedMutex(name string) (syscall.Handle, error) {
 
 // releaseNamedMutex освобождает и закрывает handle.
 func releaseNamedMutex(h syscall.Handle) {
-	procReleaseMutex.Call(uintptr(h))
-	syscall.CloseHandle(h)
+	_, _, _ = procReleaseMutex.Call(uintptr(h))
+	_ = syscall.CloseHandle(h)
 }
 
 // randomMutexName генерирует глобально уникальное имя для теста.
@@ -146,7 +148,7 @@ func runOrphanHelper(mutexName string) {
 		os.Exit(1)
 	}
 	fmt.Println("READY")
-	os.Stdout.Sync()
+	_ = os.Stdout.Sync()
 	// Спим долго — родитель нас убьёт раньше.
 	// time.Sleep используется вместо WaitForSingleObject: последний re-entrant
 	// и возвращается немедленно если поток уже владеет mutex.
@@ -170,7 +172,7 @@ func spawnOrphanProcess(t *testing.T, mutexName string) *exec.Cmd {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn orphan: %v", err)
 	}
-	pw.Close()
+	_ = pw.Close()
 
 	ready := make(chan struct{})
 	go func() {
@@ -179,15 +181,18 @@ func spawnOrphanProcess(t *testing.T, mutexName string) *exec.Cmd {
 		if strings.TrimSpace(string(buf[:n])) == "READY" {
 			close(ready)
 		}
-		pr.Close()
+		_ = pr.Close()
 	}()
 	select {
 	case <-ready:
 	case <-time.After(5 * time.Second):
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 		t.Fatal("orphan subprocess did not signal READY in 5s")
 	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
 	return cmd
 }
 
@@ -504,7 +509,7 @@ func TestKillProcessesByName_KillsOrphanAndReturnsTrue(t *testing.T) {
 
 	// Процесс должен завершиться после kill
 	done := make(chan struct{})
-	go func() { orphan.Wait(); close(done) }()
+	go func() { _ = orphan.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
@@ -532,7 +537,7 @@ func TestKillProcessesByName_MultipleOrphans(t *testing.T) {
 
 	for i, o := range orphans {
 		done := make(chan struct{})
-		go func(cmd *exec.Cmd) { cmd.Wait(); close(done) }(o)
+		go func(cmd *exec.Cmd) { _ = cmd.Wait(); close(done) }(o)
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
@@ -589,8 +594,8 @@ func TestHandleLeak_BugReproduction(t *testing.T) {
 	mutexName := randomMutexName(t)
 	orphan := spawnOrphanProcess(t, mutexName)
 
-	orphan.Process.Kill()
-	orphan.Wait()
+	_ = orphan.Process.Kill()
+	_ = orphan.Wait()
 	t.Log("Orphan убит")
 
 	h, err := tryAcquireNamedMutex(mutexName)
@@ -622,8 +627,8 @@ func TestHandleLeak_WaitSolvesProblem(t *testing.T) {
 		mutexName := randomMutexName(t)
 		orphan := spawnOrphanProcess(t, mutexName)
 
-		orphan.Process.Kill()
-		orphan.Wait()
+		_ = orphan.Process.Kill()
+		_ = orphan.Wait()
 
 		// Горутина симулирует async cleanup kernel object
 		var resourceReleased int32
@@ -676,8 +681,8 @@ func TestOrphanProcess_MutexReleasedAfterKill(t *testing.T) {
 		t.Fatal("mutex должен быть занят orphan-ом, но свободен")
 	}
 
-	orphan.Process.Kill()
-	orphan.Wait()
+	_ = orphan.Process.Kill()
+	_ = orphan.Wait()
 
 	// После kill mutex освобождается (для Named Mutex — синхронно)
 	deadline := time.Now().Add(2 * time.Second)
@@ -744,9 +749,9 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 	}
 
 	// Чистим возможные зависшие экземпляры
-	exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
+	_ = exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
 		"Get-Process -Name sing-box -ErrorAction SilentlyContinue | Stop-Process -Force").Run()
-	exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
+	_ = exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
 		"Remove-NetAdapter -Name tun0 -Confirm:$false -ErrorAction SilentlyContinue").Run()
 	time.Sleep(2 * time.Second)
 
@@ -761,7 +766,7 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 	// waitForTUN ждёт пока sing-box откроет HTTP inbound на 127.0.0.1:10807.
 	waitForTUN := func(proc *exec.Cmd, timeout time.Duration) bool {
 		died := make(chan struct{})
-		go func() { proc.Wait(); close(died) }()
+		go func() { _ = proc.Wait(); close(died) }()
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
 			select {
@@ -770,7 +775,7 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 			default:
 			}
 			if conn, err := net.DialTimeout("tcp", "127.0.0.1:10807", 300*time.Millisecond); err == nil {
-				conn.Close()
+				_ = conn.Close()
 				return true
 			}
 			time.Sleep(300 * time.Millisecond)
@@ -784,14 +789,14 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 		t.Fatalf("первый запуск: %v", err)
 	}
 	if !waitForTUN(first, 20*time.Second) {
-		first.Process.Kill()
+		_ = first.Process.Kill()
 		t.Fatal("TUN интерфейс не появился за 20с")
 	}
 	t.Log("TUN интерфейс поднят ✓")
 
 	t.Log("=== Шаг 2: Аварийное завершение ===")
-	first.Process.Kill()
-	first.Wait()
+	_ = first.Process.Kill()
+	_ = first.Wait()
 	t.Log("sing-box убит")
 
 	t.Log("=== Шаг 3: Немедленный рестарт (должен упасть с wintun conflict) ===")
@@ -806,8 +811,8 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 		t.Logf("sing-box упал при немедленном рестарте: %v", exitErr)
 		t.Log("Проверьте stderr выше на строку 'Cannot create a file when that file already exists'")
 	case <-time.After(20 * time.Second):
-		second.Process.Kill()
-		second.Wait()
+		_ = second.Process.Kill()
+		_ = second.Wait()
 		t.Log("Второй запуск выжил 20с — wintun освободился быстрее ожидаемого")
 	}
 
@@ -827,7 +832,10 @@ func TestKillOrphanSingBox_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("третий запуск: %v", err)
 	}
-	t.Cleanup(func() { third.Process.Kill(); third.Wait() })
+	t.Cleanup(func() {
+		_ = third.Process.Kill()
+		_ = third.Wait()
+	})
 
 	if waitForTUN(third, 20*time.Second) {
 		t.Log("ФИКС РАБОТАЕТ: TUN поднялся успешно после polling ✓")
@@ -861,7 +869,7 @@ func TestRuntimeInfo(t *testing.T) {
 		t.Logf("CreateToolhelp32Snapshot: %v", err)
 		return
 	}
-	defer syscall.CloseHandle(snap)
+	defer func() { _ = syscall.CloseHandle(snap) }()
 
 	type entry32 struct {
 		Size          uint32

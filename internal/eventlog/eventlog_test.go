@@ -308,7 +308,7 @@ func TestLog_Add_SourcePreserved(t *testing.T) {
 func TestLineWriter_SplitsOnNewlines(t *testing.T) {
 	l := New(20)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("line one\nline two\nline three\n"))
+	mustWriteLine(t, w, []byte("line one\nline two\nline three\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 3 {
@@ -323,12 +323,12 @@ func TestLineWriter_NoNewlineAtEnd_FlushesOnNext(t *testing.T) {
 	l := New(20)
 	w := NewLineWriter(l, "proc", LevelInfo)
 
-	w.Write([]byte("partial"))
+	mustWriteLine(t, w, []byte("partial"))
 	if len(l.GetSince(0)) != 0 {
 		t.Error("неполная строка не должна добавляться в лог")
 	}
 
-	w.Write([]byte(" line\nnext\n"))
+	mustWriteLine(t, w, []byte(" line\nnext\n"))
 	events := l.GetSince(0)
 	if len(events) != 2 {
 		t.Fatalf("len = %d, want 2", len(events))
@@ -341,7 +341,7 @@ func TestLineWriter_NoNewlineAtEnd_FlushesOnNext(t *testing.T) {
 func TestLineWriter_EmptyLines_Skipped(t *testing.T) {
 	l := New(20)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("\n\nhello\n\n"))
+	mustWriteLine(t, w, []byte("\n\nhello\n\n"))
 	events := l.GetSince(0)
 	if len(events) != 1 {
 		t.Errorf("len = %d, want 1 (только 'hello')", len(events))
@@ -356,7 +356,7 @@ func TestLineWriter_EmptyLines_Skipped(t *testing.T) {
 func TestLineWriter_WindowsCRLF(t *testing.T) {
 	l := New(20)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("line one\r\nline two\r\n"))
+	mustWriteLine(t, w, []byte("line one\r\nline two\r\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 2 {
@@ -374,7 +374,7 @@ func TestLineWriter_LargeWrite(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		fmt.Fprintf(&sb, "line %d\n", i)
 	}
-	w.Write([]byte(sb.String()))
+	mustWriteLine(t, w, []byte(sb.String()))
 	if n := len(l.GetSince(0)); n != 100 {
 		t.Errorf("len = %d, want 100", n)
 	}
@@ -383,7 +383,7 @@ func TestLineWriter_LargeWrite(t *testing.T) {
 func TestLineWriter_LevelPreserved(t *testing.T) {
 	l := New(10)
 	w := NewLineWriter(l, "proc", LevelError)
-	w.Write([]byte("error line\n"))
+	mustWriteLine(t, w, []byte("error line\n"))
 	if events := l.GetSince(0); events[0].Level != LevelError {
 		t.Errorf("Level = %q, want error", events[0].Level)
 	}

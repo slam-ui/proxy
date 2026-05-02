@@ -13,7 +13,7 @@ import (
 func TestLineWriter_TabTrimmed(t *testing.T) {
 	l := New(10)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("line with tabs\t\t\t\n"))
+	mustWriteLine(t, w, []byte("line with tabs\t\t\t\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 1 {
@@ -31,7 +31,7 @@ func TestLineWriter_TabTrimmed(t *testing.T) {
 func TestLineWriter_SpaceTrimmed(t *testing.T) {
 	l := New(10)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("trailing spaces   \n"))
+	mustWriteLine(t, w, []byte("trailing spaces   \n"))
 
 	events := l.GetSince(0)
 	if len(events) != 1 {
@@ -47,7 +47,7 @@ func TestLineWriter_SpaceTrimmed(t *testing.T) {
 func TestLineWriter_OnlyWhitespace_Skipped(t *testing.T) {
 	l := New(10)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("   \t  \r\n"))
+	mustWriteLine(t, w, []byte("   \t  \r\n"))
 
 	if n := len(l.GetSince(0)); n != 0 {
 		t.Errorf("строка из пробелов должна быть пропущена, got %d событий", n)
@@ -62,12 +62,12 @@ func TestLineWriter_MultipleChunksBuffered(t *testing.T) {
 
 	const msg = "hello world"
 	for _, ch := range msg {
-		w.Write([]byte(string(ch)))
+		mustWriteLine(t, w, []byte(string(ch)))
 		if len(l.GetSince(0)) != 0 {
 			t.Error("строка не должна добавляться до получения \\n")
 		}
 	}
-	w.Write([]byte("\n"))
+	mustWriteLine(t, w, []byte("\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 1 {
@@ -82,7 +82,7 @@ func TestLineWriter_MultipleChunksBuffered(t *testing.T) {
 func TestLineWriter_MixedCRLFAndLF(t *testing.T) {
 	l := New(20)
 	w := NewLineWriter(l, "proc", LevelInfo)
-	w.Write([]byte("unix line\nwindows line\r\nmixed line\n"))
+	mustWriteLine(t, w, []byte("unix line\nwindows line\r\nmixed line\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 3 {
@@ -99,7 +99,7 @@ func TestLineWriter_MixedCRLFAndLF(t *testing.T) {
 func TestLineWriter_SourcePreserved(t *testing.T) {
 	l := New(10)
 	w := NewLineWriter(l, "my-process", LevelWarn)
-	w.Write([]byte("some warning\n"))
+	mustWriteLine(t, w, []byte("some warning\n"))
 
 	events := l.GetSince(0)
 	if len(events) != 1 {
@@ -121,7 +121,7 @@ func TestLineWriter_ConcurrentWritesNoRace(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			w.Write([]byte(fmt.Sprintf("line from goroutine %d\n", n)))
+			_, _ = w.Write([]byte(fmt.Sprintf("line from goroutine %d\n", n)))
 		}(i)
 	}
 	wg.Wait()
@@ -337,6 +337,17 @@ type captureLogger struct {
 	count int
 }
 
+func mustWriteLine(t *testing.T, w *LineWriter, data []byte) {
+	t.Helper()
+	n, err := w.Write(data)
+	if err != nil {
+		t.Fatalf("LineWriter.Write вернул ошибку: %v", err)
+	}
+	if n != len(data) {
+		t.Fatalf("LineWriter.Write записал %d байт, ожидали %d", n, len(data))
+	}
+}
+
 func (c *captureLogger) Debug(f string, a ...interface{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -470,7 +481,7 @@ func TestLineWriter_NoDataLost_ManySmallWrites(t *testing.T) {
 
 	data := []byte("hello\nworld\n")
 	for _, b := range data {
-		w.Write([]byte{b})
+		mustWriteLine(t, w, []byte{b})
 	}
 
 	events := l.GetSince(0)

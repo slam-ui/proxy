@@ -1,6 +1,10 @@
 # monitor.ps1
 # Real-time monitoring for proxy-client
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
 Write-Host "Starting Proxy Client Monitor..." -ForegroundColor Cyan
 Write-Host "Press Ctrl+C to stop" -ForegroundColor Gray
 Write-Host ""
@@ -22,7 +26,7 @@ while ($true) {
     # API Status
     Write-Host "API Status:" -ForegroundColor Yellow
     try {
-        $status = Invoke-RestMethod "http://localhost:8080/api/status" -TimeoutSec 3
+        $status = Invoke-RestMethod "http://127.0.0.1:8080/api/status" -TimeoutSec 3
         Write-Host "  [ONLINE] API Server" -ForegroundColor Green
         Write-Host ""
 
