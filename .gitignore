@@ -93,6 +93,14 @@ test-output/
 # Local Codex workspace notes
 .codex-project-context.md
 
+# Local AI-agent artifacts
+.audit/
+.claude/settings.local.json
+.claude/worktrees/
+
+# Packaged build archives
+dist.zip
+
 # Windows
 *.lnk
 desktop.ini
