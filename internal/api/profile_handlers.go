@@ -95,10 +95,87 @@ func SetupProfileRoutes(s *Server) {
 
 	s.router.HandleFunc("/api/profiles", h.handleList).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles", h.handleSave).Methods("POST", "OPTIONS")
+	s.router.HandleFunc("/api/profiles/import", h.handleImport).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/builtins", s.handleBuiltinProfiles).Methods("GET", "OPTIONS")
+	s.router.HandleFunc("/api/profiles/{name}/export", h.handleExport).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}/apply", h.handleApply).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleLoad).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/profiles/{name}", h.handleDelete).Methods("DELETE", "OPTIONS")
+}
+
+func (h *ProfileHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxProfileSaveRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var p Profile
+	if err := dec.Decode(&p); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: multiple JSON values")
+		return
+	} else if !errors.Is(err, io.EOF) {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	normalizeProfile(&p)
+	if !reValidName.MatchString(p.Name) {
+		h.server.respondError(w, http.StatusBadRequest, "invalid profile name")
+		return
+	}
+	if err := validateServerSelector(p.ServerSelector); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !validKillSwitchMode(p.KillSwitch) {
+		h.server.respondError(w, http.StatusBadRequest, "kill_switch: off | connected | always")
+		return
+	}
+	if p.Routing.DefaultAction == "" {
+		p.Routing.DefaultAction = config.ActionProxy
+	}
+	if len(p.RoutingRules) > 0 {
+		p.Routing.Rules = p.RoutingRules
+	}
+	if p.DNSConfig != nil {
+		p.Routing.DNS = p.DNSConfig
+	}
+	if !isValidAction(p.Routing.DefaultAction) {
+		h.server.respondError(w, http.StatusBadRequest, "default_action: proxy | direct | block")
+		return
+	}
+	if err := normalizeRoutingRules(p.Routing.Rules); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	config.SanitizeRoutingConfig(&p.Routing)
+	p.RoutingRules = p.Routing.Rules
+	p.DNSConfig = p.Routing.DNS
+	now := time.Now()
+	if p.CreatedAt.IsZero() {
+		p.CreatedAt = now
+	}
+	p.UpdatedAt = now
+
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, "marshal error")
+		return
+	}
+	path, err := profilePath(sanitizeFilename(p.Name) + ".json")
+	if err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid profile name")
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := fileutil.WriteAtomic(path, data, 0644); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, "write error: "+err.Error())
+		return
+	}
+	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{"success": true, "profile": p})
 }
 
 // handleList GET /api/profiles — список всех сохранённых профилей
@@ -336,6 +413,26 @@ func (h *ProfileHandlers) handleLoad(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.server.respondJSON(w, http.StatusOK, p)
+}
+
+func (h *ProfileHandlers) handleExport(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	if !reValidName.MatchString(name) {
+		h.server.respondError(w, http.StatusBadRequest, "недопустимое имя профиля")
+		return
+	}
+	h.mu.RLock()
+	p, err := loadProfile(sanitizeFilename(name) + ".json")
+	h.mu.RUnlock()
+	if err != nil {
+		h.server.respondError(w, http.StatusNotFound, "профиль не найден")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(p.Name)+`.profile.json"`)
+	if err := json.NewEncoder(w).Encode(p); err != nil {
+		h.server.logger.Warn("handleExportProfile: %v", err)
+	}
 }
 
 // handleApply POST /api/profiles/{name}/apply — применяет профиль к текущему routing.
