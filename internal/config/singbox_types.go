@@ -86,25 +86,36 @@ type SBMultiplex struct {
 }
 
 type SBOutbound struct {
-	Type       string       `json:"type"`
-	Tag        string       `json:"tag"`
-	Server     string       `json:"server,omitempty"`
-	ServerPort int          `json:"server_port,omitempty"`
-	UUID       string       `json:"uuid,omitempty"`
-	Password   string       `json:"password,omitempty"`
-	Method     string       `json:"method,omitempty"`
-	Plugin     string       `json:"plugin,omitempty"`
-	PluginOpts string       `json:"plugin_opts,omitempty"`
-	Flow       string       `json:"flow,omitempty"`
-	TLS        *SBTLS       `json:"tls,omitempty"`
-	Transport  *SBTransport `json:"transport,omitempty"`
-	Multiplex  *SBMultiplex `json:"multiplex,omitempty"`
+	Type              string       `json:"type"`
+	Tag               string       `json:"tag"`
+	Server            string       `json:"server,omitempty"`
+	ServerPort        int          `json:"server_port,omitempty"`
+	UUID              string       `json:"uuid,omitempty"`
+	Password          string       `json:"password,omitempty"`
+	Method            string       `json:"method,omitempty"`
+	Obfs              *SBObfs      `json:"obfs,omitempty"`
+	UpMbps            int          `json:"up_mbps,omitempty"`
+	DownMbps          int          `json:"down_mbps,omitempty"`
+	CongestionControl string       `json:"congestion_control,omitempty"`
+	UDPRelayMode      string       `json:"udp_relay_mode,omitempty"`
+	MTU               int          `json:"mtu,omitempty"`
+	Plugin            string       `json:"plugin,omitempty"`
+	PluginOpts        string       `json:"plugin_opts,omitempty"`
+	Flow              string       `json:"flow,omitempty"`
+	TLS               *SBTLS       `json:"tls,omitempty"`
+	Transport         *SBTransport `json:"transport,omitempty"`
+	Multiplex         *SBMultiplex `json:"multiplex,omitempty"`
 	// tcp_fast_open — валидный dial-field в sing-box v1.10+.
 	// tcp_no_delay, tcp_keep_alive, connect_timeout удалены: не существуют в схеме
 	// sing-box v1.13.5 и вызывают FATAL[0000] "json: unknown field" при старте.
 	TCPFastOpen  *bool          `json:"tcp_fast_open,omitempty"`
 	TCPMultiPath bool           `json:"tcp_multi_path,omitempty"`
 	TLSFragment  *SBTLSFragment `json:"-"`
+}
+
+type SBObfs struct {
+	Type     string `json:"type"`
+	Password string `json:"password,omitempty"`
 }
 
 type SBTLS struct {

@@ -58,3 +58,44 @@ func TestParseServerContentVLESSStillWorks(t *testing.T) {
 		t.Fatalf("unexpected vless result: %+v", got)
 	}
 }
+
+func TestParseServerContentHysteria2(t *testing.T) {
+	got, err := ParseServerContent("hysteria2://pass@example.com:443?sni=edge.example.com&obfs=salamander&obfs-password=obfs&up=80&down=240#hy2")
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Proto != "hysteria2" || got.Outbound.Type != "hysteria2" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if got.Outbound.TLS == nil || got.Outbound.TLS.ServerName != "edge.example.com" || got.Outbound.TLS.ALPN[0] != "h3" {
+		t.Fatalf("unexpected tls: %+v", got.Outbound.TLS)
+	}
+	if got.Outbound.Obfs == nil || got.Outbound.Obfs.Password != "obfs" {
+		t.Fatalf("unexpected obfs: %+v", got.Outbound.Obfs)
+	}
+	if got.Outbound.UpMbps != 80 || got.Outbound.DownMbps != 240 || got.Outbound.MTU != 1200 {
+		t.Fatalf("unexpected bandwidth/mtu: %+v", got.Outbound)
+	}
+}
+
+func TestParseServerContentTUIC(t *testing.T) {
+	got, err := ParseServerContent("tuic://00000000-0000-0000-0000-000000000000:pass@example.com:443?sni=edge.example.com&congestion_control=cubic&udp_relay_mode=quic#tuic")
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Proto != "tuic" || got.Outbound.Type != "tuic" {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if got.Outbound.UUID == "" || got.Outbound.Password != "pass" {
+		t.Fatalf("unexpected auth: %+v", got.Outbound)
+	}
+	if got.Outbound.CongestionControl != "cubic" || got.Outbound.UDPRelayMode != "quic" {
+		t.Fatalf("unexpected tuic settings: %+v", got.Outbound)
+	}
+}
+
+func TestParseServerContentTUICRejectsBadCongestion(t *testing.T) {
+	if _, err := ParseServerContent("tuic://id:pass@example.com:443?congestion_control=bad"); err == nil {
+		t.Fatal("accepted bad congestion_control")
+	}
+}

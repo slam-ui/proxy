@@ -984,7 +984,10 @@ func findFirstVLESS(content string) string {
 func isSupportedServerURI(line string) bool {
 	return strings.HasPrefix(line, "vless://") ||
 		strings.HasPrefix(line, "trojan://") ||
-		strings.HasPrefix(line, "ss://")
+		strings.HasPrefix(line, "ss://") ||
+		strings.HasPrefix(line, "hysteria2://") ||
+		strings.HasPrefix(line, "hy2://") ||
+		strings.HasPrefix(line, "tuic://")
 }
 
 // base64DecodeSubscription пробует несколько вариантов Base64 (std, URL, raw).

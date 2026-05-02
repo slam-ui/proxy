@@ -764,7 +764,7 @@ async function importSrvUrl() {
   const url = $id('srvUrlInp').value.trim();
   if (!url) { showToast('Введите ссылку', 'warn'); _importSrvRunning = false; if (addBtn) addBtn.disabled = false; return; }
   if (!isSupportedServerURI(url)) {
-    showToast('Поддерживаются vless://, trojan://, ss://', 'warn');
+    showToast('Поддерживаются vless, trojan, ss, hysteria2, tuic', 'warn');
     _importSrvRunning = false; if (addBtn) addBtn.disabled = false; return;
   }
   try {
@@ -806,7 +806,7 @@ async function importClipboard() {
       return;
     }
   }
-  const protos = ['vless://', 'trojan://', 'ss://'];
+  const protos = ['vless://', 'trojan://', 'ss://', 'hysteria2://', 'hy2://', 'tuic://'];
   const lines = text.split(/\r?\n/).map(l => l.trim())
     .filter(l => protos.some(p => l.startsWith(p)));
   if (!lines.length) { showToast('Server URI не найдены', 'warn'); return; }
