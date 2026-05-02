@@ -12,6 +12,7 @@ import (
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
 	"proxyclient/internal/killswitch"
+	"proxyclient/internal/logger"
 )
 
 const (
@@ -161,6 +162,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 type SettingsResponse struct {
 	Autorun              bool                             `json:"autorun"`               // включён ли автозапуск при входе в Windows
 	KillSwitch           bool                             `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
+	KillSwitchState      killswitch.State                 `json:"kill_switch_state"`     // persisted fail-close state
 	ProxyGuard           bool                             `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
 	StartProxyOnLaunch   bool                             `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
 	ReconnectIntervalMin int                              `json:"reconnect_interval_min"`
@@ -187,6 +189,7 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
 		Autorun:              autorun.IsEnabled(),
 		KillSwitch:           killswitch.IsEnabled(),
+		KillSwitchState:      loadKillSwitchStateForResponse(h.server.logger),
 		ProxyGuard:           h.server.IsProxyGuardEnabled(),
 		StartProxyOnLaunch:   appSettings.StartProxyOnLaunch,
 		ReconnectIntervalMin: appSettings.ReconnectIntervalMin,
@@ -202,6 +205,14 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		Updates:              appSettings.Updates,
 		LeakTest:             appSettings.LeakTest,
 	})
+}
+
+func loadKillSwitchStateForResponse(log logger.Logger) killswitch.State {
+	st, err := killswitch.LoadState()
+	if err != nil && log != nil {
+		log.Warn("handleGetSettings: killswitch state: %v", err)
+	}
+	return st
 }
 
 // handleGetProxyGuard GET /api/settings/proxy-guard — получить статус Proxy Guard
