@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"proxyclient/internal/logger"
@@ -80,4 +83,23 @@ func TestHandleTrafficBudgetSetRejectsOversizedBody(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
 	}
+}
+
+func TestNetworkChangeTrackerConcurrentNoRace(t *testing.T) {
+	var seq atomic.Uint64
+	tracker := newNetworkChangeTracker(func() string {
+		return "fp-" + strconv.FormatUint(seq.Add(1), 10)
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				_ = tracker.changed()
+			}
+		}()
+	}
+	wg.Wait()
 }
