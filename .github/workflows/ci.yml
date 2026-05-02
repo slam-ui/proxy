@@ -28,6 +28,7 @@ permissions:
 
 env:
   GO_VERSION: '1.26.2'
+  GOTOOLCHAIN: go1.26.2
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
