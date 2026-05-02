@@ -135,6 +135,61 @@ func TestParseVLESSURL_TCPHTTPObfuscation(t *testing.T) {
 	}
 }
 
+func TestBuildVLESSOutbound_TCPHTTPObfuscation(t *testing.T) {
+	params := &VLESSParams{
+		Address:    "example.com",
+		Port:       443,
+		UUID:       "uuid",
+		SNI:        "sni.example.com",
+		Security:   "tls",
+		Type:       "tcp",
+		HeaderType: "http",
+		Path:       "/",
+		Host:       []string{"front.example.com"},
+	}
+	out := buildVLESSOutbound(params)
+	if out.Transport == nil {
+		t.Fatal("Transport должен быть задан для tcp headerType=http")
+	}
+	want := &SBTransport{Type: "http", Host: []string{"front.example.com"}, Path: "/", Method: "GET"}
+	if !reflect.DeepEqual(out.Transport, want) {
+		t.Fatalf("Transport = %#v, want %#v", out.Transport, want)
+	}
+}
+
+func TestBuildVLESSOutbound_ALPNFromURL(t *testing.T) {
+	params := &VLESSParams{
+		Address:  "example.com",
+		Port:     443,
+		UUID:     "uuid",
+		SNI:      "sni.example.com",
+		Security: "tls",
+		ALPN:     []string{"h2"},
+	}
+	out := buildVLESSOutbound(params)
+	if out.TLS == nil {
+		t.Fatal("TLS должен быть задан")
+	}
+	if !reflect.DeepEqual(out.TLS.ALPN, []string{"h2"}) {
+		t.Fatalf("ALPN = %#v, want [h2]", out.TLS.ALPN)
+	}
+}
+
+func TestBuildVLESSOutbound_Insecure(t *testing.T) {
+	params := &VLESSParams{
+		Address:  "example.com",
+		Port:     443,
+		UUID:     "uuid",
+		SNI:      "sni.example.com",
+		Security: "tls",
+		Insecure: true,
+	}
+	out := buildVLESSOutbound(params)
+	if out.TLS == nil || !out.TLS.Insecure {
+		t.Fatalf("TLS.Insecure должен быть true: %+v", out.TLS)
+	}
+}
+
 func TestParseVLESSURL_RejectsUnsupportedTransports(t *testing.T) {
 	for _, typ := range []string{"quic", "kcp", "mkcp"} {
 		t.Run(typ, func(t *testing.T) {
