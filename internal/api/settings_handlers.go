@@ -11,6 +11,7 @@ import (
 
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
+	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/logger"
 )
@@ -88,6 +89,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 		TrafficBudget        *config.TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *config.UpdateSettings            `json:"updates"`
 		LeakTest             *config.LeakTestSettings          `json:"leak_test"`
+		Hotkeys              *config.HotkeySettings            `json:"hotkeys"`
 	}
 	if !h.decodeRequest(w, r, &body, maxSettingsRequestBytes, "invalid body", false) {
 		return
@@ -145,6 +147,14 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	if body.LeakTest != nil {
 		settings.LeakTest = *body.LeakTest
 	}
+	if body.Hotkeys != nil {
+		normalized, err := normalizeHotkeySettings(*body.Hotkeys)
+		if err != nil {
+			h.server.respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		settings.Hotkeys = normalized
+	}
 	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -177,6 +187,7 @@ type SettingsResponse struct {
 	TrafficBudget        config.TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              config.UpdateSettings            `json:"updates"`
 	LeakTest             config.LeakTestSettings          `json:"leak_test"`
+	Hotkeys              config.HotkeySettings            `json:"hotkeys"`
 }
 
 // handleGetSettings GET /api/settings
@@ -204,7 +215,34 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		TrafficBudget:        appSettings.TrafficBudget,
 		Updates:              appSettings.Updates,
 		LeakTest:             appSettings.LeakTest,
+		Hotkeys:              appSettings.Hotkeys,
 	})
+}
+
+func normalizeHotkeySettings(settings config.HotkeySettings) (config.HotkeySettings, error) {
+	in := hotkeys.Settings{Enabled: settings.Enabled, Bindings: make([]hotkeys.Binding, 0, len(settings.Bindings))}
+	for _, binding := range settings.Bindings {
+		if binding.Accelerator != "" {
+			if _, err := hotkeys.ParseAccelerator(binding.Accelerator); err != nil {
+				return config.HotkeySettings{}, fmt.Errorf("hotkeys.%s: %w", binding.Action, err)
+			}
+		}
+		in.Bindings = append(in.Bindings, hotkeys.Binding{
+			Action:      hotkeys.Action(binding.Action),
+			Accelerator: binding.Accelerator,
+			Enabled:     binding.Enabled,
+		})
+	}
+	normalized := hotkeys.NormalizeSettings(in)
+	out := config.HotkeySettings{Enabled: normalized.Enabled, Bindings: make([]config.HotkeyBinding, 0, len(normalized.Bindings))}
+	for _, binding := range normalized.Bindings {
+		out.Bindings = append(out.Bindings, config.HotkeyBinding{
+			Action:      string(binding.Action),
+			Accelerator: binding.Accelerator,
+			Enabled:     binding.Enabled,
+		})
+	}
+	return out, nil
 }
 
 func loadKillSwitchStateForResponse(log logger.Logger) killswitch.State {
