@@ -78,6 +78,7 @@ func buildTunServer(t *testing.T) (*Server, *TunHandlers, func()) {
 	// Регистрируем все feature-роуты чтобы тесты покрывали реальный набор эндпоинтов
 	SetupProfileRoutes(srv)
 	SetupSettingsRoutes(srv)
+	SetupRoutingVisualRoutes(srv)
 	srv.FinalizeRoutes()
 
 	return srv, h, func() { _ = os.Chdir(old) }
