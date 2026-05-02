@@ -432,3 +432,89 @@
 - **Root cause:** Scripts lacked strict mode or `$LASTEXITCODE` handling in several paths.
 - **Fix:** Added strict mode/progress suppression, introduced `Invoke-Native` in `dev.ps1`, checked `go tool cover`, and switched probe URLs to `127.0.0.1`.
 - **Verified:** PowerShell script parse check, `pwsh -NoProfile -File .\dev.ps1 help`
+
+## VLESS transport support (feature)
+
+### [F-040] VLESS URL parser keeps real-world transport parameters
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/vless.go, internal/config/singbox_types.go, internal/config/vless_transports_test.go
+- **Commit:** 70884e2
+- **Symptom:** VLESS links with `type`, `serviceName`, `mode`, `path`, `host`, `alpn`, `security`, or `insecure` were silently downgraded to TCP+Reality.
+- **Root cause:** Parser only extracted the original TCP+Reality subset and dropped all unknown query fields.
+- **Fix:** Added explicit parsing/validation for `encryption`, `security`, ALPN, insecure mode, `spx` warning, transport type, header type, path/host/serviceName, gRPC mode, and WS early data.
+- **Test:** Parser tests for base fields, ws, grpc, http/h2, httpupgrade, tcp+http-obf, invalid transport/header/encryption, and warnings.
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-041] VLESS TCP transport and HTTP obfuscation
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/singbox_builder.go, internal/config/vless_transports_test.go
+- **Commit:** e84ef96
+- **Symptom:** `type=tcp&headerType=http` links were treated as plain TCP.
+- **Root cause:** `SBOutbound` had no `transport` block and builder had no transport-specific branch.
+- **Fix:** Added `SBTransport`, URL ALPN override, `tls.insecure`, `security=none` TLS disablement, and HTTP transport emulation for xray `headerType=http`.
+- **Test:** `TestBuildVLESSOutbound_TCPHTTPObfuscation`, `TestBuildVLESSOutbound_ALPNFromURL`, `TestBuildVLESSOutbound_Insecure`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-042] VLESS WebSocket transport
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/singbox_builder.go, internal/config/vless_transports_test.go
+- **Commit:** 5c1e926
+- **Symptom:** `type=ws` links lost `path`, `host`, and Cloudflare early data.
+- **Root cause:** Builder always emitted a TCP outbound without transport metadata.
+- **Fix:** Added `transport.type=ws`, Host header mapping, default `/` path, and `max_early_data` / `early_data_header_name` from `path?ed=N`.
+- **Test:** `TestParseVLESSURL_WS`, `TestBuildVLESSOutbound_WS`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-043] VLESS gRPC transport
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/singbox_builder.go, internal/config/vless_transports_test.go
+- **Commit:** 80af96e
+- **Symptom:** `type=grpc` links silently became TCP and could never connect to gRPC-framed servers.
+- **Root cause:** `serviceName` and `mode` were ignored and no gRPC transport block was generated.
+- **Fix:** Required `serviceName`, recorded user `mode`, warned when non-`gun` mode is ignored, and emitted `transport.type=grpc` with `service_name`.
+- **Test:** `TestParseVLESSURL_GRPC`, `TestBuildVLESSOutbound_GRPC`, `TestParseVLESSURL_RejectsGRPCWithoutServiceName`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-044] VLESS HTTP/H2 transport
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/singbox_builder.go, internal/config/vless_transports_test.go
+- **Commit:** 20e1422
+- **Symptom:** `type=http` / `type=h2` links lost host/path metadata.
+- **Root cause:** Parser did not normalize `h2`, and builder had no HTTP transport branch.
+- **Fix:** Normalized `type=h2` to sing-box `http`, split comma-separated hosts, required TLS for HTTP transport, and emitted method/path/host.
+- **Test:** `TestParseVLESSURL_HTTP`, `TestBuildVLESSOutbound_HTTP`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-045] VLESS HTTPUpgrade transport
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/singbox_builder.go, internal/config/vless_transports_test.go
+- **Commit:** e9d284f
+- **Symptom:** `type=httpupgrade` links were emitted as plain TCP.
+- **Root cause:** No builder support existed for HTTPUpgrade transport.
+- **Fix:** Added `transport.type=httpupgrade`, default `/` path, and Host header mapping accepted by sing-box 1.13.0.
+- **Test:** `TestParseVLESSURL_HTTPUpgrade`, `TestBuildVLESSOutbound_HTTPUpgrade`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+### [F-046] VLESS transport schema and backward-compat checks
+- **Severity:** Medium
+- **Category:** Feature
+- **File(s):** internal/config/vless_singbox_check_test.go, internal/config/vless_transports_test.go
+- **Commit:** b3b9a60, 66e3a50
+- **Symptom:** Transport JSON changes needed protection against sing-box schema drift and accidental TCP+Reality output changes.
+- **Root cause:** Existing tests did not run `sing-box check` for generated transport configs or pin the old outbound JSON.
+- **Fix:** Added a golden test for old TCP+Reality outbound JSON and a `sing-box check` integration test for tcp+reality, tcp+tls, tcp+http-obf, ws, grpc, http/h2, and httpupgrade.
+- **Test:** `TestBuildVLESSOutbound_TCPRealityGolden`, `TestSingBoxCheck_VLESSTransports`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/config/... -count=1 -race -timeout=120s`
+
+Summary:
+- Supported transports: tcp, tcp+http-obf, ws, grpc, http (h2), httpupgrade
+- Rejected with explicit error: quic, kcp, mkcp
+- Warnings on use: alpn fallback, insecure, grpc mode=multi, spx ignored
+- Tests added: 20 named tests plus transport subcases
+- Backward compat: verified by golden test for tcp+reality
