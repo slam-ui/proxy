@@ -542,7 +542,7 @@ Summary:
 - **Root cause:** Inline `unsafe.Pointer` conversions repeated audited Win32 lifetime assumptions at each call site.
 - **Fix:** Centralized conversions in small helpers with narrow `#nosec G103` rationale and `runtime.KeepAlive` where needed.
 - **Test:** package has no test files
-- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/window/... -count=1 -race -timeout=180s`, gosec total 164 -> 128
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/window/... -count=1 -race -timeout=180s`, gosec cleanup baseline 164 -> 128; historical audit total 291 -> 128
 
 ### [F-049] Tray owned handle cleanup
 - **Severity:** High
