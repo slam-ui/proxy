@@ -516,6 +516,33 @@
       </div>
     </div>
 
+    <!-- ── Подписки ── -->
+    <details class="pg-section" open>
+      <summary class="pg-section-ttl">Subscriptions</summary>
+      <div class="pg-section-body">
+        <div class="pg-inp-row" style="margin-bottom:8px">
+          <input class="pg-inp" id="subNameInp" placeholder="My Servers">
+          <select class="pg-inp" id="subIntervalInp">
+            <option value="manual">manual</option>
+            <option value="1h">1h</option>
+            <option value="6h">6h</option>
+            <option value="24h">24h</option>
+            <option value="7d">7d</option>
+          </select>
+        </div>
+        <div class="pg-inp-row" style="margin-bottom:8px">
+          <input class="pg-inp" id="subUrlInp" type="url" placeholder="https://example.com/subscription/user.txt">
+        </div>
+        <div class="pg-inp-row">
+          <input class="pg-inp" id="subUserAgentInp" placeholder="v2rayN/Mihomo Verge">
+          <button class="pg-btn acc" id="subAddBtn" onclick="addSubscription()">Добавить</button>
+        </div>
+        <div class="sub-list" id="subscriptionList">
+          <div class="pg-sub" style="text-align:center;padding:8px">загрузка...</div>
+        </div>
+      </div>
+    </details>
+
     <!-- ── Основное ── -->
     <div class="pg-section">
       <div class="pg-section-ttl">Основное</div>

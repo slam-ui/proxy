@@ -81,6 +81,17 @@
 .config-editor-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
 .config-pill{font-size:9px;font-family:var(--mono);color:var(--muted);background:var(--g1);border:0.5px solid var(--hairline);border-radius:6px;padding:3px 7px}
 .singbox-editor{min-height:52vh;font-size:10px;line-height:1.55}
+.sub-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.sub-item{border:0.5px solid var(--hairline);background:var(--g1);border-radius:8px;padding:10px;display:flex;gap:10px;align-items:flex-start;justify-content:space-between;min-width:0}
+.sub-main{min-width:0;flex:1}
+.sub-title{font-size:11px;font-weight:700;color:var(--text);letter-spacing:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub-url{font-size:9px;color:var(--muted);font-family:var(--mono);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.sub-chip{font-size:8.5px;color:var(--dim);border:0.5px solid var(--hairline);border-radius:6px;padding:2px 6px;background:var(--g0);white-space:nowrap}
+.sub-chip.warn{color:var(--warn);border-color:rgba(255,190,80,0.28)}
+.sub-chip.err{color:var(--off);border-color:rgba(255,80,116,0.28)}
+.sub-actions{display:flex;gap:6px;flex-shrink:0}
+@media (max-width:560px){.sub-item{flex-direction:column}.sub-actions{width:100%}.sub-actions .pg-btn{flex:1}}
 @media (max-width:760px){.settings-grid{grid-template-columns:1fr}.settings-wide{grid-column:auto}}
 
 /* ═══ RULES PAGE ═══ */
