@@ -24,6 +24,7 @@ type AppSettings struct {
 	NetworkProtection    NetworkProtectionSettings `json:"network_protection"`
 	TrafficBudget        TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              UpdateSettings            `json:"updates"`
+	LeakTest             LeakTestSettings          `json:"leak_test"`
 }
 
 func DefaultAppSettings() AppSettings {
@@ -52,6 +53,14 @@ func DefaultAppSettings() AppSettings {
 			Channel:     "stable",
 			BaseURL:     "https://example.com/safesky",
 			AutoInstall: false,
+		},
+		LeakTest: LeakTestSettings{
+			Enabled:             true,
+			Domain:              "dnsleak.example.com",
+			ReportURL:           "https://example.com/api/dnsleak/check",
+			CheckIntervalMin:    30,
+			ExpectedResolvers:   []string{},
+			DisableIPv6OnTunnel: false,
 		},
 	}
 }
@@ -97,6 +106,15 @@ type UpdateSettings struct {
 	AutoInstall bool   `json:"auto_install"`
 }
 
+type LeakTestSettings struct {
+	Enabled             bool     `json:"enabled"`
+	Domain              string   `json:"domain"`
+	ReportURL           string   `json:"report_url"`
+	ExpectedResolvers   []string `json:"expected_resolvers"`
+	CheckIntervalMin    int      `json:"check_interval_min"`
+	DisableIPv6OnTunnel bool     `json:"disable_ipv6_on_tunnel"`
+}
+
 func LoadAppSettings(path string) (AppSettings, error) {
 	settings := DefaultAppSettings()
 	data, err := os.ReadFile(path)
@@ -120,6 +138,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 		NetworkProtection    *NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *UpdateSettings            `json:"updates"`
+		LeakTest             *LeakTestSettings          `json:"leak_test"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return settings, fmt.Errorf("неверный формат настроек: %w", err)
@@ -160,6 +179,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	if raw.Updates != nil {
 		settings.Updates = *raw.Updates
 	}
+	if raw.LeakTest != nil {
+		settings.LeakTest = *raw.LeakTest
+	}
 	if settings.KeepaliveIntervalSec <= 0 {
 		settings.KeepaliveIntervalSec = 120
 	}
@@ -194,6 +216,15 @@ func normalizeAppSettings(settings *AppSettings) {
 	}
 	if settings.Updates.BaseURL == "" {
 		settings.Updates.BaseURL = "https://example.com/safesky"
+	}
+	if settings.LeakTest.Domain == "" {
+		settings.LeakTest.Domain = "dnsleak.example.com"
+	}
+	if settings.LeakTest.ReportURL == "" {
+		settings.LeakTest.ReportURL = "https://example.com/api/dnsleak/check"
+	}
+	if settings.LeakTest.CheckIntervalMin < 5 {
+		settings.LeakTest.CheckIntervalMin = 30
 	}
 }
 

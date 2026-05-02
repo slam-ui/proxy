@@ -133,11 +133,16 @@ async function runLeakCheck() {
   const btn = $id('leakCheckBtn');
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
   try {
-    const r = await fetch(API + '/leak-check');
+    const r = await fetch(API + '/leaktest/summary', { method: 'POST', timeoutMs: 30000 });
     const d = await r.json();
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    $id('leakCheckResult').textContent = `прокси ${d.proxy_ip || '—'} / напрямую ${d.direct_ip || '—'}`;
-    showToast(d.leaked ? 'Возможна утечка IP' : 'Утечек IP не найдено', d.leaked ? 'warn' : 'on');
+    const dns = d.dns || {};
+    const ipv6 = d.ipv6 || {};
+    const dnsLabel = d.dns_error ? 'DNS недоступен' : (dns.leaked ? 'DNS утечка' : `DNS ${dns.status || 'ok'}`);
+    const ipv6Label = d.ipv6_error ? 'IPv6 недоступен' : (ipv6.available ? 'IPv6 активен' : 'IPv6 нет');
+    $id('leakCheckResult').textContent = `${dnsLabel} · ${ipv6Label}`;
+    const leaked = !!(dns.leaked || ipv6.leaked);
+    showToast(leaked ? 'Обнаружен риск утечки' : 'Утечек не найдено', leaked ? 'warn' : 'on');
   } catch(e) {
     $id('leakCheckResult').textContent = 'ошибка';
     showToast('Проверка утечек: ' + e.message, 'off');
@@ -336,6 +341,9 @@ function applyLifecycleControls(d) {
   if ($id('trafficSessionMBInp')) $id('trafficSessionMBInp').value = tb.session_limit_mb || 0;
   if ($id('trafficTotalMBInp')) $id('trafficTotalMBInp').value = tb.total_limit_mb || 0;
   applyUpdateControls(_appSettingsCache.updates || {});
+  const lt = _appSettingsCache.leak_test || {};
+  if ($id('leakDomainInp')) $id('leakDomainInp').value = lt.domain || 'dnsleak.example.com';
+  if ($id('leakReportURLInp')) $id('leakReportURLInp').value = lt.report_url || 'https://example.com/api/dnsleak/check';
 }
 
 function applyUpdateControls(upd) {
@@ -389,6 +397,13 @@ async function saveLifecycleSettings() {
       warn_percent: 80
     },
     updates: currentUpdateSettings(),
+    leak_test: {
+      enabled: true,
+      domain: ($id('leakDomainInp')?.value || 'dnsleak.example.com').trim(),
+      report_url: ($id('leakReportURLInp')?.value || 'https://example.com/api/dnsleak/check').trim(),
+      expected_resolvers: [],
+      check_interval_min: 30
+    },
     schedule
   };
   try {
@@ -425,6 +440,10 @@ async function loadClientUpdateStatus() {
   } catch(e) {
     if ($id('appUpdateStatus')) $id('appUpdateStatus').textContent = 'статус обновлений недоступен';
   }
+}
+
+function openWebRTCTest() {
+  window.open(API + '/leaktest/webrtc', '_blank');
 }
 
 async function saveUpdateSettings() {

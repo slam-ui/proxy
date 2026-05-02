@@ -297,6 +297,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
 	SetupUpdateRoutes(s)
+	SetupLeakTestRoutes(s)
 	SetupImprovementRoutes(s)
 	SetupClientFeatureRoutes(s, ctx)
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов

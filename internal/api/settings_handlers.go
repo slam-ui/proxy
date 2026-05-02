@@ -86,6 +86,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 		NetworkProtection    *config.NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *config.TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *config.UpdateSettings            `json:"updates"`
+		LeakTest             *config.LeakTestSettings          `json:"leak_test"`
 	}
 	if !h.decodeRequest(w, r, &body, maxSettingsRequestBytes, "invalid body", false) {
 		return
@@ -140,6 +141,9 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	if body.Updates != nil {
 		settings.Updates = *body.Updates
 	}
+	if body.LeakTest != nil {
+		settings.LeakTest = *body.LeakTest
+	}
 	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -170,6 +174,7 @@ type SettingsResponse struct {
 	NetworkProtection    config.NetworkProtectionSettings `json:"network_protection"`
 	TrafficBudget        config.TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              config.UpdateSettings            `json:"updates"`
+	LeakTest             config.LeakTestSettings          `json:"leak_test"`
 }
 
 // handleGetSettings GET /api/settings
@@ -195,6 +200,7 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		NetworkProtection:    appSettings.NetworkProtection,
 		TrafficBudget:        appSettings.TrafficBudget,
 		Updates:              appSettings.Updates,
+		LeakTest:             appSettings.LeakTest,
 	})
 }
 
