@@ -680,6 +680,11 @@
         <div class="pg-row">
           <div><div class="pg-lbl">Проверка утечек</div><div class="pg-sub" id="leakCheckResult">—</div></div>
           <button class="pg-btn" id="leakCheckBtn" onclick="runLeakCheck()">Проверить</button>
+          <button class="pg-btn" onclick="openWebRTCTest()">WebRTC</button>
+        </div>
+        <div class="pg-inp-row" style="margin-top:8px">
+          <input class="pg-inp" id="leakDomainInp" type="text" placeholder="dnsleak.example.com">
+          <input class="pg-inp" id="leakReportURLInp" type="url" placeholder="https://example.com/api/dnsleak/check">
         </div>
         <div class="pg-row">
           <div><div class="pg-lbl">Итоговый трафик</div><div class="pg-sub" id="totalStatsResult">загрузка...</div></div>
