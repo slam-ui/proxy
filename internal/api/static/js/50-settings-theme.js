@@ -96,7 +96,7 @@ async function addClipboardServerFromBanner() {
   try {
     const r = await fetch(API + '/clipboard/vless');
     const d = await r.json();
-    if (!d.found || !d.url) { showToast('VLESS в буфере не найден', 'warn'); return; }
+    if (!d.found || !d.url) { showToast('Server URI в буфере не найден', 'warn'); return; }
     const add = await fetch(API + '/servers', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -763,8 +763,8 @@ async function importSrvUrl() {
   if (addBtn) addBtn.disabled = true;
   const url = $id('srvUrlInp').value.trim();
   if (!url) { showToast('Введите ссылку', 'warn'); _importSrvRunning = false; if (addBtn) addBtn.disabled = false; return; }
-  if (!url.startsWith('vless://')) {
-    showToast('Поддерживается только vless:// формат', 'warn');
+  if (!isSupportedServerURI(url)) {
+    showToast('Поддерживаются vless://, trojan://, ss://', 'warn');
     _importSrvRunning = false; if (addBtn) addBtn.disabled = false; return;
   }
   try {
@@ -806,10 +806,10 @@ async function importClipboard() {
       return;
     }
   }
-  const protos = ['vless://'];
+  const protos = ['vless://', 'trojan://', 'ss://'];
   const lines = text.split(/\r?\n/).map(l => l.trim())
     .filter(l => protos.some(p => l.startsWith(p)));
-  if (!lines.length) { showToast('VLESS-ссылки не найдены', 'warn'); return; }
+  if (!lines.length) { showToast('Server URI не найдены', 'warn'); return; }
   let added = 0, skipped = 0;
   for (const url of lines) {
     try {

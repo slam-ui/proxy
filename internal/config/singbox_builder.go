@@ -301,7 +301,7 @@ func parsePortString(s string) (int, error) {
 }
 
 // buildSingBoxConfig собирает SingBoxConfig из уже подготовленных компонентов.
-func buildSingBoxConfig(params *VLESSParams, outbound SBOutbound, tunExcludeAddr string, routingCfg *RoutingConfig) *SingBoxConfig {
+func buildSingBoxConfig(outbound SBOutbound, tunExcludeAddr string, routingCfg *RoutingConfig) *SingBoxConfig {
 	if routingCfg == nil {
 		routingCfg = DefaultRoutingConfig()
 	}
@@ -368,23 +368,23 @@ func ipOrEmpty(addr string) string {
 }
 
 func GenerateSingBoxConfig(secretPath, outputPath string, routingCfg *RoutingConfig) error {
-	params, err := parseVLESSKey(secretPath)
+	content, err := ReadSecretKey(secretPath)
 	if err != nil {
-		return fmt.Errorf("ошибка парсинга VLESS ключа: %w", err)
-	}
-	if err := validateVLESSParams(params); err != nil {
-		return fmt.Errorf("невалидные параметры: %w", err)
+		return fmt.Errorf("не удалось прочитать ключ сервера: %w", err)
 	}
 	if routingCfg == nil {
 		routingCfg = DefaultRoutingConfig()
 	}
 
-	outbound := buildVLESSOutbound(params)
+	server, err := ParseServerContent(content)
+	if err != nil {
+		return fmt.Errorf("ошибка парсинга ключа сервера: %w", err)
+	}
 	// Если адрес сервера — hostname (не IP), передаём пустую строку в buildSingBoxConfig.
 	// buildTUN и buildRoute пропустят exclude-запись: hostname/32 — невалидный CIDR,
 	// sing-box падает с "parse cidr: hostname/32: invalid CIDR address".
-	tunExclude := ipOrEmpty(params.Address)
-	cfg := buildSingBoxConfig(params, outbound, tunExclude, routingCfg)
+	tunExclude := ipOrEmpty(server.Address)
+	cfg := buildSingBoxConfig(server.Outbound, tunExclude, routingCfg)
 
 	// BUG-2 FIX: вместо fatal error при отсутствии/повреждении geosite файла —
 	// пропускаем его и убираем ссылающиеся правила. Один плохой файл не должен

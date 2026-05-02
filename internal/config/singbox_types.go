@@ -91,6 +91,10 @@ type SBOutbound struct {
 	Server     string       `json:"server,omitempty"`
 	ServerPort int          `json:"server_port,omitempty"`
 	UUID       string       `json:"uuid,omitempty"`
+	Password   string       `json:"password,omitempty"`
+	Method     string       `json:"method,omitempty"`
+	Plugin     string       `json:"plugin,omitempty"`
+	PluginOpts string       `json:"plugin_opts,omitempty"`
 	Flow       string       `json:"flow,omitempty"`
 	TLS        *SBTLS       `json:"tls,omitempty"`
 	Transport  *SBTransport `json:"transport,omitempty"`

@@ -60,7 +60,7 @@ func TestSingBoxCheck_VLESSTransports(t *testing.T) {
 				t.Fatalf("validateVLESSParams: %v", err)
 			}
 			out := buildVLESSOutbound(params)
-			cfg := buildSingBoxConfig(params, out, ipOrEmpty(params.Address), &RoutingConfig{DefaultAction: ActionProxy})
+			cfg := buildSingBoxConfig(out, ipOrEmpty(params.Address), &RoutingConfig{DefaultAction: ActionProxy})
 			checkSingBoxConfig(t, bin, cfg)
 		})
 	}
