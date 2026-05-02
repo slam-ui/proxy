@@ -513,6 +513,11 @@ R-NNN. Только спорные/политические/blocked внешни
   cleanup/
 ```
 
+### 11.4 — CodeRabbit review
+
+После каждого bugfix/audit pass запускать CodeRabbit и триажить результат по `docs/CODERABBIT_PROCESS.md`.
+Actionable findings фиксируются отдельными коммитами, discussable — в `CODERABBIT_DISCUSSION.md`, false positives — в `CODERABBIT_IGNORED.md` с обоснованием.
+
 ---
 
 ## 12. Текущее состояние кодовой базы (на момент написания)

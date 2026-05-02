@@ -8,8 +8,7 @@ These items were not changed because they are ambiguous, require product/securit
 - **Why not fixed:** This is a product/security policy decision. Current code comments describe startup cleanup as intentional crash recovery, so changing it could lock users out unexpectedly.
 - **Suggested fix:** Decide policy explicitly. If fail-close wins, keep rules on dirty startup and require user/admin action to disable.
 
-## R-006: CodeRabbit CLI unavailable in this environment
+## R-006: CodeRabbit CLI unavailable in this environment — RESOLVED
 - **Coordinates:** baseline preparation
-- **Hypothesis:** CodeRabbit review could catch additional issues beyond local static analysis.
-- **Why not fixed:** `coderabbit --version` failed with command not found; no CodeRabbit CLI was available to run.
-- **Suggested fix:** Install/configure the CodeRabbit CLI or run the plugin-backed review in an environment where the command is available.
+- **Resolution:** Verified CodeRabbit CLI 0.4.4 via WSL Ubuntu-22.04 with authenticated account `slam-ui`.
+- **Follow-up:** Baseline review artifacts live in `.audit/coderabbit/`; process documentation is in `docs/CODERABBIT_PROCESS.md`.
