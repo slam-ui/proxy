@@ -2,18 +2,6 @@
 
 These items were not changed because they are ambiguous, require product/security policy decisions, or sit in files with pre-existing uncommitted user edits that should not be captured by this audit branch.
 
-## R-001: Dirty API handlers still have loose JSON decoders
-- **Coordinates:** `internal/api/app_proxy_handlers.go`, `internal/api/client_features_handlers.go`, `internal/api/settings_handlers.go`, `internal/api/tun_handlers.go`, `internal/api/improvements_handlers.go`
-- **Hypothesis:** Several POST handlers still decode `r.Body` directly and likely need the same `MaxBytesReader` + `DisallowUnknownFields` + trailing-value rejection pattern applied in this audit.
-- **Why not fixed:** These files had pre-existing uncommitted edits before this audit started. Committing only my hunks without absorbing unrelated user changes would require a separate coordination step.
-- **Suggested fix:** After the current user edits are settled, add per-endpoint body caps and strict decoders with focused 400-response tests.
-
-## R-002: `internal/api/server.go` lacks `ReadTimeout`
-- **Coordinates:** `internal/api/server.go:316`
-- **Hypothesis:** The HTTP server has `ReadHeaderTimeout`, `WriteTimeout`, and `IdleTimeout`, but no full `ReadTimeout`; slow request bodies could hold connections longer than intended.
-- **Why not fixed:** `server.go` had pre-existing uncommitted edits. The change is straightforward but should not be mixed into this branch without staging unrelated user modifications.
-- **Suggested fix:** Add a conservative `ReadTimeout` and update server timeout tests if present.
-
 ## R-003: Kill switch startup policy conflicts with fail-close requirement
 - **Coordinates:** `internal/killswitch/killswitch_windows.go:105`
 - **Hypothesis:** `CleanupOnStart` removes firewall rules from a previous crash, while the audit prompt says killswitch should fail-close and unblock only on clean shutdown.

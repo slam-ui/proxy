@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -10,6 +12,8 @@ import (
 
 	"github.com/gorilla/mux"
 )
+
+const maxAppProxyRequestBytes = 64 << 10
 
 // AppProxyHandlers обработчики для per-app proxy
 type AppProxyHandlers struct {
@@ -98,7 +102,18 @@ func (h *AppProxyHandlers) handleListRules(w http.ResponseWriter, r *http.Reques
 
 func (h *AppProxyHandlers) handleCreateRule(w http.ResponseWriter, r *http.Request) {
 	var req CreateRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppProxyRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -139,7 +154,18 @@ func (h *AppProxyHandlers) handleUpdateRule(w http.ResponseWriter, r *http.Reque
 	id := vars["id"]
 
 	var req CreateRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppProxyRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -259,7 +285,18 @@ func (h *AppProxyHandlers) handleRefreshProcesses(w http.ResponseWriter, r *http
 
 func (h *AppProxyHandlers) handleLaunch(w http.ResponseWriter, r *http.Request) {
 	var req LaunchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppProxyRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -285,7 +322,18 @@ func (h *AppProxyHandlers) handleLaunch(w http.ResponseWriter, r *http.Request) 
 
 func (h *AppProxyHandlers) handleMatchRule(w http.ResponseWriter, r *http.Request) {
 	var req MatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAppProxyRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		h.server.respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}

@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +13,37 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/killswitch"
 )
+
+const (
+	maxSettingsRequestBytes      = 64 << 10
+	maxSettingsSmallRequestBytes = 4 << 10
+)
+
+func (h *SettingsHandlers) decodeRequest(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64, errorMessage string, includeDetails bool) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, formatDecodeError(errorMessage, err, includeDetails))
+		return false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, formatDecodeError(errorMessage, errors.New("multiple JSON values"), includeDetails))
+		return false
+	} else if !errors.Is(err, io.EOF) {
+		h.server.respondError(w, http.StatusBadRequest, formatDecodeError(errorMessage, err, includeDetails))
+		return false
+	}
+	return true
+}
+
+func formatDecodeError(message string, err error, includeDetails bool) string {
+	if includeDetails {
+		return message + ": " + err.Error()
+	}
+	return message
+}
 
 // SettingsHandlers обработчики настроек приложения.
 // Использует Server для доступа к respondJSON/respondError — согласованно с TunHandlers.
@@ -53,8 +86,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 		NetworkProtection    *config.NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *config.TrafficBudgetSettings     `json:"traffic_budget"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+	if !h.decodeRequest(w, r, &body, maxSettingsRequestBytes, "invalid body", false) {
 		return
 	}
 
@@ -174,8 +206,7 @@ func (h *SettingsHandlers) handleSetProxyGuard(w http.ResponseWriter, r *http.Re
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "invalid body", false) {
 		return
 	}
 
@@ -203,8 +234,7 @@ func (h *SettingsHandlers) handleSetAutorun(w http.ResponseWriter, r *http.Reque
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "invalid body", false) {
 		return
 	}
 
@@ -228,8 +258,7 @@ func (h *SettingsHandlers) handleSetStartupProxy(w http.ResponseWriter, r *http.
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "invalid body", false) {
 		return
 	}
 
@@ -259,8 +288,7 @@ func (h *SettingsHandlers) handleSetKillSwitch(w http.ResponseWriter, r *http.Re
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid body")
+	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "invalid body", false) {
 		return
 	}
 	if body.Enabled {
@@ -317,8 +345,7 @@ func (h *SettingsHandlers) handleSetDNS(w http.ResponseWriter, r *http.Request) 
 		DirectDNS         string   `json:"direct_dns"`
 		RemoteDNSFallback []string `json:"remote_dns_fallback"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+	if !h.decodeRequest(w, r, &body, maxSettingsRequestBytes, "неверный JSON", true) {
 		return
 	}
 
@@ -423,8 +450,7 @@ func (h *SettingsHandlers) handleSetGeositeUpdate(w http.ResponseWriter, r *http
 		Enabled      bool `json:"enabled"`
 		IntervalDays int  `json:"interval_days"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "неверный JSON: "+err.Error())
+	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "неверный JSON", true) {
 		return
 	}
 	if body.IntervalDays <= 0 {
