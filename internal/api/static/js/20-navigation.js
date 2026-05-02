@@ -18,6 +18,7 @@ function navTo(i) {
   closeSrv();
   closeAddRuleModal();
   closeRulesJsonEditor();
+  closeVisualRuleEditor();
   closeSingboxConfigEditor();
   closeServerInfoModal();
 
@@ -41,7 +42,7 @@ function navTo(i) {
     if (prev === 3 && i !== 3) stopLogStream();
   }
   // Lazy-load вызывается всегда (повторный клик = обновление данных) (#2)
-  if (i === 1) { loadRules(); loadProfiles(); }
+  if (i === 1) { loadRules(); loadProfiles(); loadVisualRouting(); }
   if (i === 2) loadProcs();
   if (i === 3 && !logStreaming) startLogStream();
   if (i === 4) loadSettingsPage();

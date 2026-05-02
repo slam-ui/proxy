@@ -4,6 +4,8 @@ let _dragRuleId = null;
 let _allRules   = []; // кэш для drag-and-drop reorder
 let _routingConfig = { default_action: 'proxy', rules: [] };
 let _rulesJsonDirty = false;
+let _visualRouting = { default_action: 'proxy', rules: [], presets: [] };
+let _visualDragId = null;
 
 function _ruleTypeTag(t) {
   if (t === 'geosite') return `<span class="rule-type-tag geo">geo</span>`;
@@ -529,6 +531,313 @@ function filterRules() {
     const pat = (el.dataset.pattern || '').toLowerCase();
     el.style.display = (!f || pat.includes(f)) ? '' : 'none';
   });
+}
+
+// ═══════════════════════════════════════════════════
+// VISUAL ROUTING EDITOR  →  /api/routing/visual
+// ═══════════════════════════════════════════════════
+function _visualActionClass(action) {
+  action = (action || 'proxy').toLowerCase();
+  return action === 'direct' ? 'd' : action === 'block' ? 'b' : 'p';
+}
+
+function _visualActionLabel(action) {
+  action = (action || 'proxy').toLowerCase();
+  return action === 'direct' ? 'DIRECT' : action === 'block' ? 'BLOCK' : 'PROXY';
+}
+
+function _visualValuesText(rule) {
+  const vals = rule?.match?.values || [];
+  if (!vals.length) return '—';
+  const first = vals.slice(0, 3).join(', ');
+  return vals.length > 3 ? `${first}, +${vals.length - 3}` : first;
+}
+
+async function loadVisualRouting() {
+  const list = $id('visualRuleList');
+  if (!list) return;
+  try {
+    const [rulesResp, presetsResp] = await Promise.all([
+      fetch(API + '/routing/visual'),
+      fetch(API + '/routing/visual/presets')
+    ]);
+    if (!rulesResp.ok) throw new Error('HTTP ' + rulesResp.status);
+    const data = await rulesResp.json();
+    let presets = [];
+    if (presetsResp.ok) {
+      presets = (await presetsResp.json()).presets || [];
+    }
+    _visualRouting = {
+      default_action: data.default_action || 'proxy',
+      rules: data.rules || [],
+      presets
+    };
+    renderVisualRouting(data.conflicts || []);
+  } catch(e) {
+    list.innerHTML = `<div class="rules-empty">Ошибка загрузки визуальных правил<br><span style="font-size:8px;opacity:0.6">${esc(e.message)}</span></div>`;
+  }
+}
+
+function renderVisualRouting(conflicts) {
+  renderVisualPresets();
+  renderVisualConflicts(conflicts || []);
+  const list = $id('visualRuleList');
+  if (!list) return;
+  const rules = [...(_visualRouting.rules || [])].sort((a, b) => (a.priority || 0) - (b.priority || 0));
+  if (!rules.length) {
+    list.innerHTML = '<div class="rules-empty">Визуальных правил нет</div>';
+    return;
+  }
+  list.innerHTML = rules.map((rule, idx) => {
+    const cls = _visualActionClass(rule.action);
+    const idArg = jsArg(rule.id || '');
+    const typ = rule.match?.type || 'domain_suffix';
+    const enabled = rule.enabled !== false;
+    const disabled = enabled ? '' : ' off';
+    return `<div class="visual-rule-item${disabled}" draggable="true"
+      data-id="${esc(rule.id || '')}"
+      ondragstart="visualRuleDragStart(event,${idArg})"
+      ondragover="visualRuleDragOver(event)"
+      ondragleave="visualRuleDragLeave(event)"
+      ondrop="visualRuleDrop(event,${idx})">
+      <button class="visual-handle" title="Перетащить">::</button>
+      <button class="visual-enabled ${enabled ? 'on' : ''}" onclick="toggleVisualRule(${idArg})" title="Включить"></button>
+      <div class="visual-rule-main" onclick="editVisualRule(${idArg})">
+        <div class="rule-line">
+          <span class="rule-badge ${cls}">${_visualActionLabel(rule.action)}</span>
+          <span class="rule-type-tag">${esc(typ)}</span>
+          <div class="rule-nm">${esc(rule.name || rule.id || 'Rule')}</div>
+        </div>
+        <div class="rule-proc">${esc(typ)}: ${esc(_visualValuesText(rule))}${rule.match?.inverse ? ' · NOT' : ''}${rule.server ? ' · ' + esc(rule.server) : ''}</div>
+      </div>
+      <div class="rule-actions">
+        <button class="pg-btn" style="padding:3px 8px;font-size:8px" onclick="moveVisualRule(${idx},-1)">↑</button>
+        <button class="pg-btn" style="padding:3px 8px;font-size:8px" onclick="moveVisualRule(${idx},1)">↓</button>
+        <button class="pg-btn danger" style="padding:3px 8px;font-size:8px" onclick="deleteVisualRule(${idArg})">✕</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderVisualPresets() {
+  const row = $id('visualPresetRow');
+  if (!row) return;
+  const presets = _visualRouting.presets || [];
+  row.innerHTML = presets.map(p => {
+    const idArg = jsArg(p.id);
+    return `<button class="pg-btn" title="${esc(p.description || '')}" onclick="importVisualPreset(${idArg})">${esc(p.name || p.id)}</button>`;
+  }).join('');
+}
+
+function renderVisualConflicts(conflicts) {
+  const el = $id('visualConflicts');
+  if (!el) return;
+  if (!conflicts.length) {
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  el.style.display = '';
+  el.innerHTML = conflicts.slice(0, 3).map(c =>
+    `Конфликт: ${esc(c.rule_a)} выше ${esc(c.rule_b)} для ${esc(c.value)} (${esc(c.action_a)} / ${esc(c.action_b)})`
+  ).join('<br>');
+}
+
+function openVisualRuleEditor(seed) {
+  const editor = $id('visualRuleEditor');
+  if (!editor) return;
+  const rule = seed || {
+    id: '',
+    name: '',
+    enabled: true,
+    match: { type: 'domain_suffix', values: [] },
+    action: 'proxy'
+  };
+  $id('vrEditId').value = rule.id || '';
+  $id('vrName').value = rule.name || '';
+  $id('vrType').value = rule.match?.type || 'domain_suffix';
+  $id('vrValues').value = (rule.match?.values || []).join('\n');
+  $id('vrEnabled').checked = rule.enabled !== false;
+  $id('vrInverse').checked = !!rule.match?.inverse;
+  $id('vrServer').value = rule.server || '';
+  $id('vrTestValue').value = '';
+  $id('vrTestResult').textContent = '';
+  setRuleAction('vrAction', rule.action || 'proxy');
+  editor.style.display = 'block';
+  setTimeout(() => $id('vrName')?.focus(), 40);
+}
+
+function closeVisualRuleEditor() {
+  const editor = $id('visualRuleEditor');
+  if (editor) editor.style.display = 'none';
+}
+
+function editVisualRule(id) {
+  const rule = (_visualRouting.rules || []).find(r => r.id === id);
+  if (rule) openVisualRuleEditor(JSON.parse(JSON.stringify(rule)));
+}
+
+function buildVisualRuleFromForm() {
+  const currentId = $id('vrEditId')?.value || '';
+  const name = ($id('vrName')?.value || '').trim();
+  const values = ($id('vrValues')?.value || '').split(/\r?\n|,/).map(v => v.trim()).filter(Boolean);
+  const id = currentId || 'rule-' + Date.now().toString(36);
+  const existing = (_visualRouting.rules || []).find(r => r.id === currentId);
+  return {
+    id,
+    name: name || values[0] || 'Rule',
+    enabled: $id('vrEnabled')?.checked !== false,
+    priority: existing?.priority || ((_visualRouting.rules || []).length + 1) * 10,
+    match: {
+      type: $id('vrType')?.value || 'domain_suffix',
+      values,
+      inverse: !!$id('vrInverse')?.checked
+    },
+    action: $id('vrAction')?.value || 'proxy',
+    server: ($id('vrServer')?.value || '').trim()
+  };
+}
+
+async function saveVisualRule() {
+  const rule = buildVisualRuleFromForm();
+  if (!rule.match.values.length) {
+    showToast('Добавьте хотя бы одно значение', 'warn');
+    return;
+  }
+  const rules = [...(_visualRouting.rules || [])];
+  const idx = rules.findIndex(r => r.id === rule.id);
+  if (idx >= 0) rules[idx] = rule; else rules.push(rule);
+  _visualRouting.rules = normalizeVisualPriorities(rules);
+  await persistVisualRouting('Правило сохранено');
+  closeVisualRuleEditor();
+}
+
+function normalizeVisualPriorities(rules) {
+  return [...rules].sort((a, b) => (a.priority || 0) - (b.priority || 0)).map((r, idx) => ({ ...r, priority: (idx + 1) * 10 }));
+}
+
+async function persistVisualRouting(okMsg) {
+  try {
+    const r = await fetch(API + '/routing/visual', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        default_action: _visualRouting.default_action || _routingConfig.default_action || 'proxy',
+        rules: _visualRouting.rules || []
+      })
+    });
+    const text = await r.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!r.ok) throw new Error(data.error || text || 'HTTP ' + r.status);
+    _visualRouting.rules = data.rules || _visualRouting.rules || [];
+    _visualRouting.default_action = data.default_action || _visualRouting.default_action || 'proxy';
+    showToast(okMsg || 'Визуальные правила сохранены', 'on');
+    OpTimer.start('apply', 'Применение визуальных правил', _applyHistory.estimate(5000));
+    _watchApply('Применение визуальных правил');
+    await loadRules();
+    await loadVisualRouting();
+  } catch(e) {
+    showToast('Визуальные правила не сохранены: ' + e.message, 'off');
+  }
+}
+
+function deleteVisualRule(id) {
+  _visualRouting.rules = normalizeVisualPriorities((_visualRouting.rules || []).filter(r => r.id !== id));
+  persistVisualRouting('Правило удалено');
+}
+
+function toggleVisualRule(id) {
+  _visualRouting.rules = (_visualRouting.rules || []).map(r => r.id === id ? { ...r, enabled: r.enabled === false } : r);
+  persistVisualRouting('Правило обновлено');
+}
+
+function moveVisualRule(idx, delta) {
+  const rules = normalizeVisualPriorities(_visualRouting.rules || []);
+  const next = idx + delta;
+  if (next < 0 || next >= rules.length) return;
+  [rules[idx], rules[next]] = [rules[next], rules[idx]];
+  _visualRouting.rules = normalizeVisualPriorities(rules);
+  persistVisualRouting('Порядок обновлён');
+}
+
+function visualRuleDragStart(e, id) {
+  _visualDragId = id;
+  e.currentTarget.style.opacity = '0.5';
+  e.dataTransfer.effectAllowed = 'move';
+}
+function visualRuleDragOver(e) {
+  e.preventDefault();
+  e.currentTarget.classList.add('drag-over');
+}
+function visualRuleDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+function visualRuleDrop(e, targetIdx) {
+  e.preventDefault();
+  document.querySelectorAll('.visual-rule-item').forEach(el => { el.style.opacity = ''; el.classList.remove('drag-over'); });
+  if (!_visualDragId) return;
+  const rules = normalizeVisualPriorities(_visualRouting.rules || []);
+  const from = rules.findIndex(r => r.id === _visualDragId);
+  if (from < 0 || from === targetIdx) { _visualDragId = null; return; }
+  const [moved] = rules.splice(from, 1);
+  rules.splice(targetIdx, 0, moved);
+  _visualRouting.rules = normalizeVisualPriorities(rules);
+  _visualDragId = null;
+  persistVisualRouting('Порядок обновлён');
+}
+
+async function testVisualRule() {
+  const result = $id('vrTestResult');
+  const value = ($id('vrTestValue')?.value || '').trim();
+  if (!value) {
+    showToast('Введите test value', 'warn');
+    return;
+  }
+  try {
+    const r = await fetch(API + '/routing/visual/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ rule: buildVisualRuleFromForm(), value })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    result.textContent = d.matches ? `matches → ${d.action} (${d.outbound})` : 'does not match';
+    result.className = 'visual-test-result ' + (d.matches ? 'ok' : 'miss');
+  } catch(e) {
+    result.textContent = e.message;
+    result.className = 'visual-test-result err';
+  }
+}
+
+function quickVisualRule(kind) {
+  const value = prompt(kind === 'direct-app' ? 'process.exe' : 'domain.com');
+  if (!value) return;
+  const rule = {
+    id: 'rule-' + Date.now().toString(36),
+    name: kind === 'direct-app' ? value + ' direct' : value,
+    enabled: true,
+    priority: ((_visualRouting.rules || []).length + 1) * 10,
+    match: { type: kind === 'direct-app' ? 'process' : 'domain_suffix', values: [value.trim()] },
+    action: kind === 'block-domain' ? 'block' : kind === 'direct-app' ? 'direct' : 'proxy'
+  };
+  _visualRouting.rules = normalizeVisualPriorities([ ...(_visualRouting.rules || []), rule ]);
+  persistVisualRouting('Правило добавлено');
+}
+
+async function importVisualPreset(id) {
+  if (!id || !confirm('Импорт preset заменит текущие визуальные правила. Продолжить?')) return;
+  try {
+    const r = await fetch(API + '/routing/visual/presets/' + encodeURIComponent(id) + '/import', {method:'POST'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    showToast('Preset импортирован', 'on');
+    OpTimer.start('apply', 'Применение routing preset', _applyHistory.estimate(5000));
+    _watchApply('Применение routing preset');
+    await loadRules();
+    await loadVisualRouting();
+  } catch(e) {
+    showToast('Preset не импортирован: ' + e.message, 'off');
+  }
 }
 
 // ═══════════════════════════════════════════════════
