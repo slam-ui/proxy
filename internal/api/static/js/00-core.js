@@ -31,6 +31,7 @@ let state = {
   servers: [],       // ServerEntry[]
   activeId: null,    // id активного сервера
   pings: {},         // id → ms
+  health: {},        // id → health snapshot
 };
 let toastTimer = null;
 const toastQueue = [];
@@ -50,7 +51,7 @@ const srvOverlay = $id('srvOverlay');
 const warmDot  = $id('warmDot');
 
 function isSupportedServerURI(url) {
-  return /^\\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard|vmess):\\/\\//i.test(url || '');
+  return /^\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard|vmess):\/\//i.test(url || '');
 }
 
 // ═══════════════════════════════════════════════════

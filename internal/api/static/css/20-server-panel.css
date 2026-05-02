@@ -40,6 +40,11 @@
 /* FIX #1 & #6: ping цвет только через классы */
 .sp-ping{font-family:var(--mono);font-size:10px;font-weight:700}
 .sp-ping.col-g{color:var(--on)}.sp-ping.col-y{color:var(--warn)}.sp-ping.col-r{color:var(--off)}.sp-ping.col-dim{color:var(--muted)}
+.sp-health-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;margin-top:10px;background:var(--muted);box-shadow:none}
+.sp-health-dot.ok{background:var(--on);box-shadow:0 0 7px var(--on)}
+.sp-health-dot.warn{background:var(--warn);box-shadow:0 0 7px rgba(255,190,80,0.45)}
+.sp-health-dot.bad,.sp-health-dot.unreachable{background:var(--off);box-shadow:0 0 7px rgba(255,80,116,0.45)}
+.sp-health-dot.unknown{background:var(--muted)}
 .sp-bar-track{width:44px;height:3px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;margin-top:4px}
 .sp-bar-fill{height:100%;border-radius:2px;transition:width 0.5s}
 .sp-bar-fill.g{background:var(--on);box-shadow:0 0 6px var(--on)}

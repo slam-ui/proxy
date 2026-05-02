@@ -35,6 +35,7 @@ async function loadServers() {
         s.country_code = prev.country_code;
     });
     if (d && d.active_id) state.activeId = d.active_id;
+    await loadServerHealth(false);
     _restoreCountryCodeCache();
     renderServerList();
     // Запускаем ping-all в фоне
@@ -47,6 +48,19 @@ async function loadServers() {
 let _srvTab = 'all';
 let _srvSortByPing = false;
 let _srvSearch = '';
+
+async function loadServerHealth(render = true) {
+  try {
+    const r = await fetch(API + '/servers/health');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    state.health = {};
+    (d.servers || []).forEach(h => { state.health[h.id] = h; });
+    if (render) renderServerList();
+  } catch (_) {
+    state.health = state.health || {};
+  }
+}
 
 function toggleSrvSort() {
   _srvSortByPing = !_srvSortByPing;
@@ -79,6 +93,31 @@ function _serverHost(url) {
 
 function _cssEsc(value) {
   return (window.CSS && CSS.escape) ? CSS.escape(String(value || '')) : String(value || '').replace(/"/g, '\\"');
+}
+
+function serverHealth(srv) {
+  return (srv && state.health && state.health[srv.id]) || null;
+}
+
+function serverHealthLatency(srv) {
+  const h = serverHealth(srv);
+  if (h && h.average_latency_ms > 0) return h.average_latency_ms;
+  const ms = state.pings[srv.id];
+  return ms != null && ms >= 0 ? ms : null;
+}
+
+function healthStatusInfo(srv) {
+  const h = serverHealth(srv);
+  if (!h) return { cls: 'unknown', text: 'health: unknown', meta: 'health: —' };
+  const avg = h.average_latency_ms > 0 ? `${h.average_latency_ms}ms` : 'timeout';
+  const loss = `${Math.round((h.packet_loss || 0) * 100)}% loss`;
+  const uptime = `${Math.round((h.uptime || 0) * 100)}% uptime`;
+  const rec = h.recommended ? ' ★' : '';
+  return {
+    cls: h.status || 'unknown',
+    text: `${avg} · ${loss} · ${uptime}${rec}`,
+    meta: `${avg} · ${loss} · ${uptime}${rec}`
+  };
 }
 
 function _applyServerCountryCode(srv, code) {
@@ -129,7 +168,7 @@ function renderServerList() {
 
   let filtered = list.filter(srv => {
     if (_srvTab === 'all') return true;
-    const ms = state.pings[srv.id];
+    const ms = serverHealthLatency(srv);
     if (_srvTab === 'fast') return ms != null && ms >= 0 && ms < 100;
     if (_srvTab === 'slow') return ms == null || ms < 0 || ms >= 100;
     return true;
@@ -150,7 +189,7 @@ function renderServerList() {
 
   if (_srvSortByPing) {
     filtered.sort((a, b) => {
-      const ma = state.pings[a.id], mb = state.pings[b.id];
+      const ma = serverHealthLatency(a), mb = serverHealthLatency(b);
       if (ma == null || ma < 0) return 1;
       if (mb == null || mb < 0) return -1;
       return ma - mb;
@@ -168,6 +207,7 @@ function renderServerList() {
     const isCur = srv.id === state.activeId;
     const pingMs = state.pings[srv.id];
     const { pingText, pingCls, barCls, barPct } = pingInfo(pingMs);
+    const health = healthStatusInfo(srv);
     const protocol = protocolFromURL(srv.url);
     const hostPort = _srvHostPort(srv.url);
     const displayName = serverDisplayName(srv);
@@ -180,11 +220,12 @@ function renderServerList() {
     return `
     <div class="spitem${isCur ? ' cur' : ''}" onclick="connectServer(${srvIdArg},event)" title="${esc(hostPort)}"${delay}>
       <div class="sp-main">
+        <span class="sp-health-dot ${esc(health.cls)}" title="${esc(health.text)}"></span>
         <span class="sp-flag" data-srvid="${esc(srv.id)}">${flag}</span>
         <div class="sp-inf">
           <div class="sp-line"><span class="sp-nm">${esc(displayName)}</span>${activeBadge}</div>
           <div class="sp-dt">${esc(hostPort)}</div>
-          <div class="sp-proto">${esc(protocol)}</div>
+          <div class="sp-proto">${esc(protocol)} · ${esc(health.meta)}</div>
         </div>
       </div>
       <div class="sp-metrics">
@@ -204,7 +245,7 @@ function renderServerList() {
 function updateSrvPanelSummary(all, visible) {
   const total = all.length;
   const fast = all.filter(s => {
-    const ms = state.pings[s.id];
+    const ms = serverHealthLatency(s);
     return ms != null && ms >= 0 && ms < 100;
   }).length;
   const active = all.find(s => s.id === state.activeId);
@@ -306,6 +347,7 @@ async function pingAll() {
     if (!r.ok) throw new Error(r.status);
     const data = await r.json();
     (data.results || []).forEach(p => { state.pings[p.id] = p.ok ? p.latency_ms : -1; });
+    await loadServerHealth(false);
     renderServerList();
     updateServerPill();
   } catch (_) { /* ignore */ } finally {
