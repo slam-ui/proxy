@@ -532,9 +532,37 @@
         <div class="rule-toggle" id="smartFailoverToggle" onclick="toggleLifecycleOption('smart_failover')" title="Автопереключение сервера"></div>
       </div>
       <div class="pg-row">
-        <div class="pg-lbl">Версия</div><span class="pg-val">2.4.1</span>
+        <div><div class="pg-lbl">Версия</div><div class="pg-sub" id="appUpdateStatus">проверка...</div></div>
+        <span class="pg-val" id="appVersion">—</span>
       </div>
     </div>
+
+    <!-- ── Обновления ── -->
+    <details class="pg-section">
+      <summary class="pg-section-ttl">Обновления клиента</summary>
+      <div class="pg-section-body">
+        <div class="pg-row">
+          <div><div class="pg-lbl">Автопроверка</div><div class="pg-sub">Проверять новую версию при запуске</div></div>
+          <div class="rule-toggle" id="updateEnabledToggle" onclick="toggleUpdateSetting('enabled')" title="Проверять обновления клиента"></div>
+        </div>
+        <div class="pg-row">
+          <div><div class="pg-lbl">Автоустановка</div><div class="pg-sub">Скачивать и ставить найденный релиз</div></div>
+          <div class="rule-toggle" id="updateAutoInstallToggle" onclick="toggleUpdateSetting('auto_install')" title="Автоматически устанавливать обновления"></div>
+        </div>
+        <div class="pg-inp-row" style="margin-top:8px">
+          <select class="pg-inp" id="updateChannelInp" onchange="saveUpdateSettings()">
+            <option value="stable">stable</option>
+            <option value="beta">beta</option>
+          </select>
+          <input class="pg-inp" id="updateBaseURLInp" type="url" placeholder="https://example.com/safesky">
+        </div>
+        <div class="pg-inp-row" style="margin-top:8px">
+          <button class="pg-btn" onclick="saveUpdateSettings()">Сохранить</button>
+          <button class="pg-btn" id="updateCheckBtn" onclick="checkClientUpdate()">Проверить</button>
+          <button class="pg-btn acc" id="updateInstallBtn" onclick="installClientUpdate()">Обновить</button>
+        </div>
+      </div>
+    </details>
 
     <!-- ── Тема ── -->
     <div class="pg-section">

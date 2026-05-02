@@ -335,6 +335,15 @@ function applyLifecycleControls(d) {
   const tb = _appSettingsCache.traffic_budget || {};
   if ($id('trafficSessionMBInp')) $id('trafficSessionMBInp').value = tb.session_limit_mb || 0;
   if ($id('trafficTotalMBInp')) $id('trafficTotalMBInp').value = tb.total_limit_mb || 0;
+  applyUpdateControls(_appSettingsCache.updates || {});
+}
+
+function applyUpdateControls(upd) {
+  const settings = upd || {};
+  $id('updateEnabledToggle')?.classList.toggle('on', settings.enabled !== false);
+  $id('updateAutoInstallToggle')?.classList.toggle('on', !!settings.auto_install);
+  if ($id('updateChannelInp')) $id('updateChannelInp').value = settings.channel === 'beta' ? 'beta' : 'stable';
+  if ($id('updateBaseURLInp')) $id('updateBaseURLInp').value = settings.base_url || 'https://example.com/safesky';
 }
 
 function setDNSGuardMode(mode, persist = true) {
@@ -379,6 +388,7 @@ async function saveLifecycleSettings() {
       total_limit_mb: Number($id('trafficTotalMBInp')?.value || 0),
       warn_percent: 80
     },
+    updates: currentUpdateSettings(),
     schedule
   };
   try {
@@ -392,6 +402,84 @@ async function saveLifecycleSettings() {
     applyLifecycleControls(d);
     showToast('Настройки сохранены', 'on');
   } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+function currentUpdateSettings() {
+  return {
+    enabled: !!$id('updateEnabledToggle')?.classList.contains('on'),
+    channel: $id('updateChannelInp')?.value === 'beta' ? 'beta' : 'stable',
+    base_url: ($id('updateBaseURLInp')?.value || 'https://example.com/safesky').trim(),
+    auto_install: !!$id('updateAutoInstallToggle')?.classList.contains('on')
+  };
+}
+
+async function loadClientUpdateStatus() {
+  try {
+    const r = await fetch(API + '/update/status');
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    const build = d.build || {};
+    if ($id('appVersion')) $id('appVersion').textContent = build.version || '—';
+    if ($id('appUpdateStatus')) $id('appUpdateStatus').textContent = `канал ${(d.settings && d.settings.channel) || 'stable'} · ${build.commit || 'unknown'}`;
+    applyUpdateControls(d.settings || {});
+  } catch(e) {
+    if ($id('appUpdateStatus')) $id('appUpdateStatus').textContent = 'статус обновлений недоступен';
+  }
+}
+
+async function saveUpdateSettings() {
+  await saveLifecycleSettings();
+}
+
+async function toggleUpdateSetting(key) {
+  if (key === 'enabled') $id('updateEnabledToggle')?.classList.toggle('on');
+  if (key === 'auto_install') $id('updateAutoInstallToggle')?.classList.toggle('on');
+  await saveUpdateSettings();
+}
+
+async function checkClientUpdate() {
+  const btn = $id('updateCheckBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Проверка...'; }
+  try {
+    const r = await fetch(API + '/update/check', { method: 'POST', timeoutMs: 45000 });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    const latest = d.latest || {};
+    if ($id('appUpdateStatus')) {
+      if (d.manual_update_required) {
+        $id('appUpdateStatus').textContent = `нужно ручное обновление до ${latest.version || 'новой версии'}`;
+      } else if (d.update_available) {
+        $id('appUpdateStatus').textContent = `доступна версия ${latest.version}`;
+      } else {
+        $id('appUpdateStatus').textContent = 'установлена актуальная версия';
+      }
+    }
+    showToast(d.update_available ? `Доступна версия ${latest.version}` : 'Обновлений нет', d.update_available ? 'warn' : 'on');
+  } catch(e) {
+    showToast('Проверка обновлений: ' + e.message, 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Проверить'; }
+  }
+}
+
+async function installClientUpdate() {
+  const btn = $id('updateInstallBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Установка...'; }
+  try {
+    const r = await fetch(API + '/update/install', { method: 'POST', timeoutMs: 90000 });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    if (!d.started) {
+      showToast(d.reason || 'Обновление не требуется', 'info');
+      return;
+    }
+    showToast(`Установка версии ${d.version || ''} запущена`, 'on');
+    if ($id('appUpdateStatus')) $id('appUpdateStatus').textContent = 'клиент перезапустится для обновления';
+  } catch(e) {
+    showToast('Установка обновления: ' + e.message, 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Обновить'; }
+  }
 }
 
 function toggleLifecycleOption(key) {
@@ -591,6 +679,7 @@ async function loadSettingsPage() {
   loadCrashReports();
   loadTrafficBudget();
   checkFailoverStatus();
+  loadClientUpdateStatus();
 }
 
 let _importSrvRunning = false;

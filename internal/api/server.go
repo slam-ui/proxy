@@ -296,6 +296,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
 	SetupEngineRoutes(s)
+	SetupUpdateRoutes(s)
 	SetupImprovementRoutes(s)
 	SetupClientFeatureRoutes(s, ctx)
 	s.SetupGeoIPRoutes() // локальное определение страны без внешних запросов
@@ -329,6 +330,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/security/network")
 	s.addSilentPath("/api/security/traffic-budget")
 	s.addSilentPath("/api/servers/failover")
+	s.addSilentPath("/api/update/status")
 }
 
 func (s *Server) FinalizeRoutes() {
