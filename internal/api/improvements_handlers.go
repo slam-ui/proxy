@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,8 @@ import (
 	"proxyclient/internal/speedtest"
 	"proxyclient/internal/trafficstats"
 )
+
+const maxImportRulesRequestBytes = 1 << 20
 
 var builtinProfiles = map[string]interface{}{
 	"bypass-ru": map[string]interface{}{
@@ -171,7 +174,18 @@ func (s *Server) handleImportRules(w http.ResponseWriter, r *http.Request) {
 		Content string            `json:"content"`
 		Action  config.RuleAction `json:"action"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxImportRulesRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		s.respondError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+		return
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		s.respondError(w, http.StatusBadRequest, "invalid json: multiple JSON values")
+		return
+	} else if !errors.Is(err, io.EOF) {
 		s.respondError(w, http.StatusBadRequest, "invalid json: "+err.Error())
 		return
 	}

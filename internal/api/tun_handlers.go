@@ -28,9 +28,52 @@ import (
 var routingConfigPath = config.DataDir + "/routing.json"
 var errSaveRoutingConfig = errors.New("не удалось сохранить правила")
 
+const (
+	maxTunSmallRequestBytes = 4 << 10
+	maxTunRulesRequestBytes = 1 << 20
+	maxTunImportBytes       = 1 << 20
+)
+
 // clashAPIBaseURL — базовый URL Clash API. Переменная (не константа) чтобы
 // тесты могли подменить его на адрес локального mock-сервера.
 var clashAPIBaseURL = "http://" + config.ClashAPIAddr
+
+func (h *TunHandlers) decodeRequest(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+		return false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+		return false
+	} else if !errors.Is(err, io.EOF) {
+		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+		return false
+	}
+	return true
+}
+
+func (h *TunHandlers) decodeRoutingConfig(w http.ResponseWriter, raw []byte, dst *config.RoutingConfig) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err == nil {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: multiple JSON values")
+		return false
+	} else if !errors.Is(err, io.EOF) {
+		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return false
+	}
+	return true
+}
 
 // tryHotReload перезагружает конфиг sing-box через Clash API без остановки процесса.
 // Возвращает nil при успехе, ошибку если API недоступен → вызывающий делает полный перезапуск.
@@ -466,8 +509,7 @@ type AddRuleRequest struct {
 // handleAddRule POST /api/tun/rules
 func (h *TunHandlers) handleAddRule(w http.ResponseWriter, r *http.Request) {
 	var req AddRuleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+	if !h.decodeRequest(w, r, &req, maxTunSmallRequestBytes) {
 		return
 	}
 
@@ -693,8 +735,7 @@ func (h *TunHandlers) replaceRoutingAndApply(incoming config.RoutingConfig) (int
 // вместо 50+, что предотвращает зависание WebView2.
 func (h *TunHandlers) handleBulkReplaceRules(w http.ResponseWriter, r *http.Request) {
 	var req BulkReplaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+	if !h.decodeRequest(w, r, &req, maxTunRulesRequestBytes) {
 		return
 	}
 
@@ -818,8 +859,7 @@ func (h *TunHandlers) handleSetDefault(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Action config.RuleAction `json:"action"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "некорректное тело запроса")
+	if !h.decodeRequest(w, r, &req, maxTunSmallRequestBytes) {
 		return
 	}
 	if !isValidAction(req.Action) {
@@ -1454,9 +1494,8 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		// Загрузка через <input type="file">
-		const maxImportBytes = 1 << 20
-		r.Body = http.MaxBytesReader(w, r.Body, maxImportBytes+maxMultipartOverheadBytes)
-		if err := r.ParseMultipartForm(maxImportBytes); err != nil { // #nosec G120 -- body is capped by MaxBytesReader above.
+		r.Body = http.MaxBytesReader(w, r.Body, maxTunImportBytes+maxMultipartOverheadBytes)
+		if err := r.ParseMultipartForm(maxTunImportBytes); err != nil { // #nosec G120 -- body is capped by MaxBytesReader above.
 			h.server.respondError(w, http.StatusBadRequest, "failed to parse form")
 			return
 		}
@@ -1467,12 +1506,12 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		}
 		defer f.Close()
 		var err2 error
-		raw, err2 = io.ReadAll(io.LimitReader(f, maxImportBytes+1))
+		raw, err2 = io.ReadAll(io.LimitReader(f, maxTunImportBytes+1))
 		if err2 != nil {
 			h.server.respondError(w, http.StatusBadRequest, "failed to read file")
 			return
 		}
-		if len(raw) > maxImportBytes {
+		if len(raw) > maxTunImportBytes {
 			h.server.respondError(w, http.StatusRequestEntityTooLarge, "file too large")
 			return
 		}
@@ -1480,10 +1519,11 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		// Прямая отправка JSON
 		// BUG FIX #NEW-B: ограничиваем размер тела до 1MB чтобы предотвратить OOM.
 		// Multipart-путь выше уже ограничен (ParseMultipartForm(1<<20)).
-		// Без LimitReader злоумышленник из локальной сети может отправить гигантский
+		// Без MaxBytesReader злоумышленник из локальной сети может отправить гигантский
 		// JSON и вызвать исчерпание памяти.
 		var err error
-		raw, err = io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1 MB max
+		r.Body = http.MaxBytesReader(w, r.Body, maxTunImportBytes)
+		raw, err = io.ReadAll(r.Body)
 		if err != nil {
 			h.server.respondError(w, http.StatusBadRequest, "failed to read body")
 			return
@@ -1491,8 +1531,7 @@ func (h *TunHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var incoming config.RoutingConfig
-	if err := json.Unmarshal(raw, &incoming); err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+	if !h.decodeRoutingConfig(w, raw, &incoming) {
 		return
 	}
 
