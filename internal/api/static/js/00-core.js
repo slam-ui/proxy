@@ -49,6 +49,10 @@ const srvPanel = $id('srvPanel');
 const srvOverlay = $id('srvOverlay');
 const warmDot  = $id('warmDot');
 
+function isSupportedServerURI(url) {
+  return /^\\s*(vless|trojan|ss):\\/\\//i.test(url || '');
+}
+
 // ═══════════════════════════════════════════════════
 // OpTimer — универсальный баннер-таймер для долгих операций
 // ═══════════════════════════════════════════════════

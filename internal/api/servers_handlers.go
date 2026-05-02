@@ -114,7 +114,7 @@ type ServersHandlers struct {
 	server     *Server
 	mu         sync.RWMutex
 	secretKey  string                              // путь до active secret.key
-	fetchURLFn func(rawURL string) (string, error) // C-5: инъекция для тестов (nil → fetchVLESSFromURL)
+	fetchURLFn func(rawURL string) (string, error) // C-5: инъекция для тестов (nil → fetchServerURIFromURL)
 }
 
 // SetupServerRoutes регистрирует маршруты менеджера серверов.
@@ -165,6 +165,15 @@ func (h *ServersHandlers) handleQR(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.server.respondError(w, http.StatusNotFound, "сервер не найден")
+}
+
+func firstNonEmptyAPI(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func (h *ServersHandlers) handleLatencyHistory(w http.ResponseWriter, r *http.Request) {
@@ -249,12 +258,16 @@ func (h *ServersHandlers) handleAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.URL = strings.TrimSpace(strings.TrimPrefix(req.URL, "\xef\xbb\xbf"))
-	if !strings.HasPrefix(req.URL, "vless://") {
-		h.server.respondError(w, http.StatusBadRequest, "URL должен начинаться с vless://")
+	parsed, err := config.ParseServerContent(req.URL)
+	if err != nil {
+		h.server.respondError(w, http.StatusBadRequest, "неподдерживаемый или невалидный URL: "+err.Error())
 		return
 	}
 	if req.Name == "" {
-		req.Name = "Сервер"
+		req.Name = parsed.DisplayName
+		if req.Name == "" {
+			req.Name = "Сервер"
+		}
 	}
 	if req.CountryCode == "" {
 		req.CountryCode = "??"
@@ -623,8 +636,7 @@ func (h *ServersHandlers) doAutoConnect(ctx context.Context) (map[string]interfa
 	}, http.StatusOK, nil
 }
 
-// B-6: handleImportClipboard POST /api/servers/import-clipboard — импортировать VLESS URL из буфера обмена.
-// Тело запроса: {"url":"vless://..."}
+// B-6: handleImportClipboard POST /api/servers/import-clipboard — импортировать server URI из буфера обмена.
 // Валидирует URL, генерирует имя сервера из хоста, и автоактивирует если это первый сервер.
 // Response codes: 200 (успех), 400 (невалидный URL), 409 (сервер уже существует)
 func (h *ServersHandlers) handleImportClipboard(w http.ResponseWriter, r *http.Request) {
@@ -641,15 +653,14 @@ func (h *ServersHandlers) handleImportClipboard(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// B-6: валидируем VLESS URL через parseVLESSContent
-	params, err := config.ParseVLESSContent(req.URL)
+	parsed, err := config.ParseServerContent(req.URL)
 	if err != nil {
-		h.server.respondError(w, http.StatusBadRequest, "невалидный VLESS URL: "+err.Error())
+		h.server.respondError(w, http.StatusBadRequest, "невалидный server URL: "+err.Error())
 		return
 	}
 
 	// B-6: генерируем имя из хоста (например, "Сервер my.server.com")
-	hostname := params.Address
+	hostname := parsed.Address
 	if hostname == "" {
 		hostname = "unknown"
 	}
@@ -847,32 +858,13 @@ probeLoop:
 	return med, minMs, maxMs, true
 }
 
-// extractAddr вытаскивает host:port из VLESS URL
-func extractAddr(vlessURL string) string {
-	// vless://uuid@host:port?params#name
-	u := vlessURL
-	// убираем схему
-	u = strings.TrimPrefix(u, "vless://")
-	// убираем фрагмент
-	if i := strings.Index(u, "#"); i >= 0 {
-		u = u[:i]
-	}
-	// убираем query
-	if i := strings.Index(u, "?"); i >= 0 {
-		u = u[:i]
-	}
-	// убираем path
-	if i := strings.Index(u, "/"); i >= 0 {
-		u = u[:i]
-	}
-	// uuid@host:port → host:port
-	if i := strings.Index(u, "@"); i >= 0 {
-		u = u[i+1:]
-	}
-	if u == "" {
+// extractAddr вытаскивает host:port из server URI.
+func extractAddr(serverURI string) string {
+	u, err := url.Parse(serverURI)
+	if err != nil || u.Hostname() == "" || u.Port() == "" {
 		return ""
 	}
-	return u
+	return net.JoinHostPort(u.Hostname(), u.Port())
 }
 
 // ── C-5: Subscription URL ────────────────────────────────────────────────────
@@ -956,20 +948,29 @@ func fetchVLESSFromURLWithClient(rawURL string, client *http.Client) (string, er
 	}
 	content := string(body)
 
-	// Шаг 1: поиск vless:// построчно
-	if v := findFirstVLESS(content); v != "" {
+	// Шаг 1: поиск server URI построчно
+	if v := findFirstServerURI(content); v != "" {
 		return v, nil
 	}
 	// Шаг 2: Base64 decode (формат V2ray subscription)
 	if decoded, err := base64DecodeSubscription(content); err == nil {
-		if v := findFirstVLESS(decoded); v != "" {
+		if v := findFirstServerURI(decoded); v != "" {
 			return v, nil
 		}
 	}
-	return "", fmt.Errorf("не найдено VLESS URL в ответе")
+	return "", fmt.Errorf("не найдено server URI в ответе")
 }
 
-// findFirstVLESS возвращает первую строку начинающуюся с vless://, или "".
+func findFirstServerURI(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
+		if isSupportedServerURI(line) {
+			return line
+		}
+	}
+	return ""
+}
+
 func findFirstVLESS(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
@@ -978,6 +979,12 @@ func findFirstVLESS(content string) string {
 		}
 	}
 	return ""
+}
+
+func isSupportedServerURI(line string) bool {
+	return strings.HasPrefix(line, "vless://") ||
+		strings.HasPrefix(line, "trojan://") ||
+		strings.HasPrefix(line, "ss://")
 }
 
 // base64DecodeSubscription пробует несколько вариантов Base64 (std, URL, raw).
@@ -1018,17 +1025,16 @@ func (h *ServersHandlers) handleFetchURL(w http.ResponseWriter, r *http.Request)
 	if h.fetchURLFn != nil {
 		fetchFn = h.fetchURLFn
 	}
-	vlessURI, err := fetchFn(req.URL)
+	serverURI, err := fetchFn(req.URL)
 	if err != nil {
-		h.server.respondError(w, http.StatusUnprocessableEntity, "не удалось получить VLESS: "+err.Error())
+		h.server.respondError(w, http.StatusUnprocessableEntity, "не удалось получить server URI: "+err.Error())
 		return
 	}
 
-	// Генерируем имя из хоста VLESS-сервера если не задано явно
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
-		if params, parseErr := config.ParseVLESSContent(vlessURI); parseErr == nil && params.Address != "" {
-			name = "Сервер " + params.Address
+		if parsed, parseErr := config.ParseServerContent(serverURI); parseErr == nil && parsed.Address != "" {
+			name = "Сервер " + parsed.Address
 		} else {
 			name = "Сервер"
 		}
@@ -1042,9 +1048,9 @@ func (h *ServersHandlers) handleFetchURL(w http.ResponseWriter, r *http.Request)
 		h.server.respondError(w, http.StatusInternalServerError, "ошибка чтения списка серверов")
 		return
 	}
-	// Проверка дублей по VLESS URI
+	// Проверка дублей по server URI
 	for _, s := range list {
-		if s.URL == vlessURI {
+		if s.URL == serverURI {
 			h.server.respondJSON(w, http.StatusConflict, map[string]interface{}{
 				"exists":    true,
 				"server_id": s.ID,
@@ -1056,7 +1062,7 @@ func (h *ServersHandlers) handleFetchURL(w http.ResponseWriter, r *http.Request)
 	entry := ServerEntry{
 		ID:              fmt.Sprintf("%d", time.Now().UnixNano()),
 		Name:            name,
-		URL:             vlessURI,
+		URL:             serverURI,
 		CountryCode:     "??",
 		AddedAt:         time.Now().Unix(),
 		SubscriptionURL: req.URL, // C-5: сохраняем для последующего /refresh
@@ -1114,13 +1120,13 @@ func (h *ServersHandlers) handleRefresh(w http.ResponseWriter, r *http.Request) 
 	oldURL := list[targetIdx].URL
 
 	// HTTP-запрос вне мьютекса — может занять до 15 секунд.
-	newVLESS, err := fetchVLESSFromURL(subURL)
+	newServerURI, err := fetchVLESSFromURL(subURL)
 	if err != nil {
 		h.server.respondError(w, http.StatusUnprocessableEntity, "ошибка обновления: "+err.Error())
 		return
 	}
 
-	changed := oldURL != newVLESS
+	changed := oldURL != newServerURI
 	if changed {
 		// Перечитываем список под мьютексом записи — другой запрос мог изменить его.
 		h.mu.Lock()
@@ -1132,7 +1138,7 @@ func (h *ServersHandlers) handleRefresh(w http.ResponseWriter, r *http.Request) 
 		}
 		for i := range list2 {
 			if list2[i].ID == id {
-				list2[i].URL = newVLESS
+				list2[i].URL = newServerURI
 				break
 			}
 		}
@@ -1145,7 +1151,7 @@ func (h *ServersHandlers) handleRefresh(w http.ResponseWriter, r *http.Request) 
 		if active, rerr := config.ReadSecretKey(h.secretKey); rerr == nil {
 			active = strings.TrimSpace(strings.TrimPrefix(active, "\xef\xbb\xbf"))
 			if active == strings.TrimSpace(oldURL) {
-				_ = config.WriteSecretKey(h.secretKey, newVLESS)
+				_ = config.WriteSecretKey(h.secretKey, newServerURI)
 				config.InvalidateVLESSCache()
 				if h.server.config.SecretKeyUpdatedFn != nil {
 					h.server.config.SecretKeyUpdatedFn()
@@ -1157,7 +1163,7 @@ func (h *ServersHandlers) handleRefresh(w http.ResponseWriter, r *http.Request) 
 			config.InvalidateVLESSCache()
 		}
 		h.mu.Unlock()
-		list[targetIdx].URL = newVLESS
+		list[targetIdx].URL = newServerURI
 	}
 
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{

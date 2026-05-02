@@ -100,11 +100,11 @@ func fetchIP(ctx context.Context, client *http.Client) string {
 
 func (s *Server) handleClipboardVLESS(w http.ResponseWriter, _ *http.Request) {
 	text := strings.TrimSpace(clipboard.Read())
-	if !strings.HasPrefix(text, "vless://") {
+	if !strings.HasPrefix(text, "vless://") && !strings.HasPrefix(text, "trojan://") && !strings.HasPrefix(text, "ss://") {
 		s.respondJSON(w, http.StatusOK, map[string]interface{}{"found": false})
 		return
 	}
-	if _, err := config.ParseVLESSContent(text); err != nil {
+	if _, err := config.ParseServerContent(text); err != nil {
 		s.respondJSON(w, http.StatusOK, map[string]interface{}{"found": false})
 		return
 	}
