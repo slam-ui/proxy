@@ -7,18 +7,23 @@
 //   - Трафик к IP прокси-сервера — чтобы sing-box мог переподключиться
 //   - Уже установленные соединения — не рвём текущие VLESS-соединения
 //
-// Правила создаются при падении туннеля (Enable) и удаляются при старте (Disable).
+// Правила создаются при падении туннеля (Enable) и остаются после краша.
+// Автоматическая очистка на старте разрешена только после clean shutdown state.
 package killswitch
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"proxyclient/internal/config"
+	"proxyclient/internal/fileutil"
 	"proxyclient/internal/logger"
 )
 
@@ -26,13 +31,26 @@ const (
 	ruleNameBlock   = "ProxyClient-KillSwitch-Block"
 	ruleNameAllow   = "ProxyClient-KillSwitch-Allow"
 	ruleNameBlockV6 = "ProxyClient-KillSwitch-Block-IPv6"
-	ksStateFile     = "killswitch_active"
+	ksLegacyFile    = "killswitch_active"
 )
 
 var (
 	mu      sync.Mutex
 	enabled bool
 )
+
+type RuleState struct {
+	Name string `json:"name"`
+	ID   string `json:"id,omitempty"`
+}
+
+type State struct {
+	Active                bool        `json:"active"`
+	CreatedAt             time.Time   `json:"created_at,omitempty"`
+	CreatedByPID          int         `json:"created_by_pid,omitempty"`
+	Rules                 []RuleState `json:"rules"`
+	ExpectedCleanShutdown bool        `json:"expected_clean_shutdown"`
+}
 
 // IsEnabled возвращает текущее состояние Kill Switch.
 func IsEnabled() bool {
@@ -95,7 +113,18 @@ func Enable(serverIP string, log logger.Logger) {
 		"profile=any",
 	)
 
-	_ = os.WriteFile(ksStateFile, []byte("1"), 0644)
+	_ = saveState(State{
+		Active:       true,
+		CreatedAt:    time.Now().UTC(),
+		CreatedByPID: os.Getpid(),
+		Rules: []RuleState{
+			{Name: ruleNameAllow},
+			{Name: ruleNameBlock},
+			{Name: ruleNameBlockV6},
+		},
+		ExpectedCleanShutdown: false,
+	})
+	_ = os.WriteFile(ksLegacyFile, []byte("1"), 0644)
 	enabled = true
 	if log != nil {
 		log.Warn("Kill Switch АКТИВЕН — трафик заблокирован до восстановления туннеля (разрешён: %s)", allowIPs)
@@ -111,32 +140,88 @@ func Disable(log logger.Logger) {
 	}
 	deleteRules()
 	enabled = false
-	_ = os.Remove(ksStateFile)
+	_ = saveState(State{Active: false, ExpectedCleanShutdown: true})
+	_ = os.Remove(ksLegacyFile)
 	if log != nil {
 		log.Info("Kill Switch снят — трафик разблокирован")
 	}
 }
 
-// CleanupOnStart удаляет правила Kill Switch при старте приложения.
-// Защита от ситуации когда приложение аварийно завершилось с активным KS.
+// CleanupOnStart применяет fail-close policy при старте приложения.
+// После краша правила остаются активными до явного действия пользователя.
 func CleanupOnStart(log logger.Logger) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// BUG FIX: запускаем cleanup только если KS был активен в прошлой сессии.
-	// Без проверки — два netsh delete при каждом старте даже без активного KS.
-	// Источник: singbox-launcher state file, Clash Verge Rev.
-	if _, err := os.Stat(ksStateFile); os.IsNotExist(err) {
+	st, err := LoadState()
+	if err != nil && log != nil {
+		log.Warn("Kill Switch: не удалось прочитать state: %v", err)
+	}
+	if !st.Active {
+		if _, err := os.Stat(ksLegacyFile); os.IsNotExist(err) {
+			enabled = false
+			return
+		}
+		// Legacy marker existed without JSON state. Treat it as crash-active.
+		enabled = true
+		if log != nil {
+			log.Warn("Kill Switch активен из прошлой сессии — правила оставлены до явной разблокировки")
+		}
+		return
+	}
+	if !st.ExpectedCleanShutdown {
+		enabled = true
+		if log != nil {
+			log.Warn("Kill Switch активен из прошлой сессии — трафик остаётся заблокированным до явной разблокировки")
+		}
+		return
+	}
+
+	cleanupAfterCleanShutdown(log)
+}
+
+func cleanupAfterCleanShutdown(log logger.Logger) {
+	if _, err := os.Stat(ksLegacyFile); os.IsNotExist(err) {
 		enabled = false
 		return
 	}
-	_ = os.Remove(ksStateFile)
+	_ = os.Remove(ksLegacyFile)
 
 	deleted := deleteRules()
 	if deleted && log != nil {
-		log.Info("Kill Switch: удалены правила от предыдущего сеанса")
+		log.Info("Kill Switch: удалены правила после чистого завершения")
 	}
 	enabled = false
+}
+
+func LoadState() (State, error) {
+	var st State
+	data, err := os.ReadFile(statePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return st, nil
+		}
+		return st, err
+	}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return st, err
+	}
+	return st, nil
+}
+
+func saveState(st State) error {
+	data, err := json.MarshalIndent(st, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(statePath()), 0755); err != nil {
+		return err
+	}
+	return fileutil.WriteAtomic(statePath(), data, 0644)
+}
+
+func statePath() string {
+	return filepath.Join(config.DataDir, "killswitch_state.json")
 }
 
 // deleteRules удаляет все firewall-правила. Возвращает true если хоть одно было удалено.

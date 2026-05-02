@@ -527,6 +527,10 @@
         <div><div class="pg-lbl">Подключение при запуске</div><div class="pg-sub">Включать туннель сразу или ждать ручного запуска</div></div>
         <div class="rule-toggle" id="startupProxyToggle" onclick="toggleStartupProxy()" title="Включать прокси при запуске клиента"></div>
       </div>
+      <div class="pg-row" id="killSwitchRecoveryRow" style="display:none">
+        <div><div class="pg-lbl">Kill switch активен</div><div class="pg-sub">Трафик заблокирован после прошлой сессии</div></div>
+        <button class="pg-btn danger" onclick="unlockKillSwitch()">Снять блокировку</button>
+      </div>
       <div class="pg-row">
         <div><div class="pg-lbl">Автопереключение</div><div class="pg-sub" id="failoverResult">Переключение при деградации сервера</div></div>
         <div class="rule-toggle" id="smartFailoverToggle" onclick="toggleLifecycleOption('smart_failover')" title="Автопереключение сервера"></div>

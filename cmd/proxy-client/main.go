@@ -346,8 +346,8 @@ func run(output io.Writer) error {
 	}()
 
 	// Kill Switch: удаляем правила брандмауэра от предыдущего сеанса.
-	// Если приложение упало с активным Kill Switch, правила netsh остаются в системе
-	// и блокируют весь трафик до следующего запуска. CleanupOnStart устраняет это.
+	// Если приложение упало с активным Kill Switch, правила netsh остаются в системе.
+	// CleanupOnStart применяет fail-close: оставляет блокировку до явного действия.
 	killswitch.CleanupOnStart(app.mainLogger)
 
 	// Загружаем app rules параллельно (I/O, не зависит от wintun).

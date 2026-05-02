@@ -377,6 +377,9 @@ function applyLifecycleControls(d) {
   const lt = _appSettingsCache.leak_test || {};
   if ($id('leakDomainInp')) $id('leakDomainInp').value = lt.domain || 'dnsleak.example.com';
   if ($id('leakReportURLInp')) $id('leakReportURLInp').value = lt.report_url || 'https://example.com/api/dnsleak/check';
+  const ks = _appSettingsCache.kill_switch_state || {};
+  const recovery = !!(ks.active && ks.expected_clean_shutdown === false);
+  if ($id('killSwitchRecoveryRow')) $id('killSwitchRecoveryRow').style.display = recovery ? 'flex' : 'none';
 }
 
 function applyUpdateControls(upd) {
@@ -542,6 +545,23 @@ function toggleLifecycleOption(key) {
   if (key === 'network_strict') $id('networkStrictToggle')?.classList.toggle('on');
   if (key === 'traffic_budget') $id('trafficBudgetToggle')?.classList.toggle('on');
   saveLifecycleSettings();
+}
+
+async function unlockKillSwitch() {
+  if (!confirm('Вы выходите в незащищённую сеть. Снять блокировку Kill switch?')) return;
+  try {
+    const r = await fetch(API + '/settings/killswitch', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({enabled:false})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+    showToast('Kill switch снят', 'warn');
+    loadSettingsPage();
+  } catch(e) {
+    showToast('Kill switch: ' + e.message, 'off');
+  }
 }
 
 function renderSingboxConfigStatus(d) {
