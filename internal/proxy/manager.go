@@ -71,9 +71,11 @@ type manager struct {
 	mu      sync.RWMutex
 
 	// B-2: Proxy Guard поля
-	guardCtx     context.Context
-	guardCancel  context.CancelFunc
-	guardRunning bool // BUG FIX: sync.Once не позволяет перезапуск после StopGuard
+	guardLifecycleMu sync.Mutex
+	guardCtx         context.Context
+	guardCancel      context.CancelFunc
+	guardRunning     bool // BUG FIX: sync.Once не позволяет перезапуск после StopGuard
+	guardWG          sync.WaitGroup
 	// BUG FIX: guardGen — монотонный счётчик поколений guard-горутины.
 	// Когда StartGuard запускает новую горутину, он инкрементирует guardGen и передаёт
 	// значение в замыкание. При завершении горутина проверяет совпадение с текущим
@@ -182,25 +184,39 @@ func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error 
 		interval = 5 * time.Second
 	}
 
+	m.guardLifecycleMu.Lock()
+	defer m.guardLifecycleMu.Unlock()
+
 	m.mu.Lock()
 	oldCancel := m.guardCancel
-	m.guardCtx, m.guardCancel = context.WithCancel(ctx)
-	m.guardRunning = true
-	m.guardGen++
-	myGen := m.guardGen
-	guardCtx := m.guardCtx
+	oldRunning := m.guardRunning
 	m.mu.Unlock()
 
 	if oldCancel != nil {
 		oldCancel()
 	}
+	if oldRunning {
+		m.guardWG.Wait()
+	}
+
+	m.mu.Lock()
+	m.guardCtx, m.guardCancel = context.WithCancel(ctx)
+	m.guardRunning = true
+	m.guardGen++
+	myGen := m.guardGen
+	guardCtx := m.guardCtx
+	m.guardWG.Add(1)
+	m.mu.Unlock()
 
 	go func() {
+		defer m.guardWG.Done()
 		m.guardLoop(guardCtx, interval)
 		m.mu.Lock()
 		// Очищаем флаг только если мы ещё актуальная горутина (не вытеснены повторным StartGuard).
 		if m.guardGen == myGen {
 			m.guardRunning = false
+			m.guardCtx = nil
+			m.guardCancel = nil
 		}
 		m.mu.Unlock()
 	}()
@@ -210,12 +226,20 @@ func (m *manager) StartGuard(ctx context.Context, interval time.Duration) error 
 
 // StopGuard останавливает proxy guard.
 func (m *manager) StopGuard() {
+	m.guardLifecycleMu.Lock()
+	defer m.guardLifecycleMu.Unlock()
+
 	m.mu.Lock()
 	cancel := m.guardCancel
+	running := m.guardRunning
 	m.guardCancel = nil
+	m.guardCtx = nil
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	if running {
+		m.guardWG.Wait()
 	}
 }
 
