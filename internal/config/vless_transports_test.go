@@ -160,6 +160,31 @@ func TestParseVLESSURL_HTTP(t *testing.T) {
 	}
 }
 
+func TestBuildVLESSOutbound_HTTP(t *testing.T) {
+	params := &VLESSParams{
+		Address:  "example.com",
+		Port:     443,
+		UUID:     "uuid",
+		SNI:      "sni.example.com",
+		Security: "tls",
+		Type:     "http",
+		Path:     "/h2",
+		Host:     []string{"a.example.com", "b.example.com"},
+		ALPN:     []string{"h2"},
+	}
+	out := buildVLESSOutbound(params)
+	if out.Transport == nil {
+		t.Fatal("Transport должен быть задан для http")
+	}
+	want := &SBTransport{Type: "http", Host: []string{"a.example.com", "b.example.com"}, Path: "/h2", Method: "GET"}
+	if !reflect.DeepEqual(out.Transport, want) {
+		t.Fatalf("Transport = %#v, want %#v", out.Transport, want)
+	}
+	if out.TLS == nil || !reflect.DeepEqual(out.TLS.ALPN, []string{"h2"}) {
+		t.Fatalf("HTTP transport должен сохранять ALPN h2: %+v", out.TLS)
+	}
+}
+
 func TestParseVLESSURL_HTTPUpgrade(t *testing.T) {
 	p, err := ParseVLESSContent("vless://uuid@example.com:443?security=tls&type=httpupgrade&path=/up&host=edge.example.com")
 	if err != nil {
