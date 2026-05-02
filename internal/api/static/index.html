@@ -318,6 +318,64 @@
       <div class="pg-sub" id="defaultActionHint">загрузка...</div>
     </div>
 
+    <div class="pg-section visual-routing-section">
+      <div class="pg-section-ttl visual-routing-head">
+        <span>Визуальный редактор</span>
+        <div class="visual-routing-actions">
+          <button class="pg-btn" onclick="loadVisualRouting()">↻</button>
+          <button class="pg-btn acc" onclick="openVisualRuleEditor()">+ Правило</button>
+        </div>
+      </div>
+      <div class="visual-quick-row">
+        <button class="pg-btn" onclick="quickVisualRule('proxy-domain')">Домен → Proxy</button>
+        <button class="pg-btn" onclick="quickVisualRule('direct-app')">Приложение → Direct</button>
+        <button class="pg-btn danger" onclick="quickVisualRule('block-domain')">Домен → Block</button>
+      </div>
+      <div class="visual-preset-row" id="visualPresetRow"></div>
+      <div class="visual-conflicts" id="visualConflicts" style="display:none"></div>
+      <div class="visual-rule-list" id="visualRuleList">
+        <div class="rules-empty">загрузка визуальных правил...</div>
+      </div>
+      <div class="visual-editor" id="visualRuleEditor" style="display:none">
+        <input type="hidden" id="vrEditId">
+        <div class="visual-editor-grid">
+          <input class="pg-inp" id="vrName" placeholder="Название правила">
+          <select class="pg-inp" id="vrType">
+            <option value="domain">Domain</option>
+            <option value="domain_suffix">Domain suffix</option>
+            <option value="domain_keyword">Domain keyword</option>
+            <option value="ip">IP</option>
+            <option value="ip_cidr">IP CIDR</option>
+            <option value="process">Process</option>
+            <option value="geosite">GeoSite</option>
+            <option value="geoip">GeoIP</option>
+            <option value="port">Port</option>
+          </select>
+          <textarea class="pg-inp visual-values" id="vrValues" placeholder="netflix.com&#10;youtube.com"></textarea>
+          <div class="visual-editor-side">
+            <label class="visual-check"><input type="checkbox" id="vrEnabled" checked> Включено</label>
+            <label class="visual-check"><input type="checkbox" id="vrInverse"> NOT match</label>
+            <input type="hidden" id="vrAction" value="proxy">
+            <div class="rule-action-picker" data-target="vrAction">
+              <button class="rule-action-btn active" data-action="proxy" onclick="setRuleAction('vrAction','proxy')">Прокси</button>
+              <button class="rule-action-btn" data-action="direct" onclick="setRuleAction('vrAction','direct')">Напрямую</button>
+              <button class="rule-action-btn" data-action="block" onclick="setRuleAction('vrAction','block')">Блок</button>
+            </div>
+            <input class="pg-inp" id="vrServer" placeholder="server tag (optional)">
+          </div>
+        </div>
+        <div class="visual-test-row">
+          <input class="pg-inp" id="vrTestValue" placeholder="test value">
+          <button class="pg-btn" onclick="testVisualRule()">Test</button>
+          <div class="visual-test-result" id="vrTestResult"></div>
+        </div>
+        <div class="json-modal-actions">
+          <button class="pg-btn" onclick="closeVisualRuleEditor()">Отмена</button>
+          <button class="pg-btn acc" onclick="saveVisualRule()">✓ Сохранить</button>
+        </div>
+      </div>
+    </div>
+
     <div class="pg-section">
       <div class="pg-section-ttl">Добавить правило</div>
       <div style="display:flex;flex-direction:column;gap:8px">
