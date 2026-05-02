@@ -46,24 +46,32 @@ func ptrBool(b bool) *bool {
 //  1. params.Mux=true (URL содержит ?mux=1) — явно запрошено
 //  2. Flow пустой — XTLS Vision несовместим с mux
 func buildVLESSOutbound(params *VLESSParams) SBOutbound {
-	tls := &SBTLS{
-		Enabled:    true,
-		ServerName: params.SNI,
-		ALPN:       []string{"h2", "http/1.1"},
-		UTLS:       &SBUTLS{Enabled: true, Fingerprint: params.UTLSFingerprint()},
-	}
-	// Reality включается только при наличии непустого PublicKey (pbk в URL).
-	// Без PublicKey используется plain TLS — стандартный handshake без Reality.
-	// BUG FIX: раньше Reality всегда включался с пустыми PublicKey/ShortID,
-	// что приводило к крашу sing-box на серверах без Reality.
-	if strings.TrimSpace(params.PublicKey) != "" {
-		tls.Reality = &SBReality{
-			Enabled:   true,
-			PublicKey: params.PublicKey,
-			ShortID:   params.ShortID,
+	var tls *SBTLS
+	if params.Security != "none" {
+		alpn := []string{"h2", "http/1.1"}
+		if len(params.ALPN) > 0 {
+			alpn = append([]string(nil), params.ALPN...)
 		}
-	} else {
-		tls.MinVersion = "1.3"
+		tls = &SBTLS{
+			Enabled:    true,
+			ServerName: params.SNI,
+			ALPN:       alpn,
+			UTLS:       &SBUTLS{Enabled: true, Fingerprint: params.UTLSFingerprint()},
+			Insecure:   params.Insecure,
+		}
+		// Reality включается только при наличии непустого PublicKey (pbk в URL).
+		// Без PublicKey используется plain TLS — стандартный handshake без Reality.
+		// BUG FIX: раньше Reality всегда включался с пустыми PublicKey/ShortID,
+		// что приводило к крашу sing-box на серверах без Reality.
+		if strings.TrimSpace(params.PublicKey) != "" {
+			tls.Reality = &SBReality{
+				Enabled:   true,
+				PublicKey: params.PublicKey,
+				ShortID:   params.ShortID,
+			}
+		} else {
+			tls.MinVersion = "1.3"
+		}
 	}
 
 	out := SBOutbound{
@@ -100,7 +108,33 @@ func buildVLESSOutbound(params *VLESSParams) SBOutbound {
 		}
 		out.TLSFragment = &SBTLSFragment{Enabled: true, Size: size, Sleep: "0-5ms"}
 	}
+	if t := buildTransport(params); t != nil {
+		out.Transport = t
+	}
 	return out
+}
+
+func buildTransport(params *VLESSParams) *SBTransport {
+	switch params.Type {
+	case "", "tcp":
+		if params.HeaderType == "http" {
+			path := params.Path
+			if path == "" {
+				path = "/"
+			}
+			// sing-box не имеет отдельного tcp+http-obf: xray headerType=http
+			// эмулируется HTTP transport поверх VLESS outbound.
+			return &SBTransport{
+				Type:   "http",
+				Host:   params.Host,
+				Path:   path,
+				Method: "GET",
+			}
+		}
+		return nil
+	}
+	// Невалидные или ещё не реализованные типы должны были отсеяться парсером.
+	return nil
 }
 
 // buildDNSConfig создаёт DNS конфигурацию для sing-box на основе DNSConfig.
