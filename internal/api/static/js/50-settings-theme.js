@@ -752,9 +752,149 @@ async function loadSettingsPage() {
   loadTrafficBudget();
   checkFailoverStatus();
   loadClientUpdateStatus();
+  loadSubscriptions();
 }
 
 let _importSrvRunning = false;
+
+let _subscriptionsCache = [];
+
+async function loadSubscriptions() {
+  const el = $id('subscriptionList');
+  if (!el) return;
+  try {
+    const r = await fetch(API + '/subscriptions');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    _subscriptionsCache = d.subscriptions || [];
+    renderSubscriptions();
+  } catch(e) {
+    el.innerHTML = `<div class="pg-sub" style="text-align:center;padding:8px">ошибка: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSubscriptions() {
+  const el = $id('subscriptionList');
+  if (!el) return;
+  const list = _subscriptionsCache || [];
+  if (!list.length) {
+    el.innerHTML = '<div class="pg-sub" style="text-align:center;padding:8px">подписок нет</div>';
+    return;
+  }
+  el.innerHTML = list.map(sub => {
+    const quota = formatSubscriptionQuota(sub.quota || {});
+    const last = sub.last_updated ? timeAgo(sub.last_updated) : 'не обновлялась';
+    const count = (sub.servers || []).length;
+    const err = sub.last_error ? `<span class="sub-chip err">${esc(sub.last_error)}</span>` : '';
+    const empty = sub.empty ? '<span class="sub-chip warn">пустая</span>' : '';
+    return `<div class="sub-item">
+      <div class="sub-main">
+        <div class="sub-title">${esc(sub.name || 'Subscription')}</div>
+        <div class="sub-url">${esc(sub.url || '')}</div>
+        <div class="sub-meta">
+          <span class="sub-chip">${esc(last)}</span>
+          <span class="sub-chip">${count} servers</span>
+          ${quota ? `<span class="sub-chip">${esc(quota)}</span>` : ''}
+          ${empty}${err}
+        </div>
+      </div>
+      <div class="sub-actions">
+        <button class="pg-btn" onclick="updateSubscription('${esc(sub.id)}')">Обновить</button>
+        <button class="pg-btn danger" onclick="removeSubscription('${esc(sub.id)}')">Удалить</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addSubscription() {
+  const btn = $id('subAddBtn');
+  const name = ($id('subNameInp')?.value || '').trim();
+  const url = ($id('subUrlInp')?.value || '').trim();
+  const update_every = $id('subIntervalInp')?.value || 'manual';
+  const user_agent = ($id('subUserAgentInp')?.value || '').trim();
+  if (!url) { showToast('Введите URL подписки', 'warn'); return; }
+  if (!/^https:\/\//i.test(url)) { showToast('Subscription URL должен быть HTTPS', 'warn'); return; }
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(API + '/subscriptions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      timeoutMs: 45000,
+      body: JSON.stringify({name, url, update_every, user_agent})
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 202) throw new Error(d.error || await r.text());
+    $id('subNameInp').value = '';
+    $id('subUrlInp').value = '';
+    showToast(r.ok ? 'Подписка добавлена' : 'Подписка сохранена, обновление не прошло', r.ok ? 'on' : 'warn');
+    await loadSubscriptions();
+    await loadServers();
+  } catch(e) {
+    showToast('Ошибка подписки: ' + e.message, 'off');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function updateSubscription(id) {
+  try {
+    const r = await fetch(API + '/subscriptions/' + encodeURIComponent(id) + '/update', {method:'POST', timeoutMs:45000});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    showToast(`Обновлено: +${d.result?.added || 0}, -${d.result?.removed || 0}`, 'on');
+    await loadSubscriptions();
+    await loadServers();
+  } catch(e) {
+    showToast('Ошибка обновления: ' + e.message, 'off');
+  }
+}
+
+async function removeSubscription(id) {
+  if (!confirm('Удалить подписку и её серверы?')) return;
+  try {
+    const r = await fetch(API + '/subscriptions/' + encodeURIComponent(id), {method:'DELETE'});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || await r.text());
+    showToast('Подписка удалена', 'on');
+    await loadSubscriptions();
+    await loadServers();
+  } catch(e) {
+    showToast('Ошибка удаления: ' + e.message, 'off');
+  }
+}
+
+function formatSubscriptionQuota(q) {
+  const used = Number(q.upload || 0) + Number(q.download || 0);
+  const total = Number(q.total || 0);
+  const parts = [];
+  if (total > 0) parts.push(`${formatBytes(used)} / ${formatBytes(total)}`);
+  else if (used > 0) parts.push(`${formatBytes(used)} used`);
+  const exp = q.expires_at ? new Date(q.expires_at) : null;
+  if (exp && !Number.isNaN(exp.getTime()) && exp.getFullYear() > 2001) {
+    parts.push(exp.toLocaleDateString());
+  }
+  return parts.join(' · ');
+}
+
+function formatBytes(n) {
+  const units = ['B','KB','MB','GB','TB'];
+  let value = Math.max(0, Number(n || 0));
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) { value /= 1024; idx++; }
+  return `${value >= 10 || idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`;
+}
+
+function timeAgo(value) {
+  const ts = new Date(value).getTime();
+  if (!ts || Number.isNaN(ts)) return 'не обновлялась';
+  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  if (sec < 90) return `${sec} sec ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 90) return `${min} min ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
+}
 
 async function importSrvUrl() {
   if (_importSrvRunning) return;
