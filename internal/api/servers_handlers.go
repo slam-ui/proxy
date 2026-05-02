@@ -988,7 +988,8 @@ func isSupportedServerURI(line string) bool {
 		strings.HasPrefix(line, "hysteria2://") ||
 		strings.HasPrefix(line, "hy2://") ||
 		strings.HasPrefix(line, "tuic://") ||
-		strings.HasPrefix(line, "wireguard://")
+		strings.HasPrefix(line, "wireguard://") ||
+		strings.HasPrefix(line, "vmess://")
 }
 
 // base64DecodeSubscription пробует несколько вариантов Base64 (std, URL, raw).

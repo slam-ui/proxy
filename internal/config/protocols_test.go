@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"testing"
 )
 
@@ -139,5 +140,42 @@ func TestParseServerContentWireGuardURL(t *testing.T) {
 	}
 	if got.Outbound.MTU != 1280 || got.Outbound.LocalAddress[0] != "10.0.0.2/32" {
 		t.Fatalf("unexpected wg outbound: %+v", got.Outbound)
+	}
+}
+
+func TestParseServerContentVMessWS(t *testing.T) {
+	payload, _ := json.Marshal(map[string]string{
+		"v":    "2",
+		"ps":   "vmess-ws",
+		"add":  "example.com",
+		"port": "443",
+		"id":   "00000000-0000-0000-0000-000000000000",
+		"aid":  "0",
+		"scy":  "auto",
+		"net":  "ws",
+		"type": "none",
+		"host": "cdn.example.com",
+		"path": "/ws",
+		"tls":  "tls",
+		"sni":  "edge.example.com",
+	})
+	got, err := ParseServerContent("vmess://" + base64.RawStdEncoding.EncodeToString(payload))
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Proto != "vmess" || got.Outbound.Type != "vmess" || got.Outbound.Security != "auto" {
+		t.Fatalf("unexpected vmess result: %+v", got)
+	}
+	if got.Outbound.Transport == nil || got.Outbound.Transport.Type != "ws" {
+		t.Fatalf("unexpected transport: %+v", got.Outbound.Transport)
+	}
+}
+
+func TestParseServerContentVMessRejectsAlterID(t *testing.T) {
+	payload, _ := json.Marshal(map[string]string{
+		"add": "example.com", "port": "443", "id": "00000000-0000-0000-0000-000000000000", "aid": "1", "net": "ws",
+	})
+	if _, err := ParseServerContent("vmess://" + base64.StdEncoding.EncodeToString(payload)); err == nil {
+		t.Fatal("accepted alterId > 0")
 	}
 }

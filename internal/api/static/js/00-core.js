@@ -50,7 +50,7 @@ const srvOverlay = $id('srvOverlay');
 const warmDot  = $id('warmDot');
 
 function isSupportedServerURI(url) {
-  return /^\\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard):\\/\\//i.test(url || '');
+  return /^\\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard|vmess):\\/\\//i.test(url || '');
 }
 
 // ═══════════════════════════════════════════════════
