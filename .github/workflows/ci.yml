@@ -212,7 +212,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.26.1
 
       - name: Run gosec high severity gate (Windows target)
         env:
@@ -229,8 +229,19 @@ jobs:
           CGO_ENABLED: '0'
         run: gosec -quiet -severity high -fmt sarif -out gosec.sarif ./...
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - name: Check gosec SARIF exists
+        id: gosec_sarif
         if: always()
+        run: |
+          if [ -s gosec.sarif ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "gosec.sarif was not generated; skipping SARIF upload"
+          fi
+
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always() && steps.gosec_sarif.outputs.present == 'true'
         with:
           sarif_file: gosec.sarif
 
@@ -289,7 +300,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: go
           queries: security-extended
@@ -306,7 +317,7 @@ jobs:
             ./internal/logger/... \
             ./internal/netutil/...
 
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:go"
 
