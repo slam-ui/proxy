@@ -1,7 +1,7 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 23 (Critical: 0, High: 5, Medium: 17, Low: 1)
+- Fixed: 25 (Critical: 0, High: 6, Medium: 18, Low: 1)
 - Skipped (in BUG_REVIEW_NEEDED.md): 4
 - Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 289 findings; golangci-lint and govulncheck had baseline failures not introduced here.
 
@@ -262,6 +262,28 @@
 - **Root cause:** `netwatch` dispatches `onChange` in new goroutines, while `startNetworkProtection` stored `last` in an unsynchronized closure variable.
 - **Fix:** Moved fingerprint state into a `networkChangeTracker` protected by a mutex.
 - **Test:** `TestNetworkChangeTrackerConcurrentNoRace`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
+
+### [F-024] Feature-route test lifecycle leak
+- **Severity:** Medium
+- **Category:** A
+- **File(s):** internal/api/backup_restore_extra_test.go
+- **Commit:** e1bbf48
+- **Symptom:** Repeated `internal/api` runs accumulated background route workers because a test called `SetupFeatureRoutes(context.Background())`.
+- **Root cause:** Feature routes start diagnostics/network-protection goroutines that require a cancelable lifecycle context.
+- **Fix:** Switched the test to a cancelable feature context and canceled it during cleanup.
+- **Test:** `TestBackupRestoreRoute_AllowsFiveMegabyteUploads`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
+
+### [F-025] Server ping probe hang
+- **Severity:** High
+- **Category:** A
+- **File(s):** internal/api/servers_handlers.go, internal/api/servers_handlers_test.go
+- **Commit:** f34f859
+- **Symptom:** `pingServerWithProbes(context.Background(), ...)` could hang in Windows DNS/TCP connect until the system resolver returned.
+- **Root cause:** The function used `net.Dialer.DialContext` with the caller context but no per-probe deadline.
+- **Fix:** Added a 2 second per-probe timeout and removed DNS dependency from the all-probes-fail regression.
+- **Test:** `TestPingServerWithProbes_DefaultProbeTimeout`, `TestPingServerWithProbes_AllProbesFail`
 - **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
 
 ## Test-only commits
