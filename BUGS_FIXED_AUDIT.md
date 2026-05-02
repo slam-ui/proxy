@@ -1,7 +1,7 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 19 (Critical: 0, High: 3, Medium: 15, Low: 1)
+- Fixed: 25 (Critical: 0, High: 6, Medium: 18, Low: 1)
 - Skipped (in BUG_REVIEW_NEEDED.md): 4
 - Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 289 findings; golangci-lint and govulncheck had baseline failures not introduced here.
 
@@ -217,6 +217,74 @@
 - **Fix:** Added a 30 second `ReadTimeout`, keeping it greater than the 5 second `ReadHeaderTimeout`. No streaming/upload route needed a disabled read deadline; API uploads are bounded JSON or multipart bodies.
 - **Test:** `TestServerHasReadTimeout`
 - **Verified:** targeted timeout test ok
+
+## Concurrency pass (category A)
+
+### [F-020] Detector lifecycle race
+- **Severity:** High
+- **Category:** A
+- **File(s):** internal/anomalylog/detector.go, internal/anomalylog/detector_test.go
+- **Commit:** cee67e0
+- **Symptom:** Concurrent `Start`/`Stop` could race on `stopCh`/`stopOnce` and panic with `sync: WaitGroup is reused before previous Wait has returned`.
+- **Root cause:** `Start` reset lifecycle fields while `Stop` could close or wait on the previous generation without a lifecycle mutex.
+- **Fix:** Serialized detector lifecycle transitions, captured `stopCh` per goroutine generation, and made `Stop` close only the active generation.
+- **Test:** `TestDetector_StartStopConcurrentNoRace`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/anomalylog/... -count=1 -race -timeout=180s`
+
+### [F-021] Proxy guard shutdown race
+- **Severity:** Medium
+- **Category:** A
+- **File(s):** internal/proxy/manager.go, internal/proxy/proxy_guard_test.go
+- **Commit:** f024295
+- **Symptom:** `StopGuard` returned after canceling the context while the active guard check could still be executing.
+- **Root cause:** Guard lifecycle had cancel state but no wait for the current guard goroutine generation.
+- **Fix:** Added guard lifecycle serialization and a `WaitGroup` so `StartGuard`/`StopGuard` wait for displaced or canceled guard generations to exit.
+- **Test:** `TestStopGuardWaitsForActiveCheck`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/proxy/... -count=1 -race -timeout=180s`
+
+### [F-022] Xray failed restart state race
+- **Severity:** High
+- **Category:** A
+- **File(s):** internal/xray/manager.go, internal/xray/manager_test.go
+- **Commit:** 2ec7ba8
+- **Symptom:** A failed restart after a prior process exit could leave `done` replaced by a never-closed channel, making `Wait` block and `IsRunning` report true.
+- **Root cause:** `Start`/`StartAfterManualCleanup` swapped lifecycle state before `doStart`; failure paths did not restore the previous generation.
+- **Fix:** Serialized lifecycle operations and rolled back `done`/`stopped` on failed starts while waking waiters on the failed generation.
+- **Test:** `TestManagerStartFailureRestoresDone`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/xray/... -count=1 -race -timeout=180s`
+
+### [F-023] Network protection callback race
+- **Severity:** Medium
+- **Category:** A
+- **File(s):** internal/api/client_features_handlers.go, internal/api/client_features_handlers_test.go
+- **Commit:** 90ba67b
+- **Symptom:** Windows network-change callbacks could run concurrently and race on the last seen network fingerprint.
+- **Root cause:** `netwatch` dispatches `onChange` in new goroutines, while `startNetworkProtection` stored `last` in an unsynchronized closure variable.
+- **Fix:** Moved fingerprint state into a `networkChangeTracker` protected by a mutex.
+- **Test:** `TestNetworkChangeTrackerConcurrentNoRace`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
+
+### [F-024] Feature-route test lifecycle leak
+- **Severity:** Medium
+- **Category:** A
+- **File(s):** internal/api/backup_restore_extra_test.go
+- **Commit:** e1bbf48
+- **Symptom:** Repeated `internal/api` runs accumulated background route workers because a test called `SetupFeatureRoutes(context.Background())`.
+- **Root cause:** Feature routes start diagnostics/network-protection goroutines that require a cancelable lifecycle context.
+- **Fix:** Switched the test to a cancelable feature context and canceled it during cleanup.
+- **Test:** `TestBackupRestoreRoute_AllowsFiveMegabyteUploads`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
+
+### [F-025] Server ping probe hang
+- **Severity:** High
+- **Category:** A
+- **File(s):** internal/api/servers_handlers.go, internal/api/servers_handlers_test.go
+- **Commit:** f34f859
+- **Symptom:** `pingServerWithProbes(context.Background(), ...)` could hang in Windows DNS/TCP connect until the system resolver returned.
+- **Root cause:** The function used `net.Dialer.DialContext` with the caller context but no per-probe deadline.
+- **Fix:** Added a 2 second per-probe timeout and removed DNS dependency from the all-probes-fail regression.
+- **Test:** `TestPingServerWithProbes_DefaultProbeTimeout`, `TestPingServerWithProbes_AllProbesFail`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/api/... -count=1 -race -timeout=180s`
 
 ## Test-only commits
 

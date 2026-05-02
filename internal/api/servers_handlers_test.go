@@ -157,12 +157,20 @@ func TestPingServerWithProbes_Invalid(t *testing.T) {
 
 // TestPingServerWithProbes_AllProbesFail проверяет случай когда все пробы не удаются
 func TestPingServerWithProbes_AllProbesFail(t *testing.T) {
-	ms, minMs, maxMs, ok := pingServerWithProbes(context.Background(), "vless://uuid@nonexistent.invalid:443", 3)
+	ms, minMs, maxMs, ok := pingServerWithProbes(context.Background(), "vless://uuid@127.0.0.1:1", 3)
 	if ok {
 		t.Error("pingServerWithProbes к несуществующему адресу должен вернуть ok=false")
 	}
 	if ms != 0 || minMs != 0 || maxMs != 0 {
 		t.Errorf("pingServerWithProbes с ошибкой должен вернуть (0,0,0,false), получилось (%v,%v,%v,%v)", ms, minMs, maxMs, ok)
+	}
+}
+
+func TestPingServerWithProbes_DefaultProbeTimeout(t *testing.T) {
+	start := time.Now()
+	_, _, _, _ = pingServerWithProbes(context.Background(), "vless://uuid@203.0.113.1:81", 1)
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("pingServerWithProbes занял %v, want <= 3s", elapsed)
 	}
 }
 

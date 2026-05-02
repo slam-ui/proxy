@@ -3,7 +3,9 @@ package anomalylog
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,6 +309,42 @@ func TestDetector_StopIsIdempotent(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Error("зависание после Stop")
 	}
+}
+
+func TestDetector_StartStopConcurrentNoRace(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(oldProcs)
+
+	d, _, _ := newTestDetector(t)
+	d.pollInterval = time.Millisecond
+
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			d.Start()
+			runtime.Gosched()
+		}()
+		go func() {
+			defer wg.Done()
+			d.Stop()
+			runtime.Gosched()
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("concurrent Start/Stop did not finish")
+	}
+	d.Stop()
 }
 
 func TestDetector_TwoWarningsNoBurst(t *testing.T) {
