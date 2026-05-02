@@ -2,8 +2,15 @@ package xray
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"proxyclient/internal/logger"
 )
 
 // ─── tailWriter ───────────────────────────────────────────────────────────
@@ -63,6 +70,61 @@ func TestIsTooManyRestarts_TypeCheck(t *testing.T) {
 	}
 	if IsTooManyRestarts(nil) {
 		t.Error("IsTooManyRestarts should return false for nil")
+	}
+}
+
+func TestManagerStartFailureRestoresDone(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"log":{"level":"info"}}`), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	mgr, err := NewManager(Config{
+		ExecutablePath: os.Args[0],
+		ConfigPath:     configPath,
+		Args:           []string{"-test.run=TestXrayHelperProcess", "--", "--xray-helper-exit"},
+		Logger:         logger.NewNop(),
+	}, context.Background())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	m := mgr.(*manager)
+	if err := m.Wait(); err != nil {
+		t.Fatalf("Wait initial helper process: %v", err)
+	}
+
+	restartErr := errors.New("restart cleanup failed")
+	m.mu.Lock()
+	m.config.BeforeRestart = func(context.Context, logger.Logger) error {
+		return restartErr
+	}
+	m.mu.Unlock()
+
+	if err := m.Start(); !errors.Is(err, restartErr) {
+		t.Fatalf("Start error = %v, want %v", err, restartErr)
+	}
+	if m.IsRunning() {
+		t.Fatal("failed restart must not leave manager marked running")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- m.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Wait after failed restart returned %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Wait blocked after failed restart")
+	}
+}
+
+func TestXrayHelperProcess(t *testing.T) {
+	for _, arg := range os.Args {
+		if arg == "--xray-helper-exit" {
+			os.Exit(0)
+		}
 	}
 }
 
