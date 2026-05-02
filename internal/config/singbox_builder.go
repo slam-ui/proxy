@@ -132,6 +132,20 @@ func buildTransport(params *VLESSParams) *SBTransport {
 			}
 		}
 		return nil
+	case "ws":
+		path := params.Path
+		if path == "" {
+			path = "/"
+		}
+		t := &SBTransport{Type: "ws", Path: path}
+		if len(params.Host) > 0 && params.Host[0] != "" {
+			t.Headers = map[string]string{"Host": params.Host[0]}
+		}
+		if params.EarlyData > 0 {
+			t.MaxEarlyData = params.EarlyData
+			t.EarlyDataHeaderName = "Sec-WebSocket-Protocol"
+		}
+		return t
 	}
 	// Невалидные или ещё не реализованные типы должны были отсеяться парсером.
 	return nil
