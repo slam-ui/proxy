@@ -140,3 +140,46 @@ func TestProfilesSaveRejectsSpecificSelectorWithoutServer(t *testing.T) {
 		t.Fatalf("POST /api/profiles specific without server = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
 }
+
+func TestProfilesImportExportRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	old, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(old) }()
+
+	srv := NewServer(Config{Logger: &logger.NoOpLogger{}}, context.Background())
+	SetupProfileRoutes(srv)
+	profile := Profile{
+		ID:             "streaming",
+		Name:           "Streaming",
+		Description:    "Media",
+		ServerSelector: ServerSelector{Mode: "auto"},
+		Routing:        config.RoutingConfig{DefaultAction: config.ActionProxy, Rules: []config.RoutingRule{{Value: "youtube.com", Type: config.RuleTypeDomain, Action: config.ActionProxy}}},
+		RoutingRules:   []config.RoutingRule{{Value: "youtube.com", Type: config.RuleTypeDomain, Action: config.ActionProxy}},
+		KillSwitch:     KillSwitchConnected,
+		AutoConnect:    true,
+	}
+	body, _ := json.Marshal(profile)
+	req := httptest.NewRequest(http.MethodPost, "/api/profiles/import", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/profiles/import = %d, body=%s", w.Code, w.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/profiles/Streaming/export", nil)
+	w = httptest.NewRecorder()
+	srv.router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/profiles/Streaming/export = %d, body=%s", w.Code, w.Body.String())
+	}
+	var exported Profile
+	if err := json.NewDecoder(w.Body).Decode(&exported); err != nil {
+		t.Fatalf("Decode exported: %v", err)
+	}
+	if exported.ID != "streaming" || exported.Description != "Media" || !exported.AutoConnect {
+		t.Fatalf("unexpected exported profile: %+v", exported)
+	}
+}
