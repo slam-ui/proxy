@@ -241,12 +241,12 @@ Platform-specific:  *_windows_test.go      (Windows-только)
 
 | Файл | Когда редактировать |
 |------|----------------------|
-| [cmd/proxy-client/main.go](cmd/proxy-client/main.go) | Обработка паник, lifecycle hooks |
-| [cmd/proxy-client/app.go](cmd/proxy-client/app.go) | Инициализация, конфигурация |
-| [internal/api/server.go](internal/api/server.go) | API endpoints |
-| [internal/apprules/engine.go](internal/apprules/engine.go) | Логика маршрутизации |
-| [internal/xray/manager.go](internal/xray/manager.go) | Контроль sing-box |
-| [internal/config/singbox_builder.go](internal/config/singbox_builder.go) | Генерация конфига |
+| [cmd/proxy-client/main.go](../cmd/proxy-client/main.go) | Обработка паник, lifecycle hooks |
+| [cmd/proxy-client/app.go](../cmd/proxy-client/app.go) | Инициализация, конфигурация |
+| [internal/api/server.go](../internal/api/server.go) | API endpoints |
+| [internal/apprules/engine.go](../internal/apprules/engine.go) | Логика маршрутизации |
+| [internal/xray/manager.go](../internal/xray/manager.go) | Контроль sing-box |
+| [internal/config/singbox_builder.go](../internal/config/singbox_builder.go) | Генерация конфига |
 
 ---
 
@@ -355,7 +355,7 @@ Platform-specific:  *_windows_test.go      (Windows-только)
 - [Readme.md](Readme.md) — Русский/English обзор функций
 - [BUGS_FIXED.md](BUGS_FIXED.md) — История багов и фиксов
 - [SECTION_B_CHANGES.md](SECTION_B_CHANGES.md) — Улучшения (config validation, proxy guard)
-- [.github/copilot-instructions.md](.github/copilot-instructions.md) — AI рекомендации
+- [.github/copilot-instructions.md](../.github/copilot-instructions.md) — AI рекомендации
 - **PROJECT_STRUCTURE.md** — Этот файл (навигация)
 
 ---

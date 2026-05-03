@@ -327,10 +327,10 @@ curl http://localhost:9090/api/debug/stats | jq
 | Документ | Назначение |
 |----------|-----------|
 | [Readme.md](../Readme.md) | Основная информация о проекте |
-| [PROJECT_STRUCTURE.md](../PROJECT_STRUCTURE.md) | Архитектура проекта для разработчиков |
-| [QUICK_REFERENCE.md](../QUICK_REFERENCE.md) | Быстрая справка по коду |
-| [OPTIMIZATION_ROADMAP.md](../OPTIMIZATION_ROADMAP.md) | План развития |
-| [BUGS_FIXED.md](../BUGS_FIXED.md) | История исправленных багов |
+| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | Архитектура проекта для разработчиков |
+| [QUICK_REFERENCE.md](QUICK_REFERENCE.md) | Быстрая справка по коду |
+| [OPTIMIZATION_ROADMAP.md](OPTIMIZATION_ROADMAP.md) | План развития |
+| [BUGS_FIXED.md](BUGS_FIXED.md) | История исправленных багов |
 
 ---
 

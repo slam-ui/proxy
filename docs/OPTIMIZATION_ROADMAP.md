@@ -447,8 +447,8 @@ go test -race -v -run "TestManager" ./internal/proxy -timeout 30s
 - [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) — Навигация структуры
 - [Readme.md](Readme.md) — Обзор проекта
 - [BUGS_FIXED.md](BUGS_FIXED.md) — История багов
-- [.github/copilot-instructions.md](.github/copilot-instructions.md) — AI инструкции
-- [FILE_AUDIT_REPORT.md](FILE_AUDIT_REPORT.md) — Полный аудит (очищен)
+- [.github/copilot-instructions.md](../.github/copilot-instructions.md) — AI инструкции
+- `FILE_AUDIT_REPORT.md` — локальный аудит, регенерируется инструментами и не хранится в репозитории
 
 ---
 

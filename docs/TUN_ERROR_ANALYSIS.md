@@ -126,7 +126,9 @@ func PreWarmCleanup() {
 35-40s ← дать kernel время на housekeeping
 ```
 
-Изменить в [internal/xray/tun.go](internal/xray/tun.go):
+Историческая заметка: `internal/xray/tun.go` больше не существует. Актуальная
+TUN-конфигурация находится в [internal/config/singbox_builder.go](../internal/config/singbox_builder.go),
+а запуск `sing-box` — в [internal/xray/manager.go](../internal/xray/manager.go).
 ```go
 const (
     TUN_INIT_TIMEOUT = 40 * time.Second  // было 22.5s

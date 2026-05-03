@@ -113,10 +113,10 @@ func (m *Manager) Stop() error {
 
 | Файл | Назначение |
 |------|-----------|
-| [internal/config/singbox_builder.go](internal/config/singbox_builder.go) | Генерирует JSON для sing-box.exe |
-| [internal/config/singbox_types.go](internal/config/singbox_types.go) | Структуры для Marshaling |
-| [internal/config/vless.go](internal/config/vless.go) | Парсинг VLESS URL |
-| [internal/config/tun.go](internal/config/tun.go) | Конфиг TUN интерфейса |
+| [internal/config/singbox_builder.go](../internal/config/singbox_builder.go) | Генерирует JSON для sing-box.exe |
+| [internal/config/singbox_types.go](../internal/config/singbox_types.go) | Структуры для Marshaling |
+| [internal/config/vless.go](../internal/config/vless.go) | Парсинг VLESS URL |
+| [internal/config/tun.go](../internal/config/tun.go) | Конфиг TUN интерфейса |
 
 **Пример - добавить новый параметр VLESS:**
 ```go
@@ -382,7 +382,7 @@ A: Смотри Event Log в Web UI (localhost:8080) или check anomaly-*.log
 | [OPTIMIZATION_ROADMAP.md](OPTIMIZATION_ROADMAP.md) | План оптимизации & recommendations |
 | [BUGS_FIXED.md](BUGS_FIXED.md) | История исправленных багов |
 | [SECTION_B_CHANGES.md](SECTION_B_CHANGES.md) | Section B improvements |
-| [.github/copilot-instructions.md](.github/copilot-instructions.md) | AI assistants instructions |
+| [.github/copilot-instructions.md](../.github/copilot-instructions.md) | AI assistants instructions |
 
 ---
 
