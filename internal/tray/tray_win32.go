@@ -327,6 +327,7 @@ var (
 		enableEnabled  bool
 		disableEnabled bool
 		copyAddr       string
+		speedText      string
 		servers        []ServerItem
 		profiles       []ProfileItem
 	}
@@ -613,6 +614,7 @@ func showTrayMenu(hwnd uintptr) {
 	enableEnabled := win32MenuState.enableEnabled
 	disableEnabled := win32MenuState.disableEnabled
 	copyAddr := win32MenuState.copyAddr
+	speedText := win32MenuState.speedText
 	servers := make([]ServerItem, len(win32MenuState.servers))
 	copy(servers, win32MenuState.servers)
 	profiles := make([]ProfileItem, len(win32MenuState.profiles))
@@ -649,9 +651,12 @@ func showTrayMenu(hwnd uintptr) {
 	if isWarming {
 		addOD(hMenu, odItem{kind: odNormal, text: "Туннель запускается", id: 0, enabled: false})
 	} else if disableEnabled {
-		addOD(hMenu, odItem{kind: odNormal, text: "Туннель включён", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: trayConnectedStatusText(servers), id: 0, enabled: false})
 	} else {
 		addOD(hMenu, odItem{kind: odNormal, text: "Туннель выключен", id: 0, enabled: false})
+	}
+	if speedText != "" {
+		addOD(hMenu, odItem{kind: odNormal, text: speedText, id: 0, enabled: false})
 	}
 	addODSep(hMenu)
 

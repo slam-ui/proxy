@@ -27,6 +27,7 @@ var (
 		enableEnabled  bool
 		disableEnabled bool
 		copyAddr       string
+		speedText      string
 		servers        []ServerItem
 		profiles       []ProfileItem
 	}

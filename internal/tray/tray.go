@@ -10,6 +10,7 @@
 package tray
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -149,6 +150,12 @@ func SetActiveProfile(name string) {
 	for i := range win32MenuState.profiles {
 		win32MenuState.profiles[i].Active = name != "" && win32MenuState.profiles[i].Name == name
 	}
+	win32MenuState.Unlock()
+}
+
+func SetTrafficSpeed(upBytesPerSec, downBytesPerSec int64) {
+	win32MenuState.Lock()
+	win32MenuState.speedText = fmt.Sprintf("↓ %s/s ↑ %s/s", formatTrafficBytes(downBytesPerSec), formatTrafficBytes(upBytesPerSec))
 	win32MenuState.Unlock()
 }
 
@@ -342,6 +349,37 @@ func sortedServerItems(servers []ServerItem) []ServerItem {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
+}
+
+func trayConnectedStatusText(servers []ServerItem) string {
+	for _, srv := range servers {
+		if srv.Active && strings.TrimSpace(srv.Name) != "" {
+			return "Туннель включён — " + srv.Name
+		}
+	}
+	return "Туннель включён"
+}
+
+func formatTrafficBytes(bytes int64) string {
+	if bytes < 0 {
+		bytes = 0
+	}
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	value := float64(bytes)
+	units := []string{"KB", "MB", "GB", "TB"}
+	for i, suffix := range units {
+		value /= unit
+		if value < unit || i == len(units)-1 {
+			if value >= 10 {
+				return fmt.Sprintf("%.0f %s", value, suffix)
+			}
+			return fmt.Sprintf("%.1f %s", value, suffix)
+		}
+	}
+	return "0 B"
 }
 
 func serverPingMS(raw string) (int, bool) {

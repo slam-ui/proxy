@@ -70,6 +70,41 @@ func TestSetProfileListAndActive(t *testing.T) {
 	}
 }
 
+func TestSetTrafficSpeed(t *testing.T) {
+	SetTrafficSpeed(230*1024, 4*1024*1024+200*1024)
+	win32MenuState.Lock()
+	got := win32MenuState.speedText
+	win32MenuState.Unlock()
+	if got != "↓ 4.2 MB/s ↑ 230 KB/s" {
+		t.Fatalf("speedText=%q", got)
+	}
+}
+
+func TestTrayConnectedStatusText(t *testing.T) {
+	got := trayConnectedStatusText([]ServerItem{{Name: "slow"}, {Name: "fast", Active: true}})
+	if got != "Туннель включён — fast" {
+		t.Fatalf("status=%q", got)
+	}
+}
+
+func TestFormatTrafficBytes(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{-1, "0 B"},
+		{512, "512 B"},
+		{1536, "1.5 KB"},
+		{10 * 1024, "10 KB"},
+		{4*1024*1024 + 200*1024, "4.2 MB"},
+	}
+	for _, tt := range tests {
+		if got := formatTrafficBytes(tt.bytes); got != tt.want {
+			t.Fatalf("formatTrafficBytes(%d)=%q, want %q", tt.bytes, got, tt.want)
+		}
+	}
+}
+
 // TestSetActiveServer_NoPanic проверяет что SetActiveServer не паникует без трея.
 func TestSetActiveServer_NoPanic(t *testing.T) {
 	defer func() {

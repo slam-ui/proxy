@@ -499,6 +499,21 @@ func run(output io.Writer) error {
 		}
 	}()
 
+	go func() {
+		tray.WaitReady()
+		<-apiReady
+		t := time.NewTicker(1 * time.Second)
+		defer t.Stop()
+		for {
+			app.refreshTrayTrafficSpeed(cfg.APIAddress)
+			select {
+			case <-app.quit:
+				return
+			case <-t.C:
+			}
+		}
+	}()
+
 	tray.SetProxyAddr(proxyConfig.Address)
 	// Регистрируем callback для переноса окна на передний план (двойной клик по трею).
 	tray.SetBringToFront(func() { window.BringToFront(cfg.WebUIURL) })
@@ -677,6 +692,31 @@ func (a *App) refreshTrayProfiles(apiAddress string) {
 		}
 	}
 	tray.SetProfileList(items)
+}
+
+func (a *App) refreshTrayTrafficSpeed(apiAddress string) {
+	ctx, cancel := context.WithTimeout(a.lifecycleCtx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL(apiAddress)+"/api/stats", nil)
+	if err != nil {
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+	var body struct {
+		Up   int64 `json:"up"`
+		Down int64 `json:"down"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&body); err != nil {
+		return
+	}
+	tray.SetTrafficSpeed(body.Up, body.Down)
 }
 
 // serverDisplayName возвращает отображаемое имя сервера.
