@@ -1,0 +1,21 @@
+{
+  "app.name": "SafeSky",
+  "connect.button": "Подключить",
+  "connect.disconnect": "Отключить",
+  "connect.connecting": "Подключение...",
+  "connect.error": "Ошибка подключения: %s",
+  "settings.language": "Язык",
+  "settings.language.system": "Как в системе",
+  "settings.language.ru": "Русский",
+  "settings.language.en": "English",
+  "onboarding.welcome.title": "Добро пожаловать",
+  "onboarding.welcome.copy": "SafeSky поможет быстро добавить доступ к серверу и проверить подключение.",
+  "onboarding.source.title": "Откуда вы получили доступ?",
+  "onboarding.done.title": "Всё готово",
+  "tray.open": "Открыть SafeSky",
+  "tray.connect": "Подключить туннель",
+  "tray.disconnect": "Отключить туннель",
+  "tray.quit": "Выйти из SafeSky",
+  "killswitch.crash_recovery_banner": "Kill switch активен из прошлой сессии",
+  "empty.servers.title": "У вас пока нет серверов"
+}

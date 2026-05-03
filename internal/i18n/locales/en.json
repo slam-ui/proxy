@@ -1,0 +1,21 @@
+{
+  "app.name": "SafeSky",
+  "connect.button": "Connect",
+  "connect.disconnect": "Disconnect",
+  "connect.connecting": "Connecting...",
+  "connect.error": "Connection failed: %s",
+  "settings.language": "Language",
+  "settings.language.system": "System default",
+  "settings.language.ru": "Russian",
+  "settings.language.en": "English",
+  "onboarding.welcome.title": "Welcome",
+  "onboarding.welcome.copy": "SafeSky helps you add server access and verify the connection quickly.",
+  "onboarding.source.title": "Where did you get access from?",
+  "onboarding.done.title": "You're all set",
+  "tray.open": "Open SafeSky",
+  "tray.connect": "Connect tunnel",
+  "tray.disconnect": "Disconnect tunnel",
+  "tray.quit": "Quit SafeSky",
+  "killswitch.crash_recovery_banner": "Kill switch is active from the previous session",
+  "empty.servers.title": "You do not have any servers yet"
+}

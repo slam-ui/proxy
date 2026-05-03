@@ -305,6 +305,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	}
 	SetupDiagRoutes(s, ctx)
 	SetupSettingsRoutes(s)
+	SetupI18nRoutes(s)
 	SetupOnboardingRoutes(s)
 	SetupEngineRoutes(s)
 	SetupUpdateRoutes(s)
