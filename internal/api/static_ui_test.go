@@ -72,6 +72,23 @@ func TestServerEmptyStateGuidesImport(t *testing.T) {
 	}
 }
 
+func TestLocalHelpPageIsEmbedded(t *testing.T) {
+	help := readStaticText(t, "static/help.html")
+	js := readStaticBundle(t, jsAssetPaths...)
+	html := readStaticText(t, "static/index.html")
+	for _, required := range []string{
+		`Quick start`,
+		`Troubleshooting`,
+		`FAQ`,
+		`openLocalHelp()`,
+		`/help.html`,
+	} {
+		if !strings.Contains(help+js+html, required) {
+			t.Fatalf("local help missing %q", required)
+		}
+	}
+}
+
 func readStaticBundle(t *testing.T, paths ...string) string {
 	t.Helper()
 	var b strings.Builder

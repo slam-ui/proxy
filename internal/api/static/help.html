@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SafeSky Help</title>
+<style>
+body{margin:0;background:#070713;color:#f4f7fb;font:14px/1.55 "Segoe UI",Arial,sans-serif}
+main{max-width:860px;margin:0 auto;padding:28px 18px 48px}
+h1{font-size:28px;margin:0 0 16px}
+h2{font-size:18px;margin:28px 0 10px;color:#2de89a}
+p,li{color:#b9c0d4}
+code{font-family:Consolas,monospace;color:#d8e2ff}
+.card{border:1px solid #24283d;border-radius:8px;background:#101225;padding:16px;margin:12px 0}
+a{color:#38c8ff}
+</style>
+</head>
+<body>
+<main>
+  <h1>SafeSky Help</h1>
+  <div class="card">
+    <h2>Quick start</h2>
+    <ol>
+      <li>Откройте Settings и добавьте подписку или один server URI.</li>
+      <li>Выберите сервер в списке и нажмите подключение.</li>
+      <li>Проверьте статус на главном экране или в меню трея.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>VLESS, Trojan, Hysteria2, WireGuard</h2>
+    <p>Это форматы доступа к серверу. Обычно провайдер выдаёт ссылку вида <code>vless://...</code>, <code>trojan://...</code>, <code>hysteria2://...</code> или конфигурацию WireGuard.</p>
+  </div>
+  <div class="card">
+    <h2>Profiles</h2>
+    <p>Профили сохраняют набор routing rules и выбор сервера. Используйте их для разных сценариев: работа, браузер, стриминг.</p>
+  </div>
+  <div class="card">
+    <h2>Troubleshooting</h2>
+    <ul>
+      <li>Если сервер не подключается, запустите Diagnostics.</li>
+      <li>Если DNS/IP leak test показывает риск, переключите сервер или включите строгую защиту DNS.</li>
+      <li>Если hotkey занят другим приложением, выберите другое сочетание в Settings.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2>FAQ</h2>
+    <p><b>Можно закрыть окно?</b> Да, по умолчанию окно скрывается в трей, а клиент продолжает работать.</p>
+    <p><b>Как быстро отключиться?</b> Используйте меню трея или <code>Ctrl+Alt+P</code>.</p>
+  </div>
+</main>
+</body>
+</html>

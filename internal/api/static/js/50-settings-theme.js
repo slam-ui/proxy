@@ -606,6 +606,10 @@ function openWebRTCTest() {
   window.open(API + '/leaktest/webrtc', '_blank');
 }
 
+function openLocalHelp() {
+  window.open(API.replace(/\/api$/, '') + '/help.html', '_blank');
+}
+
 async function saveUpdateSettings() {
   await saveLifecycleSettings();
 }
