@@ -318,7 +318,8 @@ func buildSingBoxConfig(outbound SBOutbound, tunExcludeAddr string, routingCfg *
 			// соединения после перезапуска на 50-200мс.
 			CacheFile: &SBCacheFile{
 				Enabled: true,
-				Path:    DataDir + "/dns_cache.db",
+				Path:    DNSCacheFile,
+				CacheID: DNSCacheID,
 			},
 		},
 		DNS: buildDNSConfig(routingCfg.DNS),

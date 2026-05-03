@@ -74,6 +74,25 @@ func TestBuildDNSConfig_DoH_PathSetSeparately(t *testing.T) {
 	}
 }
 
+func TestBuildSingBoxConfig_EnablesPersistentDNSCache(t *testing.T) {
+	cfg := buildSingBoxConfig(SBOutbound{Type: "direct", Tag: "proxy-out"}, "", DefaultRoutingConfig())
+	if cfg.Experimental.CacheFile == nil {
+		t.Fatal("cache_file is nil")
+	}
+	if !cfg.Experimental.CacheFile.Enabled {
+		t.Fatal("cache_file.enabled is false")
+	}
+	if cfg.Experimental.CacheFile.Path != DNSCacheFile {
+		t.Fatalf("cache_file.path = %q, want %q", cfg.Experimental.CacheFile.Path, DNSCacheFile)
+	}
+	if cfg.Experimental.CacheFile.CacheID != DNSCacheID {
+		t.Fatalf("cache_file.cache_id = %q, want %q", cfg.Experimental.CacheFile.CacheID, DNSCacheID)
+	}
+	if cfg.DNS.Strategy != "ipv4_only" {
+		t.Fatalf("dns.strategy = %q, want ipv4_only", cfg.DNS.Strategy)
+	}
+}
+
 func TestBuildDNSConfig_RemoteFallbacks(t *testing.T) {
 	dns := buildDNSConfig(&DNSConfig{
 		RemoteDNS: "https://1.1.1.1/dns-query",

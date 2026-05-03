@@ -10,6 +10,9 @@ const DataDir = "data"
 // Используется для удаления при ошибке "initialize cache-file: timeout".
 const DNSCacheFile = DataDir + "/dns_cache.db"
 
+// DNSCacheID identifies SafeSky's persistent DNS cache inside sing-box cache-file.
+const DNSCacheID = "safesky-dns-v1"
+
 // MinValidBinarySize — минимальный допустимый размер sing-box.exe.
 // Файлы меньше 1 MB считаются повреждёнными или усечёнными.
 const MinValidBinarySize = 1 * 1024 * 1024 // 1 MB
