@@ -33,12 +33,15 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/hotkeys"
+	"proxyclient/internal/i18n"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
+	"proxyclient/internal/telemetry"
 	"proxyclient/internal/tray"
+	"proxyclient/internal/version"
 	"proxyclient/internal/window"
 	"proxyclient/internal/wintun"
 )
@@ -401,6 +404,23 @@ func run(output io.Writer) error {
 	// /api/status возвращает warming=true пока менеджер не установлен.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	telemetryMgr := telemetry.NewManager(telemetry.ManagerConfig{
+		Client: telemetry.Client{
+			Enabled:       appSettings.Telemetry.Enabled && appSettings.Telemetry.UsageEvents,
+			BaseURL:       appSettings.Telemetry.BaseURL,
+			AnonymousPath: filepath.Join(config.DataDir, "telemetry_id"),
+			UserAgent:     "SafeSky-Telemetry/1",
+		},
+		ClientVersion: version.Version,
+		OSVersion:     runtime.GOOS,
+		Locale:        string(i18n.EffectiveLocale(appSettings.Language)),
+	})
+	telemetryMgr.Start(ctx, 10*time.Minute)
+	defer func() {
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = telemetryMgr.Flush(flushCtx)
+		flushCancel()
+	}()
 
 	app.quit = make(chan struct{})
 	app.apiServer = api.NewServer(api.Config{
@@ -554,9 +574,11 @@ func run(output io.Writer) error {
 			if err := app.proxyManager.Enable(proxyConfig); err != nil {
 				app.mainLogger.Error("Ошибка включения прокси: %v", err)
 				tray.Notify("SafeSky", "Failed to connect: "+err.Error(), tray.NotificationError)
+				telemetryMgr.Record(telemetry.Event{Type: "connect_failed", Code: "PROXY_ENABLE_FAILED", Stage: "proxy"})
 			} else {
 				tray.SetEnabled(true)
 				app.mainLogger.Info("Прокси включён через трей")
+				telemetryMgr.Record(telemetry.Event{Type: "connect_success"})
 				tray.Notify("SafeSky", "Connected. Tunnel traffic follows the active routing rules.", tray.NotificationInfo)
 			}
 		},
@@ -567,6 +589,7 @@ func run(output io.Writer) error {
 			} else {
 				tray.SetEnabled(false)
 				app.mainLogger.Info("Прокси отключён через трей")
+				telemetryMgr.Record(telemetry.Event{Type: "session_end"})
 				tray.Notify("SafeSky", "Disconnected. System route restored.", tray.NotificationInfo)
 			}
 		},
@@ -582,8 +605,10 @@ func run(output io.Writer) error {
 				if err := app.connectTrayServer(cfg.APIAddress, serverID); err != nil {
 					app.mainLogger.Error("Не удалось переключить сервер: %v", err)
 					tray.Notify("SafeSky", "Failed to switch server: "+err.Error(), tray.NotificationError)
+					telemetryMgr.Record(telemetry.Event{Type: "connect_failed", Code: "SERVER_SWITCH_FAILED", Stage: "server_switch"})
 					return
 				}
+				telemetryMgr.Record(telemetry.Event{Type: "connect_success"})
 				app.refreshTrayServers(cfg.APIAddress)
 			}()
 		},
@@ -592,8 +617,10 @@ func run(output io.Writer) error {
 				if err := app.connectNextTrayServer(cfg.APIAddress); err != nil {
 					app.mainLogger.Error("Не удалось переключиться на следующий сервер: %v", err)
 					tray.Notify("SafeSky", "Failed to switch server: "+err.Error(), tray.NotificationError)
+					telemetryMgr.Record(telemetry.Event{Type: "connect_failed", Code: "SERVER_SWITCH_FAILED", Stage: "server_switch"})
 					return
 				}
+				telemetryMgr.Record(telemetry.Event{Type: "connect_success"})
 				app.refreshTrayServers(cfg.APIAddress)
 			}()
 		},
