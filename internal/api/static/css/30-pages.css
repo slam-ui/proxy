@@ -12,6 +12,9 @@
 .settings-col{display:flex;flex-direction:column;gap:10px;min-width:0}
 .settings-wide{grid-column:1/-1}
 .pg-section{background:var(--g0);border:0.5px solid var(--hairline);border-radius:var(--r-lg);padding:14px 16px}
+.advanced-setting{display:none}
+body.show-advanced-settings .advanced-setting{display:flex}
+body.show-advanced-settings details.advanced-setting{display:block}
 .pg-section-ttl{font-size:10px;font-weight:700;letter-spacing:0;color:var(--text);text-transform:none;margin-bottom:12px}
 .pg-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:0.5px solid var(--hairline)}
 .pg-row:last-child{border-bottom:none;padding-bottom:0}

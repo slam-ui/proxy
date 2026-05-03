@@ -353,6 +353,7 @@ async function loadLANInfo() {
 
 function applyLifecycleControls(d) {
   _appSettingsCache = d || _appSettingsCache || {};
+  applyAdvancedSettingsVisibility();
   $id('keepaliveToggle')?.classList.toggle('on', !!_appSettingsCache.keepalive_enabled);
   $id('scheduleToggle')?.classList.toggle('on', !!(_appSettingsCache.schedule && _appSettingsCache.schedule.enabled));
   $id('manualConfigToggle')?.classList.toggle('on', !!_appSettingsCache.manual_singbox_config);
@@ -458,6 +459,18 @@ async function saveLifecycleSettings() {
     applyLifecycleControls(d);
     showToast('Настройки сохранены', 'on');
   } catch(e) { showToast('Ошибка: ' + e.message, 'off'); }
+}
+
+function toggleAdvancedSettings() {
+  const enabled = !document.body.classList.contains('show-advanced-settings');
+  localStorage.setItem('safeskyAdvancedSettings', enabled ? '1' : '0');
+  applyAdvancedSettingsVisibility();
+}
+
+function applyAdvancedSettingsVisibility() {
+  const enabled = localStorage.getItem('safeskyAdvancedSettings') === '1';
+  document.body.classList.toggle('show-advanced-settings', enabled);
+  $id('advancedSettingsToggle')?.classList.toggle('on', enabled);
 }
 
 function hotkeyActionLabel(action) {

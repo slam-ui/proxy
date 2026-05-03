@@ -605,6 +605,10 @@
     <div class="pg-section">
       <div class="pg-section-ttl">Основное</div>
       <div class="pg-row">
+        <div><div class="pg-lbl">Advanced settings</div><div class="pg-sub">Показать редкие и рискованные параметры</div></div>
+        <div class="rule-toggle" id="advancedSettingsToggle" onclick="toggleAdvancedSettings()" title="Показать advanced настройки"></div>
+      </div>
+      <div class="pg-row">
         <div><div class="pg-lbl">Автозапуск</div><div class="pg-sub">Запускать SafeSky при входе в Windows</div></div>
         <div class="rule-toggle" id="autorunToggle" onclick="toggleAutorun()" title="Автозапуск при входе"></div>
       </div>
@@ -634,11 +638,11 @@
           <div><div class="pg-lbl">Автопроверка</div><div class="pg-sub">Проверять новую версию при запуске</div></div>
           <div class="rule-toggle" id="updateEnabledToggle" onclick="toggleUpdateSetting('enabled')" title="Проверять обновления клиента"></div>
         </div>
-        <div class="pg-row">
+        <div class="pg-row advanced-setting">
           <div><div class="pg-lbl">Автоустановка</div><div class="pg-sub">Скачивать и ставить найденный релиз</div></div>
           <div class="rule-toggle" id="updateAutoInstallToggle" onclick="toggleUpdateSetting('auto_install')" title="Автоматически устанавливать обновления"></div>
         </div>
-        <div class="pg-inp-row" style="margin-top:8px">
+        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
           <select class="pg-inp" id="updateChannelInp" onchange="saveUpdateSettings()">
             <option value="stable">stable</option>
             <option value="beta">beta</option>
@@ -663,7 +667,7 @@
     </div>
 
     <!-- ── Маршрутизация и LAN (accordion) ── -->
-    <details class="pg-section">
+    <details class="pg-section advanced-setting">
       <summary class="pg-section-ttl">Маршрутизация и LAN</summary>
       <div class="pg-section-body">
         <div class="pg-row">
@@ -689,7 +693,7 @@
     <details class="pg-section">
       <summary class="pg-section-ttl">Защита соединения</summary>
       <div class="pg-section-body">
-        <div class="pg-inp-row" style="margin-bottom:8px">
+        <div class="pg-inp-row advanced-setting" style="margin-bottom:8px">
           <input class="pg-inp" id="failoverMaxLatencyInp" type="number" min="50" placeholder="Пинг, мс">
           <input class="pg-inp" id="failoverIntervalInp" type="number" min="15" placeholder="Интервал, сек">
           <button class="pg-btn" onclick="checkFailoverStatus()">Оценить</button>
@@ -706,15 +710,15 @@
           </div>
           <button class="pg-btn" onclick="runDNSGuardCheck()">Проверить</button>
         </div>
-        <div class="pg-row">
+        <div class="pg-row advanced-setting">
           <div><div class="pg-lbl">Контроль сети</div><div class="pg-sub" id="networkProtectionResult">Реакция на смену сети</div></div>
           <div class="rule-toggle" id="networkStrictToggle" onclick="toggleLifecycleOption('network_strict')" title="Строгий режим при смене сети"></div>
         </div>
-        <div class="pg-row">
+        <div class="pg-row advanced-setting">
           <div><div class="pg-lbl">Лимит трафика</div><div class="pg-sub" id="trafficBudgetResult">Лимиты трафика отключены</div></div>
           <div class="rule-toggle" id="trafficBudgetToggle" onclick="toggleLifecycleOption('traffic_budget')" title="Включить лимиты трафика"></div>
         </div>
-        <div class="pg-inp-row" style="margin-top:8px">
+        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
           <input class="pg-inp" id="trafficSessionMBInp" type="number" min="0" placeholder="Сессия, МБ">
           <input class="pg-inp" id="trafficTotalMBInp" type="number" min="0" placeholder="Всего, МБ">
           <button class="pg-btn" onclick="saveTrafficBudget()">Сохранить</button>
@@ -730,12 +734,12 @@
           <div><div class="pg-lbl">Проверка связи</div><div class="pg-sub">Периодическая проверка соединения</div></div>
           <div class="rule-toggle" id="keepaliveToggle" onclick="toggleLifecycleOption('keepalive_enabled')" title="Включить проверку связи"></div>
         </div>
-        <div class="pg-inp-row" style="margin-top:8px">
+        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
           <input class="pg-inp" id="keepaliveIntervalInp" type="number" min="30" placeholder="Проверка, сек">
           <input class="pg-inp" id="reconnectIntervalInp" type="number" min="0" placeholder="Переподключение, мин">
           <input class="pg-inp" id="memoryLimitInp" type="number" min="0" placeholder="Память, МБ">
         </div>
-        <div class="pg-row">
+        <div class="pg-row advanced-setting">
           <div><div class="pg-lbl">Расписание</div><div class="pg-sub">Окно автоматического включения туннеля</div></div>
           <div class="rule-toggle" id="scheduleToggle" onclick="toggleLifecycleOption('schedule_enabled')" title="Включить расписание"></div>
         </div>
@@ -743,7 +747,7 @@
           <div><div class="pg-lbl">Закрывать в трей</div><div class="pg-sub">Кнопка закрытия скрывает окно, клиент продолжает работать</div></div>
           <div class="rule-toggle" id="closeToTrayToggle" onclick="toggleLifecycleOption('close_to_tray')" title="Закрывать окно в трей"></div>
         </div>
-        <div class="pg-inp-row" style="margin-top:8px">
+        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
           <input class="pg-inp" id="scheduleOnInp" type="time" value="09:00">
           <input class="pg-inp" id="scheduleOffInp" type="time" value="18:00">
           <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>

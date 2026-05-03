@@ -93,6 +93,22 @@ func TestLocalHelpPageIsEmbedded(t *testing.T) {
 	}
 }
 
+func TestAdvancedSettingsAreProgressivelyDisclosed(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticBundle(t, cssAssetPaths...)
+	js := readStaticBundle(t, jsAssetPaths...)
+	for _, required := range []string{
+		`id="advancedSettingsToggle"`,
+		`advanced-setting`,
+		`show-advanced-settings`,
+		`function toggleAdvancedSettings()`,
+	} {
+		if !strings.Contains(html+css+js, required) {
+			t.Fatalf("advanced disclosure missing %q", required)
+		}
+	}
+}
+
 func readStaticBundle(t *testing.T, paths ...string) string {
 	t.Helper()
 	var b strings.Builder
