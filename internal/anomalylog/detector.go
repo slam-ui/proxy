@@ -221,6 +221,9 @@ func (d *Detector) check() {
 				byKind[KindCrash] = append(byKind[KindCrash], e)
 				break
 			}
+			if isBenignWarnMessage(e.Message) {
+				break
+			}
 
 			// Отслеживаем burst: 3+ warn за 60 секунд
 			d.warnTimes = append(d.warnTimes, e.Timestamp)
@@ -260,6 +263,19 @@ func isCrashMessage(msg string) bool {
 		}
 	}
 	return false
+}
+
+// isBenignWarnMessage отсекает шумные предупреждения sing-box, которые возникают
+// при нормальной отмене DNS-запросов во время остановки, переключения сервера или
+// закрытия HTTP/2 client connection.
+func isBenignWarnMessage(msg string) bool {
+	lower := strings.ToLower(msg)
+	if !strings.Contains(lower, "dns") {
+		return false
+	}
+	return strings.Contains(lower, "context canceled") ||
+		strings.Contains(lower, "read/write on closed pipe") ||
+		strings.Contains(lower, "clientconn.close")
 }
 
 // writeFile сохраняет диагностический файл.

@@ -178,6 +178,25 @@ func TestDetector_WarnBurstCreatesFile(t *testing.T) {
 	}
 }
 
+func TestDetector_BenignDNSWarningsDoNotCreateBurst(t *testing.T) {
+	d, evLog, dir := newTestDetector(t)
+	d.Start()
+	defer d.Stop()
+
+	evLog.Add(eventlog.LevelWarn, "sing-box", "dns: exchange failed for example.com. IN A: context canceled")
+	evLog.Add(eventlog.LevelWarn, "sing-box", "dns: exchange failed for example.net. IN HTTPS: read/write on closed pipe")
+	evLog.Add(eventlog.LevelWarn, "sing-box", "dns: exchange failed: http2: clientconn.close called")
+
+	time.Sleep(1500 * time.Millisecond)
+
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.Contains(e.Name(), "warn_burst") || strings.HasPrefix(e.Name(), "anomaly-") {
+			t.Errorf("benign DNS warnings should not create anomaly file: %s", e.Name())
+		}
+	}
+}
+
 func TestDetector_CrashKeywordCreatesFile(t *testing.T) {
 	d, evLog, dir := newTestDetector(t)
 	d.Start()
