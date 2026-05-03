@@ -145,6 +145,20 @@ func TestStaticI18nKeysExistInLocales(t *testing.T) {
 	}
 }
 
+func TestStaticDateFormattingUsesI18nLocale(t *testing.T) {
+	js := readStaticBundle(t, jsAssetPaths...)
+	for _, forbidden := range []string{`toLocaleDateString('ru-RU'`, `toLocaleTimeString('ru-RU'`, `toLocaleString('ru-RU'`} {
+		if strings.Contains(js, forbidden) {
+			t.Fatalf("static UI must use i18n date helpers, found %s", forbidden)
+		}
+	}
+	for _, required := range []string{`function formatDate(`, `function formatDateTime(`, `function formatRelativeTime(`} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("i18n date helper missing %q", required)
+		}
+	}
+}
+
 func readStaticBundle(t *testing.T, paths ...string) string {
 	t.Helper()
 	var b strings.Builder

@@ -855,7 +855,7 @@ async function loadProfiles() {
       return;
     }
     el.innerHTML = profiles.map(p => {
-      const date = p.updated_at ? new Date(p.updated_at).toLocaleDateString('ru-RU', {day:'2-digit',month:'2-digit',year:'2-digit'}) : '—';
+      const date = p.updated_at ? formatDate(p.updated_at, {day:'2-digit',month:'2-digit',year:'2-digit'}) : '—';
       const cnt  = p.rule_count != null ? p.rule_count : '?';
       const profileNameArg = jsArg(p.name);
       return `<div class="profile-item">

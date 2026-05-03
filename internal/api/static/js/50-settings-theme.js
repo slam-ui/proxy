@@ -718,8 +718,8 @@ function renderSingboxConfigStatus(d) {
   if ($id('singboxConfigPath')) $id('singboxConfigPath').textContent = d.path || 'config.singbox.json';
   if ($id('singboxConfigMode')) $id('singboxConfigMode').textContent = 'режим: ' + mode;
   if ($id('singboxConfigUpdated')) {
-    const ts = d.updated_at ? new Date(d.updated_at * 1000).toLocaleString() : '—';
-    $id('singboxConfigUpdated').textContent = 'изменён: ' + ts;
+    const ts = d.updated_at ? formatDateTime(d.updated_at * 1000) : '—';
+    $id('singboxConfigUpdated').textContent = tr('settings.config.updated', {time: ts});
   }
 }
 
@@ -1015,7 +1015,7 @@ function formatSubscriptionQuota(q) {
   else if (used > 0) parts.push(`${formatBytes(used)} used`);
   const exp = q.expires_at ? new Date(q.expires_at) : null;
   if (exp && !Number.isNaN(exp.getTime()) && exp.getFullYear() > 2001) {
-    parts.push(exp.toLocaleDateString());
+    parts.push(formatDate(exp));
   }
   return parts.join(' · ');
 }
@@ -1029,15 +1029,7 @@ function formatBytes(n) {
 }
 
 function timeAgo(value) {
-  const ts = new Date(value).getTime();
-  if (!ts || Number.isNaN(ts)) return 'не обновлялась';
-  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
-  if (sec < 90) return `${sec} sec ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 90) return `${min} min ago`;
-  const hours = Math.floor(min / 60);
-  if (hours < 48) return `${hours} h ago`;
-  return `${Math.floor(hours / 24)} d ago`;
+  return formatRelativeTime(value);
 }
 
 async function importSrvUrl() {

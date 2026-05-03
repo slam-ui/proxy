@@ -19,11 +19,11 @@ function _setText(id, value) {
 function _formatLogTime(ts) {
   const raw = String(ts || '');
   if (!raw) {
-    return new Date().toLocaleTimeString('ru-RU', { hour12: false });
+    return formatTime(new Date(), { hour12: false });
   }
   if (raw.includes('T') && raw.length >= 19) return raw.slice(11, 19);
   const d = new Date(raw);
-  if (!isNaN(d.getTime())) return d.toLocaleTimeString('ru-RU', { hour12: false });
+  if (!isNaN(d.getTime())) return formatTime(d, { hour12: false });
   return raw.slice(0, 19);
 }
 
@@ -283,7 +283,7 @@ function renderAnomalyList() {
 
   const savedHtml = saved.slice(0, 4).map(snap => {
     const d = new Date(snap.time || snap.id || Date.now());
-    const label = isNaN(d.getTime()) ? 'снимок' : d.toLocaleString('ru-RU', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+    const label = isNaN(d.getTime()) ? tr('logs.snapshot') : formatDateTime(d, { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
     return `<div class="log-snapshot-item">
       <span>${esc(label)}</span>
       <b>${Number(snap.count || snap.items?.length || 0)}</b>

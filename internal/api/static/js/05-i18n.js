@@ -30,6 +30,41 @@ function applyI18n(root) {
   });
 }
 
+function i18nLocaleTag() {
+  return i18n.locale === 'ru' ? 'ru-RU' : 'en-US';
+}
+
+function formatDate(value, options) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString(i18nLocaleTag(), options);
+}
+
+function formatDateTime(value, options) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString(i18nLocaleTag(), options);
+}
+
+function formatTime(value, options) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString(i18nLocaleTag(), options);
+}
+
+function formatRelativeTime(value) {
+  const ts = new Date(value).getTime();
+  if (!ts || Number.isNaN(ts)) return tr('time.never');
+  const sec = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  const rtf = new Intl.RelativeTimeFormat(i18nLocaleTag(), {numeric:'auto'});
+  if (sec < 90) return rtf.format(-sec, 'second');
+  const min = Math.floor(sec / 60);
+  if (min < 90) return rtf.format(-min, 'minute');
+  const hours = Math.floor(min / 60);
+  if (hours < 48) return rtf.format(-hours, 'hour');
+  return rtf.format(-Math.floor(hours / 24), 'day');
+}
+
 async function loadI18n(locale) {
   const query = locale ? '?locale=' + encodeURIComponent(locale) : '';
   const r = await fetch(API + '/i18n/messages' + query);
