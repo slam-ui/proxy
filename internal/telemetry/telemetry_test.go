@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"proxyclient/internal/crashreport"
 )
 
 func TestBufferCapacityAndDrain(t *testing.T) {
@@ -205,5 +207,36 @@ func TestExportAndDeleteUseExistingAnonymousID(t *testing.T) {
 	}
 	if got, err := LoadAnonymousID(path); err != nil || got != "" {
 		t.Fatalf("local id after delete=%q err=%v", got, err)
+	}
+}
+
+func TestUploadCrashReportSanitizesPayload(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != DefaultEndpointPath+"/crash" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		data, _ := io.ReadAll(r.Body)
+		body = string(data)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	client := Client{
+		Enabled:       true,
+		BaseURL:       srv.URL,
+		AnonymousPath: filepath.Join(t.TempDir(), "telemetry_id"),
+		HTTPClient:    srv.Client(),
+	}
+	report := crashreport.CrashReport{
+		LastOutput: "panic 10.0.0.1 token abcdefghijklmnopqrstuvwxyz0123456789",
+		MemoryMB:   1024,
+	}
+	if err := client.UploadCrashReport(t.Context(), report); err != nil {
+		t.Fatalf("UploadCrashReport: %v", err)
+	}
+	for _, forbidden := range []string{"10.0.0.1", "abcdefghijklmnopqrstuvwxyz0123456789", "memory_mb"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("crash payload leaked %q: %s", forbidden, body)
+		}
 	}
 }

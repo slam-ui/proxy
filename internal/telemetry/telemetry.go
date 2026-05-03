@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"proxyclient/internal/crashreport"
 	"proxyclient/internal/dpapi"
 	"proxyclient/internal/fileutil"
 )
@@ -321,6 +322,31 @@ func (c Client) ExportData(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c Client) UploadCrashReport(ctx context.Context, report crashreport.CrashReport) error {
+	if !c.Enabled {
+		return nil
+	}
+	id, err := c.EnsureAnonymousID()
+	if err != nil {
+		return err
+	}
+	endpoint, err := telemetrySubURL(c.BaseURL, "/crash")
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(map[string]any{
+		"anonymous_id": id,
+		"report":       report.SanitizedForUpload(),
+	})
+	if err != nil {
+		return err
+	}
+	if len(body) > MaxRequestBytes {
+		return fmt.Errorf("crash report payload too large: %d bytes", len(body))
+	}
+	return c.doJSON(ctx, http.MethodPost, endpoint, body, nil)
 }
 
 func (c Client) Flush(ctx context.Context, payload Payload) error {

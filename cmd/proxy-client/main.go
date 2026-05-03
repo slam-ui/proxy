@@ -31,6 +31,7 @@ import (
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/clipboard"
 	"proxyclient/internal/config"
+	"proxyclient/internal/crashreport"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/i18n"
@@ -416,6 +417,14 @@ func run(output io.Writer) error {
 		Locale:        string(i18n.EffectiveLocale(appSettings.Language)),
 	})
 	telemetryMgr.Start(ctx, 10*time.Minute)
+	if appSettings.Telemetry.Enabled && appSettings.Telemetry.CrashReports {
+		go uploadPendingCrashReports(ctx, telemetry.Client{
+			Enabled:       true,
+			BaseURL:       appSettings.Telemetry.BaseURL,
+			AnonymousPath: filepath.Join(config.DataDir, "telemetry_id"),
+			UserAgent:     "SafeSky-Telemetry/1",
+		}, app.mainLogger)
+	}
 	defer func() {
 		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = telemetryMgr.Flush(flushCtx)
@@ -950,6 +959,39 @@ func apiTCPAddress(apiAddress string) string {
 
 func apiBaseURL(apiAddress string) string {
 	return "http://" + apiTCPAddress(apiAddress)
+}
+
+func uploadPendingCrashReports(ctx context.Context, client telemetry.Client, log interface {
+	Debug(format string, args ...interface{})
+	Warn(format string, args ...interface{})
+}) {
+	for _, path := range crashreport.ListLatest(20) {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Warn("telemetry crash upload: read %s: %v", filepath.Base(path), err)
+			continue
+		}
+		var report crashreport.CrashReport
+		if err := json.Unmarshal(data, &report); err != nil {
+			log.Warn("telemetry crash upload: decode %s: %v", filepath.Base(path), err)
+			continue
+		}
+		uploadCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err = client.UploadCrashReport(uploadCtx, report)
+		cancel()
+		if err != nil {
+			log.Debug("telemetry crash upload: %s: %v", filepath.Base(path), err)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			log.Warn("telemetry crash upload: remove %s: %v", filepath.Base(path), err)
+		}
+	}
 }
 
 // ── Windows helpers ───────────────────────────────────────────────────────────

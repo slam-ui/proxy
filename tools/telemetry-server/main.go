@@ -98,6 +98,13 @@ func initSchema(db *sql.DB) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_anon ON events(anonymous_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts)`,
+		`CREATE TABLE IF NOT EXISTS crash_reports (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			anonymous_id TEXT NOT NULL,
+			received_at TEXT NOT NULL,
+			report_json TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_crash_reports_anon ON crash_reports(anonymous_id)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -109,9 +116,35 @@ func initSchema(db *sql.DB) error {
 
 func (s *server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/telemetry/v1", s.handleIngest)
+	mux.HandleFunc("/api/telemetry/v1/crash", s.handleCrash)
 	mux.HandleFunc("/api/telemetry/v1/delete", s.handleDelete)
 	mux.HandleFunc("/api/telemetry/v1/export", s.handleExport)
 	mux.HandleFunc("/", s.handleAdmin)
+}
+
+func (s *server) handleCrash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		AnonymousID string          `json:"anonymous_id"`
+		Report      json.RawMessage `json:"report"`
+	}
+	if err := decodeLimited(w, r, &req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.AnonymousID) == "" || len(req.Report) == 0 {
+		http.Error(w, "anonymous_id and report are required", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.db.ExecContext(r.Context(), `INSERT INTO crash_reports(anonymous_id, received_at, report_json) VALUES(?,?,?)`,
+		req.AnonymousID, time.Now().UTC().Format(time.RFC3339), string(req.Report)); err != nil {
+		http.Error(w, "store crash report", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *server) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -205,6 +238,7 @@ func (s *server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM events WHERE anonymous_id=?`, req.AnonymousID)
+	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM crash_reports WHERE anonymous_id=?`, req.AnonymousID)
 	_, _ = s.db.ExecContext(r.Context(), `DELETE FROM users WHERE anonymous_id=?`, req.AnonymousID)
 	_ = json.NewEncoder(w).Encode(map[string]bool{"deleted": true})
 }

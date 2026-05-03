@@ -86,3 +86,26 @@ func TestDeleteRemovesUserEvents(t *testing.T) {
 		t.Fatalf("export after delete=%s", w.Body.String())
 	}
 }
+
+func TestCrashReportStoresAndDeletes(t *testing.T) {
+	s, mux := newTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/telemetry/v1/crash", bytes.NewReader([]byte(`{"anonymous_id":"anon-1","report":{"timestamp":"now","last_output":"panic"}}`)))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("crash status=%d body=%s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM crash_reports WHERE anonymous_id='anon-1'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("crash count=%d err=%v", count, err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/api/telemetry/v1/delete", bytes.NewReader([]byte(`{"anonymous_id":"anon-1"}`)))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete status=%d", w.Code)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM crash_reports WHERE anonymous_id='anon-1'`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("crash count after delete=%d err=%v", count, err)
+	}
+}
