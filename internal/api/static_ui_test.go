@@ -112,6 +112,23 @@ func TestAdvancedSettingsAreProgressivelyDisclosed(t *testing.T) {
 	}
 }
 
+func TestTelemetryPrivacyControlsExist(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	js := readStaticBundle(t, jsAssetPaths...)
+	for _, required := range []string{
+		`id="telemetryEnabledToggle"`,
+		`id="telemetryCrashToggle"`,
+		`id="telemetryUsageToggle"`,
+		`function currentTelemetrySettings()`,
+		`telemetry: currentTelemetrySettings()`,
+		`function toggleTelemetryOption(key)`,
+	} {
+		if !strings.Contains(html+js, required) {
+			t.Fatalf("telemetry privacy controls missing %q", required)
+		}
+	}
+}
+
 func TestStaticI18nKeysExistInLocales(t *testing.T) {
 	html := readStaticText(t, "static/index.html")
 	js := readStaticBundle(t, jsAssetPaths...)

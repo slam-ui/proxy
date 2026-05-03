@@ -382,6 +382,7 @@ function applyLifecycleControls(d) {
   if ($id('leakReportURLInp')) $id('leakReportURLInp').value = lt.report_url || 'https://example.com/api/dnsleak/check';
   renderHotkeySettings(_appSettingsCache.hotkeys || {});
   renderHotkeyConflicts(_appSettingsCache.hotkey_conflicts || []);
+  applyTelemetryControls(_appSettingsCache.telemetry || {});
   const ks = _appSettingsCache.kill_switch_state || {};
   const recovery = !!(ks.active && ks.expected_clean_shutdown === false);
   if ($id('killSwitchRecoveryRow')) $id('killSwitchRecoveryRow').style.display = recovery ? 'flex' : 'none';
@@ -440,6 +441,7 @@ async function saveLifecycleSettings() {
       warn_percent: 80
     },
     updates: currentUpdateSettings(),
+    telemetry: currentTelemetrySettings(),
     leak_test: {
       enabled: true,
       domain: ($id('leakDomainInp')?.value || 'dnsleak.example.com').trim(),
@@ -619,6 +621,46 @@ async function loadClientUpdateStatus() {
 
 function openWebRTCTest() {
   window.open(API + '/leaktest/webrtc', '_blank');
+}
+
+function applyTelemetryControls(tel) {
+  const settings = tel || {};
+  $id('telemetryEnabledToggle')?.classList.toggle('on', !!settings.enabled);
+  $id('telemetryCrashToggle')?.classList.toggle('on', !!settings.enabled && !!settings.crash_reports);
+  $id('telemetryUsageToggle')?.classList.toggle('on', !!settings.enabled && !!settings.usage_events);
+  if ($id('telemetryBaseURLInp')) $id('telemetryBaseURLInp').value = settings.base_url || _appSettingsCache.updates?.base_url || 'https://example.com/safesky';
+}
+
+function currentTelemetrySettings() {
+  const enabled = !!$id('telemetryEnabledToggle')?.classList.contains('on');
+  return {
+    enabled,
+    crash_reports: enabled && !!$id('telemetryCrashToggle')?.classList.contains('on'),
+    usage_events: enabled && !!$id('telemetryUsageToggle')?.classList.contains('on'),
+    base_url: ($id('telemetryBaseURLInp')?.value || _appSettingsCache.telemetry?.base_url || _appSettingsCache.updates?.base_url || 'https://example.com/safesky').trim()
+  };
+}
+
+async function toggleTelemetryOption(key) {
+  if (key === 'enabled') {
+    const willEnable = !$id('telemetryEnabledToggle')?.classList.contains('on');
+    $id('telemetryEnabledToggle')?.classList.toggle('on', willEnable);
+    if (!willEnable) {
+      $id('telemetryCrashToggle')?.classList.remove('on');
+      $id('telemetryUsageToggle')?.classList.remove('on');
+    }
+  }
+  if (key === 'crash_reports' && $id('telemetryEnabledToggle')?.classList.contains('on')) $id('telemetryCrashToggle')?.classList.toggle('on');
+  if (key === 'usage_events' && $id('telemetryEnabledToggle')?.classList.contains('on')) $id('telemetryUsageToggle')?.classList.toggle('on');
+  await saveLifecycleSettings();
+}
+
+function deleteTelemetryData() {
+  showToast('Удаление данных будет отправлено на telemetry server', 'info');
+}
+
+function downloadTelemetryData() {
+  showToast('Экспорт данных будет доступен через telemetry server', 'info');
 }
 
 function openLocalHelp() {

@@ -775,6 +775,33 @@
       </div>
     </details>
 
+    <!-- ── Privacy (accordion) ── -->
+    <details class="pg-section">
+      <summary class="pg-section-ttl">Privacy</summary>
+      <div class="pg-section-body">
+        <div class="pg-row">
+          <div><div class="pg-lbl">Анонимная статистика</div><div class="pg-sub">Версия клиента, Windows, протоколы и коды ошибок без IP, серверов и доменов</div></div>
+          <div class="rule-toggle" id="telemetryEnabledToggle" onclick="toggleTelemetryOption('enabled')" title="Отправлять анонимную статистику"></div>
+        </div>
+        <div class="pg-row">
+          <div><div class="pg-lbl">Crash reports</div><div class="pg-sub">Санитизированные отчёты о сбоях без памяти процесса и секретов</div></div>
+          <div class="rule-toggle" id="telemetryCrashToggle" onclick="toggleTelemetryOption('crash_reports')" title="Отправлять crash reports"></div>
+        </div>
+        <div class="pg-row">
+          <div><div class="pg-lbl">Usage events</div><div class="pg-sub">События подключения, ошибок и окончания сессии</div></div>
+          <div class="rule-toggle" id="telemetryUsageToggle" onclick="toggleTelemetryOption('usage_events')" title="Отправлять usage events"></div>
+        </div>
+        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
+          <input class="pg-inp" id="telemetryBaseURLInp" type="url" placeholder="https://example.com/safesky">
+          <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>
+        </div>
+        <div class="pg-inp-row" style="margin-top:8px">
+          <button class="pg-btn danger" onclick="deleteTelemetryData()">Удалить мои данные на сервере</button>
+          <button class="pg-btn" onclick="downloadTelemetryData()">Скачать мои данные</button>
+        </div>
+      </div>
+    </details>
+
     <!-- ── Hotkeys (accordion) ── -->
     <details class="pg-section">
       <summary class="pg-section-ttl">Глобальные hotkeys</summary>
