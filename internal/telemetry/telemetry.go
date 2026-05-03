@@ -19,6 +19,7 @@ import (
 	"proxyclient/internal/crashreport"
 	"proxyclient/internal/dpapi"
 	"proxyclient/internal/fileutil"
+	"proxyclient/internal/netutil"
 )
 
 const (
@@ -387,7 +388,7 @@ func (c Client) doJSON(ctx context.Context, method, endpoint string, body []byte
 	}
 	client := c.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = netutil.SharedHTTPClient(10 * time.Second)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"proxyclient/internal/netutil"
 )
 
 type IPv6Report struct {
@@ -20,7 +22,7 @@ type IPv6Report struct {
 
 func RunIPv6LeakTest(ctx context.Context, client *http.Client) (*IPv6Report, error) {
 	if client == nil {
-		client = &http.Client{Timeout: DefaultHTTPTimeout}
+		client = netutil.SharedHTTPClient(DefaultHTTPTimeout)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api6.ipify.org?format=text", nil)
 	if err != nil {

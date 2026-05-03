@@ -6,13 +6,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"proxyclient/internal/netutil"
 )
 
 const (
@@ -62,21 +63,7 @@ func New(cfg Config) (*Updater, error) {
 }
 
 func defaultHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout: 35 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   5 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   5 * time.Second,
-			ResponseHeaderTimeout: 30 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			MaxIdleConns:          10,
-			IdleConnTimeout:       90 * time.Second,
-		},
-	}
+	return netutil.SharedHTTPClient(35 * time.Second)
 }
 
 // CheckLatest downloads version.<channel>.json and compares it with the current version.

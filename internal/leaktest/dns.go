@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"proxyclient/internal/netutil"
 )
 
 const (
@@ -66,7 +68,7 @@ func RunDNSLeakTest(ctx context.Context, cfg DNSConfig) (*DNSLeakReport, error) 
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: DefaultHTTPTimeout}
+		client = netutil.SharedHTTPClient(DefaultHTTPTimeout)
 	}
 	testID, err := newTestID()
 	if err != nil {

@@ -442,3 +442,52 @@ func TestDownloadGeositeFile_DirectFallbackDoesNotUseProxy(t *testing.T) {
 		t.Fatalf("downloaded size=%d, want %d", fi.Size(), len(payload))
 	}
 }
+
+func TestGeositeHTTPClientsReuseDirectClientWhenProxyDown(t *testing.T) {
+	oldProxyAddr := geositeProxyAddr
+	geositeProxyAddr = "127.0.0.1:1"
+	defer func() { geositeProxyAddr = oldProxyAddr }()
+
+	first := geositeHTTPClients(context.Background())
+	second := geositeHTTPClients(context.Background())
+	if len(first) != 1 || len(second) != 1 {
+		t.Fatalf("expected direct-only clients, got first=%#v second=%#v", first, second)
+	}
+	if first[0].name != "direct" || second[0].name != "direct" {
+		t.Fatalf("expected direct clients, got first=%s second=%s", first[0].name, second[0].name)
+	}
+	if first[0].client != second[0].client {
+		t.Fatal("direct geosite client is not reused")
+	}
+	transport, ok := first[0].client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("direct geosite transport type = %T, want *http.Transport", first[0].client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("direct geosite transport must not use proxy")
+	}
+	if transport.IdleConnTimeout != 90*time.Second {
+		t.Fatalf("direct geosite IdleConnTimeout = %s, want 90s", transport.IdleConnTimeout)
+	}
+}
+
+func TestGeositeProxyHTTPClientReusesClientPerAddress(t *testing.T) {
+	first := geositeProxyHTTPClient("127.0.0.1:18080")
+	second := geositeProxyHTTPClient("127.0.0.1:18080")
+	if first != second {
+		t.Fatal("proxy geosite client is not reused for the same address")
+	}
+	transport, ok := first.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("proxy geosite transport type = %T, want *http.Transport", first.Transport)
+	}
+	if transport.Proxy == nil {
+		t.Fatal("proxy geosite transport has nil proxy")
+	}
+	if transport.MaxIdleConns < 10 {
+		t.Fatalf("proxy geosite MaxIdleConns = %d, want at least 10", transport.MaxIdleConns)
+	}
+	if transport.IdleConnTimeout != 90*time.Second {
+		t.Fatalf("proxy geosite IdleConnTimeout = %s, want 90s", transport.IdleConnTimeout)
+	}
+}

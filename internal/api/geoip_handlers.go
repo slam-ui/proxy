@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"proxyclient/internal/netutil"
 )
 
 // geoCache — in-memory кэш результатов GeoIP-определения.
@@ -24,7 +26,7 @@ var (
 	geoCacheMu sync.Mutex
 	geoCache   = map[string]geoCacheEntry{}
 
-	geoIPHTTPClient = &http.Client{Timeout: 3 * time.Second}
+	geoIPHTTPClient = netutil.SharedHTTPClient(3 * time.Second)
 )
 
 type geoCacheEntry struct {
