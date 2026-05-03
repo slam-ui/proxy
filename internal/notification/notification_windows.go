@@ -72,11 +72,16 @@ func normalizeNotification(title, message string) (string, string, string) {
 
 	iconName := "Info"
 	if strings.Contains(combined, "ошиб") ||
+		strings.Contains(combined, "error") ||
+		strings.Contains(combined, "failed") ||
 		strings.Contains(combined, "не удалось") ||
 		strings.Contains(combined, "занят") ||
 		strings.Contains(combined, "упал") {
 		iconName = "Error"
 	} else if strings.Contains(combined, "деграда") ||
+		strings.Contains(combined, "degraded") ||
+		strings.Contains(combined, "retry") ||
+		strings.Contains(combined, "restart") ||
 		strings.Contains(combined, "повтор") ||
 		strings.Contains(combined, "перезапуск") ||
 		strings.Contains(combined, "подожд") {
@@ -86,9 +91,9 @@ func normalizeNotification(title, message string) (string, string, string) {
 	if title == "" || title == "SafeSky" || strings.EqualFold(title, "SafeSky — ошибка") {
 		switch iconName {
 		case "Error":
-			title = "SafeSky: требуется действие"
+			title = notificationT("notification.title.action")
 		case "Warning":
-			title = "SafeSky: идёт восстановление"
+			title = notificationT("notification.title.recovery")
 		default:
 			title = "SafeSky"
 		}
@@ -96,34 +101,34 @@ func normalizeNotification(title, message string) (string, string, string) {
 
 	replacements := []struct {
 		old string
-		new string
+		key string
 	}{
-		{"Прокси включён ✓", "Туннель включён. Трафик идёт через выбранный маршрут."},
-		{"Прокси отключён", "Туннель отключён. Системный маршрут восстановлен."},
-		{"Прокси готов ✓", "Туннель готов и включён."},
-		{"Прокси готов к ручному включению", "Туннель готов. Включите его в приложении или из трея."},
-		{"Инициализация... подождите", "Туннель ещё запускается. Повторите действие через несколько секунд."},
-		{"Загружаем sing-box.exe...", "Скачиваем сетевой движок. Подключение будет доступно после установки."},
-		{"Повторная загрузка sing-box...", "Повторно скачиваем сетевой движок..."},
-		{"sing-box.exe загружен ✓", "Сетевой движок установлен."},
-		{"sing-box не запустился. Проверьте лог.", "Сетевой движок не запустился. Откройте журнал событий."},
-		{"Не удалось запустить sing-box. Проверьте лог.", "Не удалось запустить сетевой движок. Откройте журнал событий."},
-		{"sing-box упал. Проверьте лог и перезапустите.", "Сетевой движок остановился. Откройте журнал событий и перезапустите туннель."},
-		{"Вставьте VLESS-ссылку в secret.key", "Добавьте VLESS-ссылку в настройках подключения."},
-		{"Не удалось переключить сервер", "Не удалось сменить сервер. Проверьте доступность сервера."},
+		{"Прокси включён ✓", "notification.proxy.enabled"},
+		{"Прокси отключён", "notification.proxy.disabled"},
+		{"Прокси готов ✓", "notification.proxy.ready"},
+		{"Прокси готов к ручному включению", "notification.proxy.ready_manual"},
+		{"Инициализация... подождите", "notification.initializing"},
+		{"Загружаем sing-box.exe...", "notification.engine.downloading"},
+		{"Повторная загрузка sing-box...", "notification.engine.redownloading"},
+		{"sing-box.exe загружен ✓", "notification.engine.downloaded"},
+		{"sing-box не запустился. Проверьте лог.", "notification.engine.not_started"},
+		{"Не удалось запустить sing-box. Проверьте лог.", "notification.engine.start_failed"},
+		{"sing-box упал. Проверьте лог и перезапустите.", "notification.engine.crashed"},
+		{"Вставьте VLESS-ссылку в secret.key", "notification.server.add_key"},
+		{"Не удалось переключить сервер", "notification.server.switch_failed"},
 	}
 	for _, repl := range replacements {
-		message = strings.ReplaceAll(message, repl.old, repl.new)
+		message = strings.ReplaceAll(message, repl.old, notificationT(repl.key))
 	}
-	message = strings.ReplaceAll(message, "Перезапуск TUN...", "Восстанавливаем TUN-маршрут...")
-	message = strings.ReplaceAll(message, "Перезапущен ✓", "TUN-маршрут восстановлен")
-	message = strings.ReplaceAll(message, "sing-box.exe", "сетевой движок")
-	message = strings.ReplaceAll(message, "sing-box", "сетевой движок")
-	message = strings.ReplaceAll(message, "Прокси", "Туннель")
-	message = strings.ReplaceAll(message, "прокси", "туннель")
+	message = strings.ReplaceAll(message, "Перезапуск TUN...", notificationT("notification.tun.restarting"))
+	message = strings.ReplaceAll(message, "Перезапущен ✓", notificationT("notification.tun.restarted"))
+	message = strings.ReplaceAll(message, "sing-box.exe", notificationT("notification.engine.name"))
+	message = strings.ReplaceAll(message, "sing-box", notificationT("notification.engine.name"))
+	message = strings.ReplaceAll(message, "Прокси", notificationT("notification.tunnel"))
+	message = strings.ReplaceAll(message, "прокси", notificationT("notification.tunnel.lower"))
 
 	if strings.TrimSpace(message) == "" {
-		message = "Состояние SafeSky обновлено."
+		message = notificationT("notification.status.updated")
 	}
 	return title, message, iconName
 }

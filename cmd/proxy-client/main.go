@@ -324,6 +324,7 @@ func run(output io.Writer) error {
 	}
 	window.SetCloseToTray(appSettings.CloseToTray)
 	tray.SetLanguage(appSettings.Language)
+	notification.SetLanguage(appSettings.Language)
 	app := NewApp(cfg, output)
 
 	initDataDir(app.mainLogger)

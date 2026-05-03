@@ -312,6 +312,35 @@ func TestEscapePS_VeryLongString(t *testing.T) {
 	}
 }
 
+func TestNormalizeNotificationUsesEnglishLocale(t *testing.T) {
+	SetLanguage("en")
+	t.Cleanup(func() { SetLanguage("ru") })
+
+	title, message, icon := normalizeNotification("SafeSky", "Прокси готов ✓")
+	if title != "SafeSky" {
+		t.Fatalf("title=%q", title)
+	}
+	if message != "Tunnel is ready and connected." {
+		t.Fatalf("message=%q", message)
+	}
+	if icon != "Info" {
+		t.Fatalf("icon=%q", icon)
+	}
+}
+
+func TestNormalizeNotificationLocalizesEmptyErrorTitle(t *testing.T) {
+	SetLanguage("en")
+	t.Cleanup(func() { SetLanguage("ru") })
+
+	title, _, icon := normalizeNotification("SafeSky — ошибка", "Не удалось запустить sing-box. Проверьте лог.")
+	if title != "SafeSky: action required" {
+		t.Fatalf("title=%q", title)
+	}
+	if icon != "Error" {
+		t.Fatalf("icon=%q", icon)
+	}
+}
+
 // ── PowerShell compatibility tests ────────────────────────────────────────────────
 
 func TestEscapePS_PowerShellCompatibility(t *testing.T) {
