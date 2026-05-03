@@ -7,8 +7,9 @@ import (
 )
 
 type OnboardingHandlers struct {
-	server     *Server
-	markerPath string
+	server       *Server
+	markerPath   string
+	settingsPath string
 }
 
 func SetupOnboardingRoutes(s *Server) {
@@ -29,6 +30,10 @@ func (h *OnboardingHandlers) handleStatus(w http.ResponseWriter, _ *http.Request
 }
 
 func (h *OnboardingHandlers) handleComplete(w http.ResponseWriter, _ *http.Request) {
+	if _, err := onboarding.ApplySmartDefaults(h.settingsPath); err != nil {
+		h.server.respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if err := onboarding.MarkComplete(h.markerPath); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return

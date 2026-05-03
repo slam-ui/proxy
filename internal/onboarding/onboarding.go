@@ -44,3 +44,21 @@ func MarkComplete(path string) error {
 	}
 	return nil
 }
+
+func ApplySmartDefaults(settingsPath string) (config.AppSettings, error) {
+	if settingsPath == "" {
+		settingsPath = config.AppSettingsFile
+	}
+	settings, err := config.LoadAppSettings(settingsPath)
+	if err != nil {
+		return config.AppSettings{}, fmt.Errorf("load app settings: %w", err)
+	}
+	settings.StartProxyOnLaunch = false
+	settings.Updates.Enabled = true
+	settings.Updates.Channel = "stable"
+	settings.LeakTest.Enabled = true
+	if err := config.SaveAppSettings(settingsPath, settings); err != nil {
+		return config.AppSettings{}, fmt.Errorf("save app settings: %w", err)
+	}
+	return settings, nil
+}
