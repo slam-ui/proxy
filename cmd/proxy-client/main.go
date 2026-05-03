@@ -323,6 +323,7 @@ func run(output io.Writer) error {
 		cfg.MemoryLimitMB = appSettings.MemoryLimitMB
 	}
 	window.SetCloseToTray(appSettings.CloseToTray)
+	tray.SetLanguage(appSettings.Language)
 	app := NewApp(cfg, output)
 
 	initDataDir(app.mainLogger)

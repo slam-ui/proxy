@@ -15,6 +15,7 @@ import (
 	"proxyclient/internal/i18n"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/tray"
 )
 
 const (
@@ -183,6 +184,9 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if h.server.config.CloseToTrayFn != nil {
 		h.server.config.CloseToTrayFn(settings.CloseToTray)
+	}
+	if body.Language != nil {
+		tray.SetLanguage(settings.Language)
 	}
 	conflicts := h.currentHotkeyConflicts(settings.Hotkeys, hotkeysChanged)
 	h.server.respondJSON(w, http.StatusOK, settingsResponseWithHotkeyConflicts{

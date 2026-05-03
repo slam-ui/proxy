@@ -352,8 +352,8 @@ func win32Run(onReady func(), onExit func()) {
 	wmTaskbarCreated, _, _ = pRegisterWindowMessage.Call(uintptr(unsafe.Pointer(taskbarCreatedStr)))
 	runtime.KeepAlive(taskbarCreatedStr)
 
-	copyUTF16(&win32tooltipOn, "SafeSky — туннель включён")
-	copyUTF16(&win32tooltipOff, "SafeSky — туннель выключен")
+	copyUTF16(&win32tooltipOn, trayT("tray.tooltip.on"))
+	copyUTF16(&win32tooltipOff, trayT("tray.tooltip.off"))
 
 	className, _ := windows.UTF16PtrFromString("SafeSkyTrayWnd")
 	hInstance, _, _ := pGetModuleHandle.Call(0)
@@ -474,9 +474,7 @@ func win32SetIconForHealth(enabled bool, state HealthState) {
 	win32mu.Unlock()
 
 	nid := buildNID(hwnd, h, win32tooltipOff)
-	if enabled {
-		copyUTF16(&nid.SzTip, "SafeSky — туннель включён")
-	}
+	copyUTF16(&nid.SzTip, buildTooltip(enabled))
 	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
 	if oldOwned && oldIcon != 0 && oldIcon != h {
 		ignoreWin32Call(pDestroyIcon, oldIcon)
@@ -644,16 +642,16 @@ func showTrayMenu(hwnd uintptr) {
 
 	// ── Элементы меню ──
 
-	addOD(hMenu, odItem{kind: odAccent, text: "Открыть SafeSky", id: idOpen, enabled: true})
+	addOD(hMenu, odItem{kind: odAccent, text: trayT("tray.open"), id: idOpen, enabled: true})
 	addODSep(hMenu)
 
 	// Статус подключения
 	if isWarming {
-		addOD(hMenu, odItem{kind: odNormal, text: "Туннель запускается", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.status.starting"), id: 0, enabled: false})
 	} else if disableEnabled {
 		addOD(hMenu, odItem{kind: odNormal, text: trayConnectedStatusText(servers), id: 0, enabled: false})
 	} else {
-		addOD(hMenu, odItem{kind: odNormal, text: "Туннель выключен", id: 0, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.status.off"), id: 0, enabled: false})
 	}
 	if speedText != "" {
 		addOD(hMenu, odItem{kind: odNormal, text: speedText, id: 0, enabled: false})
@@ -661,14 +659,14 @@ func showTrayMenu(hwnd uintptr) {
 	addODSep(hMenu)
 
 	if copyAddr != "" {
-		addOD(hMenu, odItem{kind: odNormal, text: "Скопировать локальный адрес", subtext: copyAddr, id: idCopyAddr, enabled: true})
+		addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.copy_addr"), subtext: copyAddr, id: idCopyAddr, enabled: true})
 	} else {
-		addOD(hMenu, odItem{kind: odNormal, text: "Локальный адрес недоступен", id: idCopyAddr, enabled: false})
+		addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.copy_addr_unavailable"), id: idCopyAddr, enabled: false})
 	}
 	addODSep(hMenu)
 
-	addOD(hMenu, odItem{kind: odNormal, text: "Подключить туннель", id: idEnable, enabled: enableEnabled && !isWarming})
-	addOD(hMenu, odItem{kind: odNormal, text: "Отключить туннель", id: idDisable, enabled: disableEnabled && !isWarming})
+	addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.connect"), id: idEnable, enabled: enableEnabled && !isWarming})
+	addOD(hMenu, odItem{kind: odNormal, text: trayT("tray.disconnect"), id: idDisable, enabled: disableEnabled && !isWarming})
 
 	// Подменю серверов
 	if len(profiles) > 0 {
@@ -688,7 +686,7 @@ func showTrayMenu(hwnd uintptr) {
 					checked: profile.Active,
 				})
 			}
-			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: "Профиль", enabled: true, popup: true})
+			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: trayT("tray.profile"), enabled: true, popup: true})
 		}
 	}
 
@@ -711,12 +709,12 @@ func showTrayMenu(hwnd uintptr) {
 					checked: srv.Active,
 				})
 			}
-			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: "Сменить сервер", enabled: true, popup: true})
+			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: trayT("tray.switch_server"), enabled: true, popup: true})
 		}
 	}
 
 	addODSep(hMenu)
-	addOD(hMenu, odItem{kind: odDanger, text: "Выйти из SafeSky", id: idQuit, enabled: true})
+	addOD(hMenu, odItem{kind: odDanger, text: trayT("tray.quit"), id: idQuit, enabled: true})
 
 	// Показываем меню
 	var pt point

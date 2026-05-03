@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"proxyclient/internal/hotkeys"
+	"proxyclient/internal/i18n"
 )
 
 // ServerItem описывает один сервер в подменю трея.
@@ -67,6 +68,11 @@ var (
 	readyCh = make(chan struct{})
 )
 
+var (
+	trayLocaleMu sync.RWMutex
+	trayLocale   = i18n.LocaleRU
+)
+
 // Run запускает системный трей. Блокирует текущий поток.
 // Должен вызываться из main-горутины (Win32 message loop требует конкретный поток).
 func Run(callbacks Callbacks) {
@@ -91,6 +97,17 @@ func SetEnabled(enabled bool) {
 	win32MenuState.enableEnabled = !enabled
 	win32MenuState.disableEnabled = enabled
 	win32MenuState.Unlock()
+}
+
+func SetLanguage(setting string) {
+	trayLocaleMu.Lock()
+	trayLocale = i18n.EffectiveLocale(setting)
+	trayLocaleMu.Unlock()
+
+	win32MenuState.Lock()
+	isEnabled := win32MenuState.disableEnabled
+	win32MenuState.Unlock()
+	win32SetTooltip(buildTooltip(isEnabled))
 }
 
 // SetProxyAddr обновляет адрес прокси в меню.
@@ -239,20 +256,20 @@ func buildTooltip(enabled bool) string {
 	warmingMu.Unlock()
 
 	if warming {
-		return "SafeSky — туннель запускается"
+		return trayT("tray.tooltip.starting")
 	}
 	if !enabled {
-		return "SafeSky — туннель выключен"
+		return trayT("tray.tooltip.off")
 	}
-	tip := "SafeSky — туннель включён"
+	tip := trayT("tray.tooltip.on")
 	healthMu.Lock()
 	state := healthState
 	healthMu.Unlock()
 	switch state {
 	case HealthDegraded:
-		tip += " — деградация"
+		tip += " — " + trayT("tray.tooltip.degraded")
 	case HealthCritical:
-		tip += " — проблемы соединения"
+		tip += " — " + trayT("tray.tooltip.critical")
 	}
 	win32MenuState.Lock()
 	servers := win32MenuState.servers
@@ -354,10 +371,10 @@ func sortedServerItems(servers []ServerItem) []ServerItem {
 func trayConnectedStatusText(servers []ServerItem) string {
 	for _, srv := range servers {
 		if srv.Active && strings.TrimSpace(srv.Name) != "" {
-			return "Туннель включён — " + srv.Name
+			return trayT("tray.status.connected_server", srv.Name)
 		}
 	}
-	return "Туннель включён"
+	return trayT("tray.status.connected")
 }
 
 func formatTrafficBytes(bytes int64) string {
@@ -406,7 +423,7 @@ func normalizeTrayNotification(title, message string, kind NotificationKind) (st
 		title = "SafeSky"
 	}
 	if message == "" {
-		message = "Состояние SafeSky обновлено."
+		message = trayT("tray.notification.updated")
 	}
 	switch kind {
 	case NotificationWarning, NotificationError:
@@ -414,4 +431,15 @@ func normalizeTrayNotification(title, message string, kind NotificationKind) (st
 		kind = NotificationInfo
 	}
 	return title, message, kind
+}
+
+func trayT(key string, args ...any) string {
+	trayLocaleMu.RLock()
+	locale := trayLocale
+	trayLocaleMu.RUnlock()
+	tr, err := i18n.New(locale)
+	if err != nil {
+		return key
+	}
+	return tr.T(key, args...)
 }

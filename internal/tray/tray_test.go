@@ -81,9 +81,22 @@ func TestSetTrafficSpeed(t *testing.T) {
 }
 
 func TestTrayConnectedStatusText(t *testing.T) {
+	SetLanguage("ru")
 	got := trayConnectedStatusText([]ServerItem{{Name: "slow"}, {Name: "fast", Active: true}})
 	if got != "Туннель включён — fast" {
 		t.Fatalf("status=%q", got)
+	}
+}
+
+func TestTrayLanguageEnglish(t *testing.T) {
+	SetLanguage("en")
+	t.Cleanup(func() { SetLanguage("ru") })
+
+	if got := trayConnectedStatusText([]ServerItem{{Name: "fast", Active: true}}); got != "Tunnel connected — fast" {
+		t.Fatalf("english status=%q", got)
+	}
+	if got := buildTooltip(false); got != "SafeSky — tunnel disconnected" {
+		t.Fatalf("english tooltip=%q", got)
 	}
 }
 
@@ -185,6 +198,7 @@ func TestSetProxyAddr(t *testing.T) {
 
 // TestBuildTooltip_Disabled проверяет тултип в выключенном состоянии.
 func TestBuildTooltip_Disabled(t *testing.T) {
+	SetLanguage("ru")
 	got := buildTooltip(false)
 	if got != "SafeSky — туннель выключен" {
 		t.Errorf("buildTooltip(false)=%q", got)
@@ -193,6 +207,7 @@ func TestBuildTooltip_Disabled(t *testing.T) {
 
 // TestBuildTooltip_EnabledWithActiveServer проверяет что имя активного сервера добавляется в тултип.
 func TestBuildTooltip_EnabledWithActiveServer(t *testing.T) {
+	SetLanguage("ru")
 	SetServerList([]ServerItem{
 		{ID: "1", Name: "DE-1", Active: false},
 		{ID: "2", Name: "FR-2", Active: true},
