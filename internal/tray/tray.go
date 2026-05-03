@@ -12,6 +12,8 @@ package tray
 import (
 	"strings"
 	"sync"
+
+	"proxyclient/internal/hotkeys"
 )
 
 // ServerItem описывает один сервер в подменю трея.
@@ -24,12 +26,14 @@ type ServerItem struct {
 
 // Callbacks — функции которые трей вызывает при действиях пользователя.
 type Callbacks struct {
-	OnOpen         func()
-	OnEnable       func()
-	OnDisable      func()
-	OnCopyAddr     func(addr string)
-	OnQuit         func()
-	OnServerSwitch func(serverID string)
+	OnOpen          func()
+	OnEnable        func()
+	OnDisable       func()
+	OnCopyAddr      func(addr string)
+	OnQuit          func()
+	OnServerSwitch  func(serverID string)
+	OnNextServer    func()
+	OnProfileSwitch func(index int)
 }
 
 type HealthState int
@@ -160,6 +164,24 @@ func Notify(title, message string, kind NotificationKind) {
 	win32ShowNotification(title, message, kind)
 }
 
+func SetHotkeys(settings hotkeys.Settings) []hotkeys.Conflict {
+	settings = hotkeys.NormalizeSettings(settings)
+	hotkeyMu.Lock()
+	hotkeySettings = settings
+	hotkeyMu.Unlock()
+	conflicts := win32ApplyHotkeys(settings)
+	hotkeyMu.Lock()
+	hotkeyConflicts = append([]hotkeys.Conflict(nil), conflicts...)
+	hotkeyMu.Unlock()
+	return conflicts
+}
+
+func HotkeyConflicts() []hotkeys.Conflict {
+	hotkeyMu.Lock()
+	defer hotkeyMu.Unlock()
+	return append([]hotkeys.Conflict(nil), hotkeyConflicts...)
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────
 
 var (
@@ -170,6 +192,10 @@ var (
 	warmingActive bool
 	healthMu      sync.Mutex
 	healthState   HealthState
+
+	hotkeyMu        sync.Mutex
+	hotkeySettings  hotkeys.Settings
+	hotkeyConflicts []hotkeys.Conflict
 )
 
 func buildTooltip(enabled bool) string {
@@ -243,6 +269,34 @@ func handleTrayToggle() {
 	}
 	if cb.OnEnable != nil {
 		cb.OnEnable()
+	}
+}
+
+func handleHotkeyAction(action hotkeys.Action) {
+	switch action {
+	case hotkeys.ActionToggleConnection:
+		handleTrayToggle()
+	case hotkeys.ActionShowHideWindow:
+		if cb.OnOpen != nil {
+			cb.OnOpen()
+		}
+	case hotkeys.ActionNextServer:
+		if cb.OnNextServer != nil {
+			cb.OnNextServer()
+		}
+	default:
+		if strings.HasPrefix(string(action), "profile_") && cb.OnProfileSwitch != nil {
+			idx := 0
+			for _, ch := range strings.TrimPrefix(string(action), "profile_") {
+				if ch < '0' || ch > '9' {
+					return
+				}
+				idx = idx*10 + int(ch-'0')
+			}
+			if idx > 0 {
+				cb.OnProfileSwitch(idx)
+			}
+		}
 	}
 }
 

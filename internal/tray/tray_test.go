@@ -2,6 +2,8 @@ package tray
 
 import (
 	"testing"
+
+	"proxyclient/internal/hotkeys"
 )
 
 // TestSetServerList_NoPanic проверяет что SetServerList не паникует когда трей не инициализирован.
@@ -202,4 +204,42 @@ func TestNotifyDoesNotPanic(t *testing.T) {
 	Notify("SafeSky", "Connected", NotificationInfo)
 	Notify("SafeSky", "Warning", NotificationWarning)
 	Notify("SafeSky", "Error", NotificationError)
+}
+
+func TestHandleHotkeyAction(t *testing.T) {
+	var enabled, opened, next int
+	var profile int
+	cb.OnEnable = func() { enabled++ }
+	cb.OnOpen = func() { opened++ }
+	cb.OnNextServer = func() { next++ }
+	cb.OnProfileSwitch = func(index int) { profile = index }
+	defer func() {
+		cb.OnEnable = nil
+		cb.OnOpen = nil
+		cb.OnNextServer = nil
+		cb.OnProfileSwitch = nil
+	}()
+
+	SetEnabled(false)
+	handleHotkeyAction(hotkeys.ActionToggleConnection)
+	handleHotkeyAction(hotkeys.ActionShowHideWindow)
+	handleHotkeyAction(hotkeys.ActionNextServer)
+	handleHotkeyAction(hotkeys.Action("profile_3"))
+
+	if enabled != 1 || opened != 1 || next != 1 || profile != 3 {
+		t.Fatalf("enabled=%d opened=%d next=%d profile=%d", enabled, opened, next, profile)
+	}
+}
+
+func TestSetHotkeysStoresConflicts(t *testing.T) {
+	conflicts := SetHotkeys(hotkeys.Settings{Enabled: true, Bindings: []hotkeys.Binding{
+		{Action: hotkeys.ActionToggleConnection, Accelerator: "Ctrl+Alt+P", Enabled: true},
+	}})
+	if len(conflicts) != 0 {
+		t.Fatalf("conflicts=%+v, want none in stub", conflicts)
+	}
+	got := HotkeyConflicts()
+	if len(got) != 0 {
+		t.Fatalf("stored conflicts=%+v, want none", got)
+	}
 }

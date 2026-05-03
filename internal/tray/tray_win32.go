@@ -12,9 +12,12 @@ package tray
 
 import (
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
+
+	"proxyclient/internal/hotkeys"
 
 	"golang.org/x/sys/windows"
 )
@@ -52,6 +55,8 @@ var (
 	pLoadImage           = user32dll.NewProc("LoadImageW")
 	pFillRect            = user32dll.NewProc("FillRect")
 	pDrawTextW           = user32dll.NewProc("DrawTextW")
+	pRegisterHotKey      = user32dll.NewProc("RegisterHotKey")
+	pUnregisterHotKey    = user32dll.NewProc("UnregisterHotKey")
 
 	pShellNotifyIcon = shell32dll.NewProc("Shell_NotifyIconW")
 
@@ -139,6 +144,7 @@ const (
 	wmCommand     = 0x0111
 	wmMeasureItem = 0x002C
 	wmDrawItem    = 0x002B
+	wmHotkey      = 0x0312
 
 	// Owner-draw item state
 	odisSelected = 0x0001
@@ -323,7 +329,9 @@ var (
 		servers        []ServerItem
 	}
 
-	win32BringFront func()
+	win32BringFront     func()
+	registeredHotkeyIDs []int
+	hotkeyActions       = map[int]hotkeys.Action{}
 )
 
 // ── Entry points (called by tray.go) ─────────────────────────────────────
@@ -386,6 +394,12 @@ func win32Run(onReady func(), onExit func()) {
 	nid := buildNID(hwnd, initialIcon, win32tooltipOff)
 	ignoreWin32Call(pShellNotifyIcon, nimAdd, uintptr(unsafe.Pointer(&nid)))
 	win32SetTrayVersion(hwnd)
+	hotkeyMu.Lock()
+	pendingHotkeys := hotkeySettings
+	hotkeyMu.Unlock()
+	if len(pendingHotkeys.Bindings) > 0 {
+		SetHotkeys(pendingHotkeys)
+	}
 
 	go onReady()
 
@@ -570,6 +584,13 @@ func trayWndProc(hwnd, uMsg, wParam, lParam uintptr) (ret uintptr) {
 		go handleMenuCommand(cmdID)
 		return 0
 
+	case wmHotkey:
+		id := int(wParam)
+		if action, ok := hotkeyActions[id]; ok {
+			go handleHotkeyAction(action)
+		}
+		return 0
+
 	case wmMeasureItem:
 		handleMeasureItem(lParam)
 		return 1
@@ -715,6 +736,40 @@ func handleMenuCommand(id int) {
 			cb.OnServerSwitch(srvID)
 		}
 	}
+}
+
+func win32ApplyHotkeys(settings hotkeys.Settings) []hotkeys.Conflict {
+	if win32hwnd == 0 {
+		return nil
+	}
+	for _, id := range registeredHotkeyIDs {
+		ignoreWin32Call(pUnregisterHotKey, win32hwnd, uintptr(id))
+	}
+	registeredHotkeyIDs = registeredHotkeyIDs[:0]
+	hotkeyActions = map[int]hotkeys.Action{}
+	if !settings.Enabled {
+		return nil
+	}
+	var conflicts []hotkeys.Conflict
+	for idx, binding := range settings.Bindings {
+		if !binding.Enabled || strings.TrimSpace(binding.Accelerator) == "" {
+			continue
+		}
+		accel, err := hotkeys.ParseAccelerator(binding.Accelerator)
+		if err != nil {
+			conflicts = append(conflicts, hotkeys.Conflict{Action: binding.Action, Accelerator: binding.Accelerator, Error: err.Error()})
+			continue
+		}
+		id := idx + 1
+		ret, _, callErr := pRegisterHotKey.Call(win32hwnd, uintptr(id), uintptr(accel.Modifiers), uintptr(accel.Key))
+		if ret == 0 {
+			conflicts = append(conflicts, hotkeys.Conflict{Action: binding.Action, Accelerator: accel.Canonical, Error: callErr.Error()})
+			continue
+		}
+		registeredHotkeyIDs = append(registeredHotkeyIDs, id)
+		hotkeyActions[id] = binding.Action
+	}
+	return conflicts
 }
 
 // ── Owner-drawn: добавление элементов ────────────────────────────────────

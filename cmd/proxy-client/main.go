@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,7 @@ import (
 	"proxyclient/internal/clipboard"
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
+	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
@@ -489,6 +491,11 @@ func run(output io.Writer) error {
 	tray.SetProxyAddr(proxyConfig.Address)
 	// Регистрируем callback для переноса окна на передний план (двойной клик по трею).
 	tray.SetBringToFront(func() { window.BringToFront(cfg.WebUIURL) })
+	if settings, err := config.LoadAppSettings(config.AppSettingsFile); err == nil {
+		for _, conflict := range tray.SetHotkeys(hotkeySettingsFromConfig(settings.Hotkeys)) {
+			app.mainLogger.Warn("Hotkey %s (%s) не зарегистрирован: %s", conflict.Action, conflict.Accelerator, conflict.Error)
+		}
+	}
 
 	// BUG FIX #NEW-3: OnQuit callback трея не был защищён sync.Once.
 	// handleQuit (POST /api/quit) уже использует s.quitOnce.Do(...).
@@ -539,6 +546,26 @@ func run(output io.Writer) error {
 				if err := app.connectTrayServer(cfg.APIAddress, serverID); err != nil {
 					app.mainLogger.Error("Не удалось переключить сервер: %v", err)
 					tray.Notify("SafeSky", "Failed to switch server: "+err.Error(), tray.NotificationError)
+					return
+				}
+				app.refreshTrayServers(cfg.APIAddress)
+			}()
+		},
+		OnNextServer: func() {
+			go func() {
+				if err := app.connectNextTrayServer(cfg.APIAddress); err != nil {
+					app.mainLogger.Error("Не удалось переключиться на следующий сервер: %v", err)
+					tray.Notify("SafeSky", "Failed to switch server: "+err.Error(), tray.NotificationError)
+					return
+				}
+				app.refreshTrayServers(cfg.APIAddress)
+			}()
+		},
+		OnProfileSwitch: func(index int) {
+			go func() {
+				if err := app.applyProfileByIndex(cfg.APIAddress, index); err != nil {
+					app.mainLogger.Error("Не удалось применить профиль #%d: %v", index, err)
+					tray.Notify("SafeSky", fmt.Sprintf("Failed to apply profile %d: %v", index, err), tray.NotificationError)
 					return
 				}
 				app.refreshTrayServers(cfg.APIAddress)
@@ -685,6 +712,113 @@ func (a *App) connectTrayServer(apiAddress, serverID string) error {
 		return fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+func (a *App) connectNextTrayServer(apiAddress string) error {
+	list, activeID, err := fetchTrayServers(apiAddress)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		return fmt.Errorf("no servers available")
+	}
+	next := 0
+	for i, server := range list {
+		if server.ID == activeID {
+			next = (i + 1) % len(list)
+			break
+		}
+	}
+	return a.connectTrayServer(apiAddress, list[next].ID)
+}
+
+func (a *App) applyProfileByIndex(apiAddress string, index int) error {
+	if index <= 0 {
+		return fmt.Errorf("invalid profile index %d", index)
+	}
+	reqURL := apiBaseURL(apiAddress) + "/api/profiles"
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(reqURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("profiles API returned %d", resp.StatusCode)
+	}
+	var body struct {
+		Profiles []struct {
+			Name string `json:"name"`
+		} `json:"profiles"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return fmt.Errorf("decode profiles: %w", err)
+	}
+	if index > len(body.Profiles) {
+		return fmt.Errorf("profile %d not found", index)
+	}
+	name := strings.TrimSpace(body.Profiles[index-1].Name)
+	if name == "" {
+		return fmt.Errorf("profile %d has empty name", index)
+	}
+	applyURL := apiBaseURL(apiAddress) + "/api/profiles/" + url.PathEscape(name) + "/apply"
+	req, err := http.NewRequest(http.MethodPost, applyURL, nil)
+	if err != nil {
+		return err
+	}
+	applyResp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer applyResp.Body.Close()
+	if applyResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("profile apply returned %d", applyResp.StatusCode)
+	}
+	return nil
+}
+
+type trayServerSummary struct {
+	ID   string
+	Name string
+	URL  string
+}
+
+func fetchTrayServers(apiAddress string) ([]trayServerSummary, string, error) {
+	var body struct {
+		Servers  []trayServerSummary `json:"servers"`
+		ActiveID string              `json:"active_id"`
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(apiBaseURL(apiAddress) + "/api/servers")
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("servers API returned %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return nil, "", fmt.Errorf("decode servers: %w", err)
+	}
+	out := body.Servers[:0]
+	for _, server := range body.Servers {
+		if strings.TrimSpace(server.ID) != "" {
+			out = append(out, server)
+		}
+	}
+	return out, body.ActiveID, nil
+}
+
+func hotkeySettingsFromConfig(settings config.HotkeySettings) hotkeys.Settings {
+	out := hotkeys.Settings{Enabled: settings.Enabled, Bindings: make([]hotkeys.Binding, 0, len(settings.Bindings))}
+	for _, binding := range settings.Bindings {
+		out.Bindings = append(out.Bindings, hotkeys.Binding{
+			Action:      hotkeys.Action(binding.Action),
+			Accelerator: binding.Accelerator,
+			Enabled:     binding.Enabled,
+		})
+	}
+	return hotkeys.NormalizeSettings(out)
 }
 
 func apiTCPAddress(apiAddress string) string {

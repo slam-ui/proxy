@@ -2,7 +2,11 @@
 
 package tray
 
-import "sync"
+import (
+	"sync"
+
+	"proxyclient/internal/hotkeys"
+)
 
 const (
 	idOpen     = 1001
@@ -40,7 +44,8 @@ func win32SetIconForHealth(bool, HealthState) {}
 func win32SetTooltip(string)                  {}
 func win32ShowNotification(string, string, NotificationKind) {
 }
-func win32Quit() {}
+func win32ApplyHotkeys(hotkeys.Settings) []hotkeys.Conflict { return nil }
+func win32Quit()                                            {}
 func handleMenuCommand(id int) {
 	switch id {
 	case idOpen:
