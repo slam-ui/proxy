@@ -285,18 +285,21 @@
         </div>
         <div class="page-hero-stats">
           <div><strong id="rulesHeroCount">—</strong><span>правил</span></div>
-          <div><strong id="rulesHeroDefault">PROXY</strong><span>по умолчанию</span></div>
         </div>
       </div>
     </div>
 
     <div class="subpage-sheet">
 
-    <!-- ── Профили ── -->
+    <!-- ── Профиль ── -->
     <div class="pg-section">
-      <div class="pg-section-ttl" style="display:flex;justify-content:space-between;align-items:center">
-        <span>Профили правил</span>
-        <button class="pg-btn acc" onclick="showSaveProfile()">+ Сохранить профиль</button>
+      <div class="rules-current-profile" onclick="toggleProfileChooser()">
+        <div>
+          <div class="profile-active-label">Текущий профиль</div>
+          <div class="profile-active-name" id="profileActiveName">Текущие правила ▾</div>
+          <div class="profile-active-meta" id="profileActiveMeta">загрузка...</div>
+        </div>
+        <button class="pg-btn acc" onclick="event.stopPropagation();showSaveProfile()">+ Сохранить</button>
       </div>
       <div id="saveProfileRow" class="save-prof-row" style="display:none">
         <input class="pg-inp" id="profileNameInp" placeholder="Название профиля..."
@@ -304,10 +307,55 @@
         <button class="pg-btn acc" onclick="saveProfile()">✓ Сохранить</button>
         <button class="pg-btn" onclick="hideSaveProfile()">✕</button>
       </div>
-      <div id="profilesList" style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
-        <div class="prof-empty">загрузка профилей...</div>
+      <div class="profile-chooser" id="profileChooser" style="display:none">
+        <div id="profilesList" style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+          <div class="prof-empty">загрузка профилей...</div>
+        </div>
       </div>
     </div>
+
+    <div class="pg-section">
+      <div class="pg-section-ttl">Быстрые действия</div>
+      <div class="rules-quick-grid">
+        <button class="rules-quick-card" onclick="quickAddSiteRule('proxy')">
+          <b>+ Сайт через VPN</b>
+          <span>youtube.com, instagram.com</span>
+        </button>
+        <button class="rules-quick-card" onclick="quickAddSiteRule('direct')">
+          <b>+ Сайт напрямую</b>
+          <span>банк, Госуслуги, локальные сервисы</span>
+        </button>
+        <button class="rules-quick-card wide" onclick="quickAddProcessRule('proxy')">
+          <b>+ Программа через VPN</b>
+          <span>chrome.exe, discord.exe, codex.exe</span>
+        </button>
+      </div>
+    </div>
+
+    <details class="pg-section rules-list-details" id="rulesListDetails">
+      <summary class="pg-section-ttl">
+        <span>Активные правила <span id="rulesListCount">(0)</span></span>
+        <span class="rules-details-action">Показать</span>
+      </summary>
+      <div class="pg-section-body">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+          <button class="pg-btn" onclick="$id('rulesImportFile').click()">↑ Импорт</button>
+          <input type="file" id="rulesImportFile" accept=".txt,.list,.yaml,.yml,.conf,.base64" style="display:none" onchange="importRulesFile(this)">
+          <button class="pg-btn" onclick="openRulesJsonEditor()">{} JSON</button>
+          <button class="pg-btn" onclick="loadRules()">↻ Обновить</button>
+        </div>
+        <input class="pg-inp" id="rulesFilter" placeholder="поиск правила..." oninput="filterRules()" style="margin-bottom:8px">
+        <div style="max-height:44vh;overflow-y:auto;scrollbar-width:none">
+          <div class="rules-list" id="rulesList">
+            <div class="rules-empty">загрузка правил...</div>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details class="pg-section rules-advanced">
+      <summary class="pg-section-ttl">Расширенная настройка</summary>
+      <div class="pg-section-body rules-advanced-body">
 
     <div class="pg-section">
       <div class="pg-section-ttl">Базовое правило</div>
@@ -327,11 +375,7 @@
           <button class="pg-btn acc" onclick="openVisualRuleEditor()">+ Правило</button>
         </div>
       </div>
-      <div class="visual-quick-row">
-        <button class="pg-btn" onclick="quickVisualRule('proxy-domain')">Домен → Proxy</button>
-        <button class="pg-btn" onclick="quickVisualRule('direct-app')">Приложение → Direct</button>
-        <button class="pg-btn danger" onclick="quickVisualRule('block-domain')">Домен → Block</button>
-      </div>
+      <button class="pg-btn" onclick="openPresetLoader()">Загрузить готовый набор правил</button>
       <div class="visual-preset-row" id="visualPresetRow"></div>
       <div class="visual-conflicts" id="visualConflicts" style="display:none"></div>
       <div class="visual-rule-list" id="visualRuleList">
@@ -378,7 +422,7 @@
     </div>
 
     <div class="pg-section">
-      <div class="pg-section-ttl">Добавить правило</div>
+      <div class="pg-section-ttl">Прямой ввод правила</div>
       <div style="display:flex;flex-direction:column;gap:8px">
         <div style="position:relative">
           <input class="pg-inp" id="ruleApp" placeholder="Домен, IP, geosite:youtube, chrome.exe" oninput="onRuleInputChange(this.value)" autocomplete="off">
@@ -395,23 +439,8 @@
         </div>
       </div>
     </div>
-    <div class="pg-section" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
-      <div class="pg-section-ttl" style="display:flex;justify-content:space-between;align-items:center">
-        <span>Правила маршрутизации</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button class="pg-btn" onclick="$id('rulesImportFile').click()">↑ Импорт</button>
-          <input type="file" id="rulesImportFile" accept=".txt,.list,.yaml,.yml,.conf,.base64" style="display:none" onchange="importRulesFile(this)">
-          <button class="pg-btn" onclick="openRulesJsonEditor()">{} JSON</button>
-          <button class="pg-btn" onclick="loadRules()" style="margin-bottom:-2px">↻ Обновить</button>
-        </div>
       </div>
-      <input class="pg-inp" id="rulesFilter" placeholder="поиск правила..." oninput="filterRules()" style="margin-bottom:8px">
-      <div style="flex:1;overflow-y:auto;scrollbar-width:none">
-        <div class="rules-list" id="rulesList">
-          <div class="rules-empty">загрузка правил...</div>
-        </div>
-      </div>
-    </div>
+    </details>
     </div><!-- /subpage-sheet -->
   </div>
 

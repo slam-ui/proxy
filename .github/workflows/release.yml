@@ -50,7 +50,8 @@ jobs:
           node --check internal/api/static/js/00-core.js
           node --check internal/api/static/js/10-servers.js
           node --check internal/api/static/js/20-navigation.js
-          node --check internal/api/static/js/30-rules-processes.js
+          node --check internal/api/static/js/30-rules.js
+          node --check internal/api/static/js/35-processes.js
           node --check internal/api/static/js/40-logs.js
           node --check internal/api/static/js/50-settings-theme.js
           node --check internal/api/static/js/70-runtime-polling.js

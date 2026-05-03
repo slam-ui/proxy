@@ -2153,6 +2153,109 @@ html[data-theme="light"] .cn-dir{
   color:rgba(15,23,42,0.72)!important;
 }
 
+/* UX prompt 33: rules progressive disclosure */
+.rules-current-profile{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  cursor:pointer;
+}
+.profile-active-label{
+  color:var(--muted);
+  font-size:9px;
+  font-weight:700;
+}
+.profile-active-name{
+  margin-top:3px;
+  font-size:15px;
+  line-height:1.2;
+  font-weight:850;
+  color:var(--text);
+}
+.profile-active-meta{
+  margin-top:4px;
+  font-size:10px;
+  color:var(--muted);
+}
+.profile-chooser{
+  margin-top:10px;
+  padding-top:10px;
+  border-top:1px solid rgba(255,255,255,0.08);
+}
+.rules-quick-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:10px;
+}
+.rules-quick-card{
+  min-height:78px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:5px;
+  padding:14px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,0.12);
+  background:rgba(255,255,255,0.055);
+  color:var(--text);
+  cursor:pointer;
+  text-align:left;
+}
+.rules-quick-card:hover{
+  background:rgba(255,255,255,0.085);
+  border-color:rgba(56,200,255,0.28);
+}
+.rules-quick-card b{
+  font-size:13px;
+}
+.rules-quick-card span{
+  font-size:10px;
+  line-height:1.35;
+  color:var(--muted);
+}
+.rules-quick-card.wide{
+  grid-column:1/-1;
+}
+.rules-list-details[open] .rules-details-action{
+  display:none;
+}
+.rules-list-details summary,
+.rules-advanced summary{
+  gap:10px;
+}
+.rules-details-action{
+  margin-left:auto;
+  color:var(--acc);
+  font-size:9px;
+}
+.rules-advanced-body{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.rules-advanced-body>.pg-section{
+  padding:0;
+  border:0;
+  background:transparent;
+  box-shadow:none;
+}
+.visual-preset-row{
+  display:none!important;
+  padding:10px;
+  border-radius:12px;
+  background:rgba(255,255,255,0.045);
+  border:1px solid rgba(255,255,255,0.08);
+}
+.visual-preset-row.open{
+  display:flex!important;
+}
+html[data-theme="light"] .rules-quick-card,
+html[data-theme="light"] .visual-preset-row{
+  background:rgba(255,255,255,0.72);
+  border-color:rgba(15,23,42,0.09);
+}
+
 @media (max-width:520px){
   :root{
     --head-h:92px;
