@@ -120,8 +120,12 @@ func TestStaticI18nKeysExistInLocales(t *testing.T) {
 	for _, match := range re.FindAllStringSubmatch(html+js, -1) {
 		keys[match[1]] = true
 	}
+	trRe := regexp.MustCompile(`\btr\('([^']+)'`)
+	for _, match := range trRe.FindAllStringSubmatch(js, -1) {
+		keys[match[1]] = true
+	}
 	if len(keys) == 0 {
-		t.Fatal("static UI has no data-i18n keys")
+		t.Fatal("static UI has no i18n keys")
 	}
 
 	for _, path := range []string{"../i18n/locales/ru.json", "../i18n/locales/en.json"} {

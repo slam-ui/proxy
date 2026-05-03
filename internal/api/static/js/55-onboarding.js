@@ -22,11 +22,11 @@ function onboardingOption(id, title, sub) {
 }
 
 function onboardingActions(primary, primaryFn, backStep) {
-  const back = backStep ? `<button class="pg-btn" onclick="onboardingShow('${esc(backStep)}')">Назад</button>` : '<span></span>';
+  const back = backStep ? `<button class="pg-btn" onclick="onboardingShow('${esc(backStep)}')">${esc(tr('onboarding.action.back'))}</button>` : '<span></span>';
   return `<div class="onboarding-actions">
     ${back}
     <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
-      <button class="pg-btn" onclick="onboardingSkip()">Пропустить</button>
+      <button class="pg-btn" onclick="onboardingSkip()">${esc(tr('onboarding.action.skip'))}</button>
       <button class="pg-btn acc" onclick="${esc(primaryFn)}" ${onboarding.busy ? 'disabled' : ''}>${esc(primary)}</button>
     </div>
   </div>`;
@@ -40,55 +40,55 @@ function renderOnboarding() {
   document.body.classList.add('onboarding-open');
   const msg = onboarding.message ? `<div class="onboarding-result">${esc(onboarding.message)}</div>` : '<div class="onboarding-result"></div>';
   if (onboarding.step === 'welcome') {
-    body.innerHTML = `<div class="onboarding-kicker">Первый запуск</div>
-      <div class="onboarding-title">Добро пожаловать</div>
-      <div class="onboarding-copy">SafeSky поможет быстро добавить доступ к серверу и проверить подключение. Настройка займёт около минуты.</div>
-      ${onboardingActions('Начать', "onboardingShow('source')", '')}`;
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.welcome.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.welcome.title'))}</div>
+      <div class="onboarding-copy">${esc(tr('onboarding.welcome.copy'))}</div>
+      ${onboardingActions(tr('onboarding.action.start'), "onboardingShow('source')", '')}`;
     return;
   }
   if (onboarding.step === 'source') {
-    body.innerHTML = `<div class="onboarding-kicker">Источник конфигурации</div>
-      <div class="onboarding-title">Откуда вы получили доступ?</div>
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.source.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.source.title'))}</div>
       <div class="onboarding-options">
-        ${onboardingOption('subscription', 'Подписка (URL)', 'Добавит и обновит список серверов')}
-        ${onboardingOption('key', 'Один ключ', 'vless://, trojan://, ss://, hysteria2://, tuic://, vmess://')}
-        ${onboardingOption('wireguard', 'WireGuard config', '.conf или wireguard://')}
-        ${onboardingOption('none', 'У меня пока ничего нет', 'Открыть приложение без настройки')}
+        ${onboardingOption('subscription', tr('onboarding.source.subscription'), tr('onboarding.source.subscription.sub'))}
+        ${onboardingOption('key', tr('onboarding.source.key'), tr('onboarding.source.key.sub'))}
+        ${onboardingOption('wireguard', tr('onboarding.source.wireguard'), tr('onboarding.source.wireguard.sub'))}
+        ${onboardingOption('none', tr('onboarding.source.none'), tr('onboarding.source.none.sub'))}
       </div>
-      ${onboardingActions('Далее', 'onboardingNextSource()', 'welcome')}`;
+      ${onboardingActions(tr('onboarding.action.next'), 'onboardingNextSource()', 'welcome')}`;
     return;
   }
   if (onboarding.step === 'subscription') {
-    body.innerHTML = `<div class="onboarding-kicker">Подписка</div>
-      <div class="onboarding-title">Вставьте URL подписки</div>
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.subscription.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.subscription.title'))}</div>
       <input class="pg-inp" id="onboardingSubUrl" type="url" placeholder="https://example.com/sub">
       ${msg}
-      ${onboardingActions('Загрузить', 'onboardingImportSubscription()', 'source')}`;
+      ${onboardingActions(tr('onboarding.action.load'), 'onboardingImportSubscription()', 'source')}`;
     return;
   }
   if (onboarding.step === 'key') {
-    body.innerHTML = `<div class="onboarding-kicker">Ключ сервера</div>
-      <div class="onboarding-title">Вставьте server URI</div>
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.key.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.key.title'))}</div>
       <textarea class="pg-inp onboarding-textarea" id="onboardingKeyText" spellcheck="false" placeholder="vless://..."></textarea>
       ${msg}
-      ${onboardingActions('Добавить', 'onboardingImportKey()', 'source')}`;
+      ${onboardingActions(tr('onboarding.action.add'), 'onboardingImportKey()', 'source')}`;
     return;
   }
   if (onboarding.step === 'wireguard') {
-    body.innerHTML = `<div class="onboarding-kicker">WireGuard</div>
-      <div class="onboarding-title">Вставьте WireGuard config</div>
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.wireguard.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.wireguard.title'))}</div>
       <textarea class="pg-inp onboarding-textarea" id="onboardingWGText" spellcheck="false" placeholder="[Interface]&#10;PrivateKey = ..."></textarea>
       ${msg}
-      ${onboardingActions('Продолжить', 'onboardingWGNotReady()', 'source')}`;
+      ${onboardingActions(tr('onboarding.action.continue'), 'onboardingWGNotReady()', 'source')}`;
     return;
   }
   if (onboarding.step === 'test') {
     const test = onboarding.test || {};
     const rows = [
-      ['server', 'Сервер доступен', test.server],
-      ['handshake', 'Handshake успешен', test.handshake],
-      ['dns', 'DNS защищён', test.dns],
-      ['ipv6', 'IPv6 проверка', test.ipv6]
+      ['server', tr('onboarding.test.server'), test.server],
+      ['handshake', tr('onboarding.test.handshake'), test.handshake],
+      ['dns', tr('onboarding.test.dns'), test.dns],
+      ['ipv6', tr('onboarding.test.ipv6'), test.ipv6]
     ].map(([id, label, value]) => {
       const ok = value === true;
       const warn = value === 'warn';
@@ -97,22 +97,22 @@ function renderOnboarding() {
         <span>${mark}</span><span>${esc(label)}</span>
       </div>`;
     }).join('');
-    body.innerHTML = `<div class="onboarding-kicker">Проверка подключения</div>
-      <div class="onboarding-title">${onboarding.busy ? 'Проверяю подключение...' : 'Проверка завершена'}</div>
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.test.kicker'))}</div>
+      <div class="onboarding-title">${esc(onboarding.busy ? tr('onboarding.test.running') : tr('onboarding.test.done'))}</div>
       <div class="onboarding-checks">${rows}</div>
       ${msg}
       <div class="onboarding-actions">
-        <button class="pg-btn" onclick="onboardingShow('source')" ${onboarding.busy ? 'disabled' : ''}>Назад</button>
-        <button class="pg-btn acc" onclick="onboardingFinishAfterTest()" ${onboarding.busy ? 'disabled' : ''}>Готово</button>
+        <button class="pg-btn" onclick="onboardingShow('source')" ${onboarding.busy ? 'disabled' : ''}>${esc(tr('onboarding.action.back'))}</button>
+        <button class="pg-btn acc" onclick="onboardingFinishAfterTest()" ${onboarding.busy ? 'disabled' : ''}>${esc(tr('onboarding.action.done'))}</button>
       </div>`;
     return;
   }
-  body.innerHTML = `<div class="onboarding-kicker">Готово</div>
-    <div class="onboarding-title">Всё готово</div>
-    <div class="onboarding-copy">Иконка в трее даёт быстрый доступ. Ctrl+Alt+P включает и отключает подключение. Профили можно настроить в Settings.</div>
+  body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.done.kicker'))}</div>
+    <div class="onboarding-title">${esc(tr('onboarding.done.title'))}</div>
+    <div class="onboarding-copy">${esc(tr('onboarding.done.copy'))}</div>
     <div class="onboarding-actions">
       <span></span>
-      <button class="pg-btn acc" onclick="onboardingFinish()">Открыть приложение</button>
+      <button class="pg-btn acc" onclick="onboardingFinish()">${esc(tr('onboarding.action.open'))}</button>
     </div>`;
 }
 
@@ -142,12 +142,12 @@ function onboardingFinish() {
 async function onboardingImportSubscription() {
   const url = ($id('onboardingSubUrl')?.value || '').trim();
   if (!/^https:\/\//i.test(url)) {
-    onboarding.message = 'Subscription URL должен начинаться с https://';
+    onboarding.message = tr('onboarding.subscription.https_only');
     renderOnboarding();
     return;
   }
   onboarding.busy = true;
-  onboarding.message = 'Загружаю подписку...';
+  onboarding.message = tr('onboarding.subscription.loading');
   renderOnboarding();
   try {
     const r = await fetch(API + '/subscriptions', {
@@ -159,10 +159,10 @@ async function onboardingImportSubscription() {
     const d = await r.json().catch(() => ({}));
     if (!r.ok && r.status !== 202) throw new Error(d.error || await r.text());
     const added = d.result && Number.isFinite(Number(d.result.added)) ? Number(d.result.added) : 0;
-    onboarding.message = added ? `Найдено серверов: ${added}` : (d.error || 'Подписка сохранена, серверы не найдены');
+    onboarding.message = added ? tr('onboarding.subscription.added', {count: added}) : (d.error || tr('onboarding.subscription.none_found'));
     await onboardingRunTest();
   } catch(e) {
-    onboarding.message = 'Не удалось загрузить подписку: ' + e.message;
+    onboarding.message = tr('onboarding.subscription.error', {error: e.message});
   } finally {
     onboarding.busy = false;
     renderOnboarding();
@@ -172,12 +172,12 @@ async function onboardingImportSubscription() {
 async function onboardingImportKey() {
   const url = ($id('onboardingKeyText')?.value || '').trim();
   if (!isSupportedServerURI(url)) {
-    onboarding.message = 'Поддерживаются vless, trojan, ss, hysteria2, tuic, wireguard, vmess';
+    onboarding.message = tr('onboarding.key.supported');
     renderOnboarding();
     return;
   }
   onboarding.busy = true;
-  onboarding.message = 'Добавляю сервер...';
+  onboarding.message = tr('onboarding.key.adding');
   renderOnboarding();
   try {
     const r = await fetch(API + '/servers', {
@@ -189,7 +189,7 @@ async function onboardingImportKey() {
     await onboardingRunTest();
     loadServers?.();
   } catch(e) {
-    onboarding.message = 'Не удалось добавить ключ: ' + e.message;
+    onboarding.message = tr('onboarding.key.error', {error: e.message});
   } finally {
     onboarding.busy = false;
     renderOnboarding();
@@ -197,7 +197,7 @@ async function onboardingImportKey() {
 }
 
 function onboardingWGNotReady() {
-  onboarding.message = 'Импорт WireGuard .conf будет добавлен отдельным шагом. Можно пропустить и импортировать позже.';
+  onboarding.message = tr('onboarding.wireguard.not_ready');
   renderOnboarding();
 }
 
@@ -205,14 +205,14 @@ async function onboardingRunTest() {
   onboarding.step = 'test';
   onboarding.busy = true;
   onboarding.test = { server: false, handshake: false, dns: false, ipv6: 'warn' };
-  onboarding.message = 'Подключаюсь к лучшему серверу...';
+  onboarding.message = tr('onboarding.test.connecting_best');
   renderOnboarding();
   try {
     const connect = await fetch(API + '/servers/auto-connect', { method: 'POST', timeoutMs: 45000 });
     if (!connect.ok) throw new Error(await connect.text());
     onboarding.test.server = true;
     onboarding.test.handshake = true;
-    onboarding.message = 'Проверяю внешний IP и DNS...';
+    onboarding.message = tr('onboarding.test.checking_dns');
     renderOnboarding();
     await new Promise(resolve => setTimeout(resolve, 1500));
     const diag = await fetch(API + '/diagnostics/test', { timeoutMs: 30000 });
@@ -220,9 +220,9 @@ async function onboardingRunTest() {
     if (!diag.ok || d.ok === false) throw new Error(d.error || 'diagnostics failed');
     onboarding.test.dns = !d.dns_leak;
     onboarding.test.ipv6 = d.vpn_works ? true : 'warn';
-    onboarding.message = `Подключено${d.latency_ms ? `, ${d.latency_ms}ms` : ''}`;
+    onboarding.message = d.latency_ms ? tr('onboarding.test.connected_latency', {latency: d.latency_ms}) : tr('onboarding.test.connected');
   } catch(e) {
-    onboarding.message = 'Импорт выполнен, но проверка подключения не прошла: ' + e.message;
+    onboarding.message = tr('onboarding.test.failed', {error: e.message});
     onboarding.test.dns = 'warn';
     onboarding.test.ipv6 = 'warn';
   } finally {
