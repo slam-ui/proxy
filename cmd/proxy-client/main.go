@@ -38,6 +38,7 @@ import (
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
+	"proxyclient/internal/power"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/telemetry"
@@ -433,12 +434,17 @@ func run(output io.Writer) error {
 	})
 	telemetryMgr.Start(ctx, 10*time.Minute)
 	if appSettings.Telemetry.Enabled && appSettings.Telemetry.CrashReports {
-		go uploadPendingCrashReports(ctx, telemetry.Client{
-			Enabled:       true,
-			BaseURL:       appSettings.Telemetry.BaseURL,
-			AnonymousPath: filepath.Join(config.DataDir, "telemetry_id"),
-			UserAgent:     "SafeSky-Telemetry/1",
-		}, app.mainLogger)
+		powerStatus, _ := power.Current()
+		if power.PauseBackgroundUpdates(powerStatus) {
+			app.mainLogger.Info("telemetry crash upload: отложено до запуска от сети")
+		} else {
+			go uploadPendingCrashReports(ctx, telemetry.Client{
+				Enabled:       true,
+				BaseURL:       appSettings.Telemetry.BaseURL,
+				AnonymousPath: filepath.Join(config.DataDir, "telemetry_id"),
+				UserAgent:     "SafeSky-Telemetry/1",
+			}, app.mainLogger)
+		}
 	}
 	defer func() {
 		flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)

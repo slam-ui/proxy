@@ -42,6 +42,7 @@ import (
 	"proxyclient/internal/logger"
 	"proxyclient/internal/netwatch"
 	"proxyclient/internal/notification"
+	"proxyclient/internal/power"
 	"proxyclient/internal/process"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/trafficstats"
@@ -526,6 +527,10 @@ func (a *App) finalizeStartup() {
 	tray.SetWarming(false)
 	killswitch.Disable(a.mainLogger)
 	wintun.ResetAdaptiveGap()
+	powerStatus, powerErr := power.Current()
+	if powerErr == nil && powerStatus.Known && powerStatus.OnBattery {
+		a.mainLogger.Info("Battery mode: reducing background activity")
+	}
 
 	proxyEnabled := false
 	if a.cfg.StartProxyOnLaunch {
@@ -564,11 +569,15 @@ func (a *App) finalizeStartup() {
 
 	// B-10: GeoAutoUpdater
 	if a.cfg.GeoAutoUpdateEnabled {
-		interval := time.Duration(a.cfg.GeoAutoUpdateIntervalDays) * 24 * time.Hour
-		geoUpdater := api.NewGeoAutoUpdater(a.mainLogger, interval)
-		a.apiServer.SetGeoAutoUpdater(geoUpdater)
-		geoUpdater.Start(a.lifecycleCtx)
-		a.mainLogger.Info("B-10: GeoAutoUpdater запущен (интервал: %d дней)", a.cfg.GeoAutoUpdateIntervalDays)
+		if power.PauseBackgroundUpdates(powerStatus) {
+			a.mainLogger.Info("B-10: GeoAutoUpdater отложен до запуска от сети")
+		} else {
+			interval := time.Duration(a.cfg.GeoAutoUpdateIntervalDays) * 24 * time.Hour
+			geoUpdater := api.NewGeoAutoUpdater(a.mainLogger, interval)
+			a.apiServer.SetGeoAutoUpdater(geoUpdater)
+			geoUpdater.Start(a.lifecycleCtx)
+			a.mainLogger.Info("B-10: GeoAutoUpdater запущен (интервал: %d дней)", a.cfg.GeoAutoUpdateIntervalDays)
+		}
 	}
 
 	if mgr := a.apiServer.GetXRayManager(); mgr != nil {
@@ -586,6 +595,7 @@ func (a *App) finalizeStartup() {
 		if interval <= 0 {
 			interval = 120 * time.Second
 		}
+		interval = power.BatteryAwareInterval(interval, powerStatus)
 		go keepalive.Run(a.lifecycleCtx, config.ProxyAddr, interval)
 	}
 	go a.runNetwatch()
