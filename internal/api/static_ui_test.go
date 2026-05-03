@@ -159,6 +159,19 @@ func TestStaticDateFormattingUsesI18nLocale(t *testing.T) {
 	}
 }
 
+func TestLocalizedStaticModulesDoNotHardcodeRussianStrings(t *testing.T) {
+	cyrillic := regexp.MustCompile(`[А-Яа-яЁё]`)
+	for _, path := range []string{
+		"static/js/05-i18n.js",
+		"static/js/55-onboarding.js",
+	} {
+		text := readStaticText(t, path)
+		if loc := cyrillic.FindStringIndex(text); loc != nil {
+			t.Fatalf("%s contains hardcoded Cyrillic near byte %d", path, loc[0])
+		}
+	}
+}
+
 func readStaticBundle(t *testing.T, paths ...string) string {
 	t.Helper()
 	var b strings.Builder
