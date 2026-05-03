@@ -18,6 +18,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -113,6 +114,24 @@ func tryAcquireNamedMutex(name string) (syscall.Handle, error) {
 func releaseNamedMutex(h syscall.Handle) {
 	_, _, _ = procReleaseMutex.Call(uintptr(h))
 	_ = syscall.CloseHandle(h)
+}
+
+func TestCreateSingleInstanceMutexReturnsAlreadyRunning(t *testing.T) {
+	name := randomMutexName(t)
+	first, err := createSingleInstanceMutex(name)
+	if err != nil {
+		t.Fatalf("first createSingleInstanceMutex: %v", err)
+	}
+	defer func() { _ = syscall.CloseHandle(first) }()
+
+	second, err := createSingleInstanceMutex(name)
+	if err == nil {
+		_ = syscall.CloseHandle(second)
+		t.Fatal("second createSingleInstanceMutex returned nil error, want errAlreadyRunning")
+	}
+	if !errors.Is(err, errAlreadyRunning) {
+		t.Fatalf("error = %v, want errAlreadyRunning", err)
+	}
 }
 
 // randomMutexName генерирует глобально уникальное имя для теста.

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -61,6 +62,9 @@ var (
 
 	user32DPI                         = windows.NewLazySystemDLL("user32.dll")
 	shcoreDPI                         = windows.NewLazySystemDLL("shcore.dll")
+	procFindWindowW                   = user32DPI.NewProc("FindWindowW")
+	procShowWindow                    = user32DPI.NewProc("ShowWindow")
+	procSetForegroundWindow           = user32DPI.NewProc("SetForegroundWindow")
 	procSetDefaultDllDirectories      = kern32.NewProc("SetDefaultDllDirectories")
 	procSetProcessDpiAwarenessContext = user32DPI.NewProc("SetProcessDpiAwarenessContext")
 	procSetProcessDPIAware            = user32DPI.NewProc("SetProcessDPIAware")
@@ -137,6 +141,9 @@ func main() {
 
 	mutex, err := createSingleInstanceMutex("Global\\ProxyClientSingleInstance")
 	if err != nil {
+		if errors.Is(err, errAlreadyRunning) {
+			activateExistingInstance("SafeSky")
+		}
 		os.Exit(0)
 	}
 	defer func() { _ = syscall.CloseHandle(mutex) }()
@@ -1057,6 +1064,8 @@ func isRunningAsAdmin() bool {
 	return windows.GetCurrentProcessToken().IsElevated()
 }
 
+var errAlreadyRunning = errors.New("already running")
+
 func createSingleInstanceMutex(name string) (syscall.Handle, error) {
 	// BUG FIX #NEW-J: используем глобальный procCreateMutexW вместо повторной загрузки DLL.
 	namePtr, err := syscall.UTF16PtrFromString(name)
@@ -1071,7 +1080,23 @@ func createSingleInstanceMutex(name string) (syscall.Handle, error) {
 	const ERROR_ALREADY_EXISTS = 183
 	if lastErr == syscall.Errno(ERROR_ALREADY_EXISTS) {
 		_ = syscall.CloseHandle(syscall.Handle(h))
-		return 0, fmt.Errorf("already running")
+		return 0, errAlreadyRunning
 	}
 	return syscall.Handle(h), nil
+}
+
+func activateExistingInstance(title string) bool {
+	titlePtr, err := syscall.UTF16PtrFromString(title)
+	if err != nil {
+		return false
+	}
+	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
+	runtime.KeepAlive(titlePtr)
+	if hwnd == 0 {
+		return false
+	}
+	const swRestore = 9
+	_, _, _ = procShowWindow.Call(hwnd, swRestore)
+	ret, _, _ := procSetForegroundWindow.Call(hwnd)
+	return ret != 0
 }
