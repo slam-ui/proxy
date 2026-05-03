@@ -20,6 +20,7 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/errcodes"
+	"proxyclient/internal/i18n"
 	"proxyclient/internal/leaktest"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/singbox"
@@ -622,15 +623,17 @@ type diagnoseStep struct {
 func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	var steps []diagnoseStep
+	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
+	locale := i18n.EffectiveLocale(settings.Language)
 
 	mgr := s.GetXRayManager()
 	if mgr == nil {
 		e := errcodes.New(errcodes.SingboxStartFailed, "startup", "sing-box manager is not initialized", "Подождите завершения инициализации или перезапустите клиент.", nil)
-		steps = append(steps, stepFromError("sing-box", e, 0))
+		steps = append(steps, stepFromError("sing-box", e, locale, 0))
 	} else {
 		logErr := singbox.ParseLogTail(mgr.LastOutput())
 		if logErr != nil {
-			steps = append(steps, stepFromError("sing-box log", logErr, 0))
+			steps = append(steps, stepFromError("sing-box log", logErr, locale, 0))
 		} else {
 			steps = append(steps, diagnoseStep{Name: "sing-box log", OK: true})
 		}
@@ -641,11 +644,10 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 		raw, _ := json.Marshal(stats)
 		steps = append(steps, diagnoseStep{Name: "ports", OK: !stats.IsCritical, Duration: time.Since(portStarted).Milliseconds(), Details: raw})
 	} else {
-		steps = append(steps, stepFromError("ports", errcodes.New(errcodes.InternalError, "diagnostics", err.Error(), "Не удалось прочитать состояние ephemeral ports.", err), time.Since(portStarted).Milliseconds()))
+		steps = append(steps, stepFromError("ports", errcodes.New(errcodes.InternalError, "diagnostics", err.Error(), "Не удалось прочитать состояние ephemeral ports.", err), locale, time.Since(portStarted).Milliseconds()))
 	}
 
 	leakStarted := time.Now()
-	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	dns, dnsErr := leaktest.RunDNSLeakTest(ctx, leaktest.DNSConfig{
@@ -654,7 +656,7 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 		ExpectedResolvers: settings.LeakTest.ExpectedResolvers,
 	})
 	if dnsErr != nil {
-		steps = append(steps, stepFromError("dns leak", errcodes.New(errcodes.DNSResolveFailed, "dns", dnsErr.Error(), "Проверьте доступность leak-test сервера или отключите DNS leak test.", dnsErr), time.Since(leakStarted).Milliseconds()))
+		steps = append(steps, stepFromError("dns leak", errcodes.New(errcodes.DNSResolveFailed, "dns", dnsErr.Error(), "Проверьте доступность leak-test сервера или отключите DNS leak test.", dnsErr), locale, time.Since(leakStarted).Milliseconds()))
 	} else {
 		raw, _ := json.Marshal(dns)
 		steps = append(steps, diagnoseStep{Name: "dns leak", OK: !dns.Leaked, Duration: time.Since(leakStarted).Milliseconds(), Details: raw})
@@ -663,7 +665,7 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	ipv6Started := time.Now()
 	ipv6, ipv6Err := leaktest.RunIPv6LeakTest(ctx, nil)
 	if ipv6Err != nil {
-		steps = append(steps, stepFromError("ipv6", errcodes.New(errcodes.InternalError, "ipv6", ipv6Err.Error(), "IPv6 check вернул неожиданный ответ.", ipv6Err), time.Since(ipv6Started).Milliseconds()))
+		steps = append(steps, stepFromError("ipv6", errcodes.New(errcodes.InternalError, "ipv6", ipv6Err.Error(), "IPv6 check вернул неожиданный ответ.", ipv6Err), locale, time.Since(ipv6Started).Milliseconds()))
 	} else {
 		raw, _ := json.Marshal(ipv6)
 		steps = append(steps, diagnoseStep{Name: "ipv6", OK: !ipv6.Leaked, Duration: time.Since(ipv6Started).Milliseconds(), Details: raw})
@@ -686,8 +688,8 @@ func (s *Server) handleDiagnose(w http.ResponseWriter, r *http.Request) {
 	s.respondJSON(w, http.StatusOK, report)
 }
 
-func stepFromError(name string, e *errcodes.Error, dur int64) diagnoseStep {
-	msg := errcodes.MessageRU(e.Code)
+func stepFromError(name string, e *errcodes.Error, locale i18n.Locale, dur int64) diagnoseStep {
+	msg := errcodes.Message(locale, e.Code)
 	hint := e.Hint
 	if hint == "" {
 		hint = msg.Body

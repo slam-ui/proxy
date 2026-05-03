@@ -1,5 +1,7 @@
 package errcodes
 
+import "proxyclient/internal/i18n"
+
 type Template struct {
 	Title   string   `json:"title"`
 	Body    string   `json:"body"`
@@ -45,6 +47,16 @@ var messagesRU = map[Code]Template{
 }
 
 func MessageRU(code Code) Template {
+	return Message(i18n.LocaleRU, code)
+}
+
+func Message(locale i18n.Locale, code Code) Template {
+	if i18n.NormalizeLocale(locale) == i18n.LocaleEN {
+		if msg, ok := messagesEN[code]; ok {
+			return msg
+		}
+		return messagesEN[InternalError]
+	}
 	if msg, ok := messagesRU[code]; ok {
 		return msg
 	}
