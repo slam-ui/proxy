@@ -510,19 +510,21 @@ func run(output io.Writer) error {
 			}
 			if err := app.proxyManager.Enable(proxyConfig); err != nil {
 				app.mainLogger.Error("Ошибка включения прокси: %v", err)
+				tray.Notify("SafeSky", "Failed to connect: "+err.Error(), tray.NotificationError)
 			} else {
 				tray.SetEnabled(true)
 				app.mainLogger.Info("Прокси включён через трей")
-				notification.Send("SafeSky", "Прокси включён ✓")
+				tray.Notify("SafeSky", "Connected. Tunnel traffic follows the active routing rules.", tray.NotificationInfo)
 			}
 		},
 		OnDisable: func() {
 			if err := app.proxyManager.Disable(); err != nil {
 				app.mainLogger.Error("Ошибка отключения прокси: %v", err)
+				tray.Notify("SafeSky", "Failed to disconnect: "+err.Error(), tray.NotificationError)
 			} else {
 				tray.SetEnabled(false)
 				app.mainLogger.Info("Прокси отключён через трей")
-				notification.Send("SafeSky", "Прокси отключён")
+				tray.Notify("SafeSky", "Disconnected. System route restored.", tray.NotificationInfo)
 			}
 		},
 		OnServerSwitch: func(serverID string) {
@@ -536,7 +538,7 @@ func run(output io.Writer) error {
 			go func() {
 				if err := app.connectTrayServer(cfg.APIAddress, serverID); err != nil {
 					app.mainLogger.Error("Не удалось переключить сервер: %v", err)
-					notification.Send("SafeSky", "Не удалось переключить сервер")
+					tray.Notify("SafeSky", "Failed to switch server: "+err.Error(), tray.NotificationError)
 					return
 				}
 				app.refreshTrayServers(cfg.APIAddress)

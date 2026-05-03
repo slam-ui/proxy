@@ -38,7 +38,9 @@ func win32Run(onReady func(), onExit func()) {
 func win32SetIcon(bool)                       {}
 func win32SetIconForHealth(bool, HealthState) {}
 func win32SetTooltip(string)                  {}
-func win32Quit()                              {}
+func win32ShowNotification(string, string, NotificationKind) {
+}
+func win32Quit() {}
 func handleMenuCommand(id int) {
 	switch id {
 	case idOpen:

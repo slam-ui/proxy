@@ -184,3 +184,22 @@ func TestHandleTrayToggleCallsEnableDisable(t *testing.T) {
 		t.Fatalf("enabled toggle: enabled=%d disabled=%d", enabled, disabled)
 	}
 }
+
+func TestNormalizeTrayNotificationDefaults(t *testing.T) {
+	title, message, kind := normalizeTrayNotification(" ", "", NotificationKind(99))
+	if title != "SafeSky" {
+		t.Fatalf("title=%q, want SafeSky", title)
+	}
+	if message == "" {
+		t.Fatal("message should have default text")
+	}
+	if kind != NotificationInfo {
+		t.Fatalf("kind=%d, want info", kind)
+	}
+}
+
+func TestNotifyDoesNotPanic(t *testing.T) {
+	Notify("SafeSky", "Connected", NotificationInfo)
+	Notify("SafeSky", "Warning", NotificationWarning)
+	Notify("SafeSky", "Error", NotificationError)
+}

@@ -102,6 +102,11 @@ const (
 	nifMessage = 0x00000001
 	nifIcon    = 0x00000002
 	nifTip     = 0x00000004
+	nifInfo    = 0x00000010
+
+	niifInfo    = 0x00000001
+	niifWarning = 0x00000002
+	niifError   = 0x00000003
 
 	wmLButtonUp    = 0x0202
 	wmRButtonUp    = 0x0205
@@ -468,6 +473,35 @@ func win32SetTooltip(tip string) {
 	nid := buildNID(win32hwnd, win32hicon, win32tooltipOff)
 	copyUTF16(&nid.SzTip, tip)
 	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func win32ShowNotification(title, message string, kind NotificationKind) {
+	if win32hwnd == 0 {
+		return
+	}
+	win32mu.Lock()
+	hwnd := win32hwnd
+	hicon := win32hicon
+	win32mu.Unlock()
+
+	nid := buildNID(hwnd, hicon, win32tooltipOff)
+	nid.UFlags = nifInfo
+	nid.UTimeout = 4000
+	nid.DwInfoFlags = notificationIconFlag(kind)
+	copyUTF16InfoTitle(&nid.SzInfoTitle, title)
+	copyUTF16Info(&nid.SzInfo, message)
+	ignoreWin32Call(pShellNotifyIcon, nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func notificationIconFlag(kind NotificationKind) uint32 {
+	switch kind {
+	case NotificationWarning:
+		return niifWarning
+	case NotificationError:
+		return niifError
+	default:
+		return niifInfo
+	}
 }
 
 // ── Window procedure ──────────────────────────────────────────────────────
@@ -1056,6 +1090,30 @@ func copyUTF16(dst *[128]uint16, s string) {
 	n := len(src)
 	if n > 127 {
 		n = 127
+	}
+	for i := 0; i < n; i++ {
+		dst[i] = src[i]
+	}
+	dst[n] = 0
+}
+
+func copyUTF16Info(dst *[256]uint16, s string) {
+	src, _ := windows.UTF16FromString(s)
+	n := len(src)
+	if n > 255 {
+		n = 255
+	}
+	for i := 0; i < n; i++ {
+		dst[i] = src[i]
+	}
+	dst[n] = 0
+}
+
+func copyUTF16InfoTitle(dst *[64]uint16, s string) {
+	src, _ := windows.UTF16FromString(s)
+	n := len(src)
+	if n > 63 {
+		n = 63
 	}
 	for i := 0; i < n; i++ {
 		dst[i] = src[i]

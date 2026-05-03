@@ -9,7 +9,10 @@
 // что даёт тёмный фон на Windows 10 20H1+ и Windows 11.
 package tray
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // ServerItem описывает один сервер в подменю трея.
 type ServerItem struct {
@@ -35,6 +38,14 @@ const (
 	HealthOK HealthState = iota
 	HealthDegraded
 	HealthCritical
+)
+
+type NotificationKind int
+
+const (
+	NotificationInfo NotificationKind = iota
+	NotificationWarning
+	NotificationError
 )
 
 const maxServerSlots = 10
@@ -144,6 +155,11 @@ func ToggleFromTray() {
 	handleTrayToggle()
 }
 
+func Notify(title, message string, kind NotificationKind) {
+	title, message, kind = normalizeTrayNotification(title, message, kind)
+	win32ShowNotification(title, message, kind)
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────
 
 var (
@@ -228,4 +244,21 @@ func handleTrayToggle() {
 	if cb.OnEnable != nil {
 		cb.OnEnable()
 	}
+}
+
+func normalizeTrayNotification(title, message string, kind NotificationKind) (string, string, NotificationKind) {
+	title = strings.TrimSpace(title)
+	message = strings.TrimSpace(message)
+	if title == "" {
+		title = "SafeSky"
+	}
+	if message == "" {
+		message = "Состояние SafeSky обновлено."
+	}
+	switch kind {
+	case NotificationWarning, NotificationError:
+	default:
+		kind = NotificationInfo
+	}
+	return title, message, kind
 }
