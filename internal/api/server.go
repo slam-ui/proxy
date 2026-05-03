@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strconv"
@@ -311,6 +313,9 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupUpdateRoutes(s)
 	SetupTelemetryRoutes(s)
 	SetupLeakTestRoutes(s)
+	if apiDebugEnabled() {
+		SetupDebugRoutes(s)
+	}
 	SetupImprovementRoutes(s)
 	SetupClientFeatureRoutes(s, ctx)
 	SetupRoutingVisualRoutes(s)
@@ -361,6 +366,20 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/servers/health")
 	s.addSilentPath("/api/update/status")
 	s.addSilentPath("/api/subscriptions")
+}
+
+func apiDebugEnabled() bool {
+	v := strings.TrimSpace(os.Getenv("PROXY_DEBUG"))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
+func SetupDebugRoutes(s *Server) {
+	s.router.HandleFunc("/debug/pprof/", pprof.Index).Methods("GET")
+	s.router.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline).Methods("GET")
+	s.router.HandleFunc("/debug/pprof/profile", pprof.Profile).Methods("GET")
+	s.router.HandleFunc("/debug/pprof/symbol", pprof.Symbol).Methods("GET")
+	s.router.HandleFunc("/debug/pprof/trace", pprof.Trace).Methods("GET")
+	s.router.PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index)
 }
 
 func (s *Server) FinalizeRoutes() {
