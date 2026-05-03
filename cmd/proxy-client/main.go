@@ -414,7 +414,15 @@ func run(output io.Writer) error {
 		SecretKeyUpdatedFn: func() {
 			go app.refreshTrayServers(cfg.APIAddress)
 		},
-		CloseToTrayFn: window.SetCloseToTray,
+		CloseToTrayFn:     window.SetCloseToTray,
+		HotkeyConflictsFn: tray.HotkeyConflicts,
+		HotkeysUpdatedFn: func(settings config.HotkeySettings) []hotkeys.Conflict {
+			conflicts := tray.SetHotkeys(hotkeySettingsFromConfig(settings))
+			for _, conflict := range conflicts {
+				app.mainLogger.Warn("Hotkey %s (%s) не зарегистрирован: %s", conflict.Action, conflict.Accelerator, conflict.Error)
+			}
+			return conflicts
+		},
 	}, app.lifecycleCtx)
 
 	// Собираем app rules.

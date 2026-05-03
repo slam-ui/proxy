@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"proxyclient/internal/config"
+	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/logger"
 )
 
@@ -104,6 +106,32 @@ func TestHandleSetSettingsInvokesCloseToTrayCallback(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("CloseToTrayFn was not called")
+	}
+}
+
+func TestHandleSetSettingsReloadsHotkeysAndReturnsConflicts(t *testing.T) {
+	h := newSettingsHandlers(t)
+	h.server.config.HotkeysUpdatedFn = func(settings config.HotkeySettings) []hotkeys.Conflict {
+		if !settings.Enabled {
+			t.Fatal("hotkeys enabled=false, want true")
+		}
+		return []hotkeys.Conflict{{Action: hotkeys.ActionToggleConnection, Accelerator: "Ctrl+Alt+P", Error: "already registered"}}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"hotkeys":{"enabled":true,"bindings":[{"action":"toggle_connection","accelerator":"Ctrl+Alt+P","enabled":true}]}}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		HotkeyConflicts []hotkeys.Conflict `json:"hotkey_conflicts"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.HotkeyConflicts) != 1 || resp.HotkeyConflicts[0].Error != "already registered" {
+		t.Fatalf("hotkey_conflicts=%+v", resp.HotkeyConflicts)
 	}
 }
 

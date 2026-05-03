@@ -159,6 +159,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 		}
 		settings.Hotkeys = normalized
 	}
+	hotkeysChanged := body.Hotkeys != nil
 	if err := config.SaveAppSettings(config.AppSettingsFile, settings); err != nil {
 		h.server.respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -172,7 +173,16 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	if h.server.config.CloseToTrayFn != nil {
 		h.server.config.CloseToTrayFn(settings.CloseToTray)
 	}
-	h.server.respondJSON(w, http.StatusOK, settings)
+	conflicts := h.currentHotkeyConflicts(settings.Hotkeys, hotkeysChanged)
+	h.server.respondJSON(w, http.StatusOK, settingsResponseWithHotkeyConflicts{
+		AppSettings:     settings,
+		HotkeyConflicts: conflicts,
+	})
+}
+
+type settingsResponseWithHotkeyConflicts struct {
+	config.AppSettings
+	HotkeyConflicts []hotkeys.Conflict `json:"hotkey_conflicts,omitempty"`
 }
 
 // SettingsResponse — состояние всех настроек приложения.
@@ -196,6 +206,7 @@ type SettingsResponse struct {
 	Updates              config.UpdateSettings            `json:"updates"`
 	LeakTest             config.LeakTestSettings          `json:"leak_test"`
 	Hotkeys              config.HotkeySettings            `json:"hotkeys"`
+	HotkeyConflicts      []hotkeys.Conflict               `json:"hotkey_conflicts,omitempty"`
 }
 
 // handleGetSettings GET /api/settings
@@ -225,7 +236,18 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		Updates:              appSettings.Updates,
 		LeakTest:             appSettings.LeakTest,
 		Hotkeys:              appSettings.Hotkeys,
+		HotkeyConflicts:      h.currentHotkeyConflicts(appSettings.Hotkeys, false),
 	})
+}
+
+func (h *SettingsHandlers) currentHotkeyConflicts(settings config.HotkeySettings, changed bool) []hotkeys.Conflict {
+	if changed && h.server.config.HotkeysUpdatedFn != nil {
+		return h.server.config.HotkeysUpdatedFn(settings)
+	}
+	if h.server.config.HotkeyConflictsFn != nil {
+		return h.server.config.HotkeyConflictsFn()
+	}
+	return nil
 }
 
 func normalizeHotkeySettings(settings config.HotkeySettings) (config.HotkeySettings, error) {

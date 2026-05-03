@@ -379,6 +379,7 @@ function applyLifecycleControls(d) {
   if ($id('leakDomainInp')) $id('leakDomainInp').value = lt.domain || 'dnsleak.example.com';
   if ($id('leakReportURLInp')) $id('leakReportURLInp').value = lt.report_url || 'https://example.com/api/dnsleak/check';
   renderHotkeySettings(_appSettingsCache.hotkeys || {});
+  renderHotkeyConflicts(_appSettingsCache.hotkey_conflicts || []);
   const ks = _appSettingsCache.kill_switch_state || {};
   const recovery = !!(ks.active && ks.expected_clean_shutdown === false);
   if ($id('killSwitchRecoveryRow')) $id('killSwitchRecoveryRow').style.display = recovery ? 'flex' : 'none';
@@ -485,6 +486,23 @@ function renderHotkeySettings(settings) {
       <button class="pg-btn" id="hotkeyCapture${idx}" onclick="captureHotkey(${actionArg},this)">Capture</button>
       <button class="pg-btn" onclick="clearHotkey(${actionArg})">Clear</button>
     </div>`;
+  }).join('');
+}
+
+function renderHotkeyConflicts(conflicts) {
+  const box = $id('hotkeyConflictBox');
+  if (!box) return;
+  const list = Array.isArray(conflicts) ? conflicts : [];
+  if (!list.length) {
+    box.style.display = 'none';
+    box.textContent = '';
+    return;
+  }
+  box.style.display = 'block';
+  box.innerHTML = list.map(c => {
+    const acc = c && c.accelerator ? c.accelerator : hotkeyActionLabel(c && c.action);
+    const err = c && c.error ? c.error : 'conflict';
+    return `<div>${esc(acc)}: ${esc(err)}</div>`;
   }).join('');
 }
 

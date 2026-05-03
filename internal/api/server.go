@@ -16,6 +16,7 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/eventlog"
+	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/proxy"
 	"proxyclient/internal/subscription"
@@ -93,6 +94,8 @@ type Config struct {
 
 	SecretKeyUpdatedFn func()
 	CloseToTrayFn      func(bool)
+	HotkeysUpdatedFn   func(config.HotkeySettings) []hotkeys.Conflict
+	HotkeyConflictsFn  func() []hotkeys.Conflict
 }
 
 // Server HTTP API сервер
