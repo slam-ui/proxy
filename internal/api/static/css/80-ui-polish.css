@@ -3257,3 +3257,74 @@ html[data-theme="light"] .diagnostics-status-grid>div{
     grid-template-columns:repeat(2,minmax(0,1fr));
   }
 }
+
+/* UX prompt 35: server/process list density and clearer process statuses */
+.srv-summary.minimal{
+  grid-template-columns:repeat(2,minmax(0,1fr));
+}
+.srv-summary.minimal>div:nth-child(2){
+  display:none;
+}
+#srvViewBtn{
+  min-width:82px;
+}
+.sp-nm{
+  white-space:normal!important;
+  overflow:visible!important;
+  text-overflow:clip!important;
+  overflow-wrap:anywhere;
+}
+.splist.compact{
+  gap:6px;
+}
+.splist.compact .spitem{
+  grid-template-columns:minmax(0,1fr) 96px auto;
+  min-height:58px;
+  padding:8px 10px;
+}
+.splist.compact .sp-proto{
+  display:none;
+}
+.splist.compact .sp-dt{
+  margin-top:2px;
+}
+.splist.compact .sp-actions{
+  gap:4px;
+}
+.splist.compact .srv-copy-btn,
+.splist.compact .srv-del-btn{
+  min-width:30px;
+  padding:5px 6px;
+  font-size:9px;
+}
+.proc-hint{
+  margin:0 0 8px;
+  padding:8px 10px;
+  border-radius:8px;
+  color:var(--muted);
+  background:rgba(255,255,255,0.045);
+  font-size:10px;
+  line-height:1.35;
+}
+.proc-stats-bar{
+  grid-template-columns:repeat(3,minmax(0,1fr));
+}
+.proc-card .proc-rule{
+  cursor:help;
+}
+.proc-detail span{
+  cursor:default;
+}
+html[data-theme="light"] .proc-hint{
+  background:rgba(15,23,42,0.035);
+  color:rgba(15,23,42,0.58);
+}
+
+@media (max-width:680px){
+  .splist.compact .spitem{
+    grid-template-columns:1fr;
+  }
+  .proc-stats-bar{
+    grid-template-columns:1fr;
+  }
+}

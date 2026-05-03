@@ -455,7 +455,6 @@
         </div>
         <div class="page-hero-stats">
           <div><strong id="procHeroTotal">—</strong><span>приложений</span></div>
-          <div><strong id="procHeroUser">—</strong><span>пользовательских</span></div>
         </div>
       </div>
     </div>
@@ -475,6 +474,7 @@
         <input class="pg-inp" id="procFilter" placeholder="поиск по процессу, пути или правилу" oninput="loadProcs()">
         <button class="pg-btn proc-refresh" onclick="refreshProcs()" id="procRefreshBtn" title="Обновить список">↻</button>
       </div>
+      <div class="proc-hint">DIRECT значит соединение идёт напрямую; VPN значит процесс сопоставлен с TUN-правилом или монитором прокси.</div>
       <div class="proc-scroll">
         <div class="proc-list" id="procList">
           <div class="rules-empty">загрузка процессов...</div>
@@ -1081,7 +1081,8 @@
       <div class="srv-tab active" id="srvTabAll" onclick="setSrvTab('all')">Все</div>
       <div class="srv-tab" id="srvTabFast" onclick="setSrvTab('fast')">Быстрые</div>
       <div class="srv-tab" id="srvTabSlow" onclick="setSrvTab('slow')">Медленные</div>
-      <button class="pg-btn" id="srvSortBtn" onclick="toggleSrvSort()" style="font-size:8px;padding:4px 10px;margin-left:auto">↕ Задержка</button>
+      <button class="pg-btn" id="srvViewBtn" onclick="toggleSrvViewMode()" style="font-size:8px;padding:4px 10px;margin-left:auto">Компактно</button>
+      <button class="pg-btn" id="srvSortBtn" onclick="toggleSrvSort()" style="font-size:8px;padding:4px 10px">↕ Задержка</button>
     </div>
     <div class="splist" id="splist">
       <div class="sp-noservers">загрузка серверов...</div>

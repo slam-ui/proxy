@@ -48,6 +48,7 @@ async function loadServers() {
 let _srvTab = 'all';
 let _srvSortByPing = false;
 let _srvSearch = '';
+let _srvViewMode = localStorage.getItem('safesky.serverViewMode') || 'comfort';
 
 async function loadServerHealth(render = true) {
   try {
@@ -78,6 +79,12 @@ function setSrvTab(tab) {
 
 function setSrvSearch(value) {
   _srvSearch = String(value || '').trim().toLowerCase();
+  renderServerList();
+}
+
+function toggleSrvViewMode() {
+  _srvViewMode = _srvViewMode === 'compact' ? 'comfort' : 'compact';
+  localStorage.setItem('safesky.serverViewMode', _srvViewMode);
   renderServerList();
 }
 
@@ -160,7 +167,14 @@ function serverCountryCode(srv, displayName) {
 function renderServerList() {
   const list = state.servers;
   const el = $id('splist');
+  const viewBtn = $id('srvViewBtn');
+  if (viewBtn) {
+    viewBtn.textContent = _srvViewMode === 'compact' ? 'Подробно' : 'Компактно';
+    viewBtn.classList.toggle('active', _srvViewMode === 'compact');
+    viewBtn.style.display = list.length >= 4 ? '' : 'none';
+  }
   if (!list.length) {
+    el.classList.remove('compact');
     el.innerHTML = `<div class="sp-noservers">
       <div class="sp-empty-title">У вас пока нет серверов</div>
       <div class="sp-empty-sub">Добавьте подписку или один server URI, чтобы подключиться.</div>
@@ -206,6 +220,7 @@ function renderServerList() {
   }
 
   updateSrvPanelSummary(list, filtered);
+  el.classList.toggle('compact', _srvViewMode === 'compact' && filtered.length >= 4);
 
   if (!filtered.length) {
     el.innerHTML = '<div class="sp-noservers">Ничего не найдено.<br>Проверьте фильтр или поиск.</div>';
@@ -227,12 +242,12 @@ function renderServerList() {
     const srvUrlArg = jsArg(srv.url || '');
     const activeBadge = isCur ? '<span class="sp-badge active">Активен</span>' : '<span class="sp-badge">Готов</span>';
     return `
-    <div class="spitem${isCur ? ' cur' : ''}" onclick="connectServer(${srvIdArg},event)" title="${esc(hostPort)}"${delay}>
+    <div class="spitem${isCur ? ' cur' : ''}" onclick="connectServer(${srvIdArg},event)" title="${esc(displayName + ' · ' + hostPort)}"${delay}>
       <div class="sp-main">
         <span class="sp-health-dot ${esc(health.cls)}" title="${esc(health.text)}"></span>
         <span class="sp-flag" data-srvid="${esc(srv.id)}">${flag}</span>
         <div class="sp-inf">
-          <div class="sp-line"><span class="sp-nm">${esc(displayName)}</span>${activeBadge}</div>
+          <div class="sp-line"><span class="sp-nm" title="${esc(displayName)}">${esc(displayName)}</span>${activeBadge}</div>
           <div class="sp-dt">${esc(hostPort)}</div>
           <div class="sp-proto">${esc(protocol)} · ${esc(health.meta)}</div>
         </div>
@@ -264,6 +279,7 @@ function updateSrvPanelSummary(all, visible) {
     return ms != null && ms >= 0 && ms < 100;
   }).length;
   const active = all.find(s => s.id === state.activeId);
+  $id('srvSummary')?.classList.toggle('minimal', total < 4);
   if ($id('srvSummaryTotal')) $id('srvSummaryTotal').textContent = String(visible.length || total || 0);
   if ($id('srvSummaryFast')) $id('srvSummaryFast').textContent = String(fast);
   if ($id('srvSummaryActive')) $id('srvSummaryActive').textContent = active ? serverDisplayName(active) : 'нет';

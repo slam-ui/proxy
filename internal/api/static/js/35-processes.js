@@ -94,10 +94,23 @@ function processMode(p, matchedRule) {
 }
 
 function procModeMeta(mode) {
-  if (mode === 'proxy') return { cls:'p', label:'PROXY', title:'Через прокси' };
+  if (mode === 'proxy') return { cls:'p', label:'VPN', title:'Через прокси' };
   if (mode === 'direct') return { cls:'d', label:'DIRECT', title:'Напрямую' };
   if (mode === 'block') return { cls:'b', label:'BLOCK', title:'Блокируется' };
   return { cls:'u', label:'БЕЗ ПРАВИЛА', title:'Без совпадения' };
+}
+
+function _procBaseNoExt(value) {
+  const base = basename(_normProcValue(value || ''));
+  return base.endsWith('.exe') ? base.slice(0, -4) : base;
+}
+
+function processRuleText(matchedRule, nm, fullPath) {
+  if (!matchedRule) return '';
+  const ruleBase = _procBaseNoExt(matchedRule.value);
+  const procBase = _procBaseNoExt(nm || fullPath);
+  if (ruleBase && procBase && ruleBase === procBase) return '';
+  return 'правило: ' + matchedRule.value;
 }
 
 function processFallbackIcon(name) {
@@ -205,12 +218,11 @@ async function loadProcs() {
         ? `PID: ${row.pidPreview}${row.extraPidCount ? ' +' + row.extraPidCount : ''}`
         : 'PID не определён';
       const meta = procModeMeta(mode);
-      const ruleText = matchedRule
-        ? `правило: ${matchedRule.value}`
-        : mode === 'unknown'
-          ? 'совпадений в правилах нет'
-          : 'статус от монитора процессов';
+      const ruleText = processRuleText(matchedRule, nm, fullPath);
       const sourceText = matchedRule ? 'TUN-правило' : 'монитор';
+      const sourceTitle = matchedRule
+        ? `Правило маршрутизации: ${matchedRule.value}`
+        : 'Статус получен от монитора процессов';
       const fallbackIco = processFallbackIcon(nm || '');
       const ico = fullPath
         ? `<img src="${API}/procicon?path=${encodeURIComponent(fullPath)}" width="20" height="20" style="border-radius:4px;object-fit:contain" alt="${esc(nm)}" onerror="this.outerHTML='${fallbackIco}'">`
@@ -223,13 +235,13 @@ async function loadProcs() {
         <div class="proc-main">
           <div class="proc-line">
             <div class="proc-nm">${esc(nm || '—')}</div>
-            <span class="proc-rule ${meta.cls}">${meta.label}</span>
+            <span class="proc-rule ${meta.cls}" title="${esc(meta.title)}">${meta.label}</span>
           </div>
           <div class="proc-path">${esc(fullPath || p.name || 'путь процесса не определён')}</div>
           <div class="proc-detail">
             <span title="${esc(pidTitle)}">${esc(pidLabel)}</span>
-            <span>${esc(sourceText)}</span>
-            <span>${esc(ruleText)}</span>
+            <span title="${esc(sourceTitle)}">${esc(sourceText)}</span>
+            ${ruleText ? `<span title="${esc(ruleText)}">${esc(ruleText)}</span>` : ''}
           </div>
         </div>
         <button class="proc-add-btn" onclick="openAddRuleModal(${procNameArg})">${matchedRule ? 'Правило' : '+ Правило'}</button>
@@ -255,12 +267,10 @@ async function loadProcs() {
     if ($id('procHeroTotal')) $id('procHeroTotal').textContent = total;
     if ($id('procHeroUser')) $id('procHeroUser').textContent = userTotal;
     const allRows = groupedRows;
-    const instanceTotal = rows.length;
     const stat = key => allRows.filter(row => row.mode === key).length;
     const statsBar = `<div class="proc-stats-bar">
-      <div class="proc-stat-card"><b>${total}</b><span>приложений</span></div>
-      <div class="proc-stat-card d"><b>${instanceTotal}</b><span>экземпляров</span></div>
       <div class="proc-stat-card p"><b>${stat('proxy')}</b><span>через прокси</span></div>
+      <div class="proc-stat-card d"><b>${stat('direct')}</b><span>напрямую</span></div>
       <div class="proc-stat-card u"><b>${stat('unknown')}</b><span>без правила</span></div>
     </div>`;
 
