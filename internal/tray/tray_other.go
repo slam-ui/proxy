@@ -15,6 +15,7 @@ const (
 	idDisable  = 1004
 	idQuit     = 1005
 	idSrvBase  = 2000
+	idProfBase = 3000
 )
 
 var (
@@ -27,6 +28,7 @@ var (
 		disableEnabled bool
 		copyAddr       string
 		servers        []ServerItem
+		profiles       []ProfileItem
 	}
 )
 
@@ -72,6 +74,10 @@ func handleMenuCommand(id int) {
 			cb.OnQuit()
 		}
 	default:
+		if id >= idProfBase && id < idProfBase+maxProfileSlots && cb.OnProfileSwitch != nil {
+			cb.OnProfileSwitch(id - idProfBase + 1)
+			return
+		}
 		if id >= idSrvBase && cb.OnServerSwitch != nil {
 			idx := id - idSrvBase
 			win32MenuState.Lock()

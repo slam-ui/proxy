@@ -10,6 +10,7 @@
 package tray
 
 import (
+	"sort"
 	"strings"
 	"sync"
 
@@ -22,6 +23,11 @@ type ServerItem struct {
 	Name   string
 	Active bool   // отображается галочкой ✓
 	Ping   string // опциональный пинг, например "45ms"
+}
+
+type ProfileItem struct {
+	Name   string
+	Active bool
 }
 
 // Callbacks — функции которые трей вызывает при действиях пользователя.
@@ -53,6 +59,7 @@ const (
 )
 
 const maxServerSlots = 10
+const maxProfileSlots = 10
 
 var (
 	cb      Callbacks
@@ -110,6 +117,7 @@ func SetActiveServer(name string) {
 
 // SetServerList обновляет список серверов в подменю трея.
 func SetServerList(servers []ServerItem) {
+	servers = sortedServerItems(servers)
 	n := len(servers)
 	if n > maxServerSlots {
 		n = maxServerSlots
@@ -122,6 +130,26 @@ func SetServerList(servers []ServerItem) {
 
 	// Обновляем тултип при смене списка серверов (active-флаг мог измениться).
 	win32SetTooltip(buildTooltip(isEnabled))
+}
+
+func SetProfileList(profiles []ProfileItem) {
+	n := len(profiles)
+	if n > maxProfileSlots {
+		n = maxProfileSlots
+	}
+	win32MenuState.Lock()
+	win32MenuState.profiles = make([]ProfileItem, n)
+	copy(win32MenuState.profiles, profiles[:n])
+	win32MenuState.Unlock()
+}
+
+func SetActiveProfile(name string) {
+	name = strings.TrimSpace(name)
+	win32MenuState.Lock()
+	for i := range win32MenuState.profiles {
+		win32MenuState.profiles[i].Active = name != "" && win32MenuState.profiles[i].Name == name
+	}
+	win32MenuState.Unlock()
 }
 
 // SetBringToFront устанавливает функцию переноса окна на передний план.
@@ -298,6 +326,39 @@ func handleHotkeyAction(action hotkeys.Action) {
 			}
 		}
 	}
+}
+
+func sortedServerItems(servers []ServerItem) []ServerItem {
+	out := append([]ServerItem(nil), servers...)
+	sort.SliceStable(out, func(i, j int) bool {
+		pi, okI := serverPingMS(out[i].Ping)
+		pj, okJ := serverPingMS(out[j].Ping)
+		if okI != okJ {
+			return okI
+		}
+		if okI && pi != pj {
+			return pi < pj
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+func serverPingMS(raw string) (int, bool) {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	raw = strings.TrimSuffix(raw, "ms")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	n := 0
+	for _, ch := range raw {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n, true
 }
 
 func normalizeTrayNotification(title, message string, kind NotificationKind) (string, string, NotificationKind) {

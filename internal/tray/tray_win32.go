@@ -167,6 +167,7 @@ const (
 	idDisable  = 1004
 	idQuit     = 1005
 	idSrvBase  = 2000
+	idProfBase = 3000
 
 	// ── Color palette (COLORREF = 0x00BBGGRR) ──
 	// SafeSky UI palette: #111218 surface, #38c8ff accent, #2de89a active.
@@ -327,6 +328,7 @@ var (
 		disableEnabled bool
 		copyAddr       string
 		servers        []ServerItem
+		profiles       []ProfileItem
 	}
 
 	win32BringFront     func()
@@ -613,6 +615,8 @@ func showTrayMenu(hwnd uintptr) {
 	copyAddr := win32MenuState.copyAddr
 	servers := make([]ServerItem, len(win32MenuState.servers))
 	copy(servers, win32MenuState.servers)
+	profiles := make([]ProfileItem, len(win32MenuState.profiles))
+	copy(profiles, win32MenuState.profiles)
 	win32MenuState.Unlock()
 
 	warmingMu.Lock()
@@ -660,6 +664,28 @@ func showTrayMenu(hwnd uintptr) {
 
 	addOD(hMenu, odItem{kind: odNormal, text: "Подключить туннель", id: idEnable, enabled: enableEnabled && !isWarming})
 	addOD(hMenu, odItem{kind: odNormal, text: "Отключить туннель", id: idDisable, enabled: disableEnabled && !isWarming})
+
+	// Подменю серверов
+	if len(profiles) > 0 {
+		addODSep(hMenu)
+		hSub, _, _ := pCreatePopupMenu.Call()
+		if hSub != 0 {
+			setMenuBackground(hSub)
+			for i, profile := range profiles {
+				if i >= maxProfileSlots {
+					break
+				}
+				addOD(hSub, odItem{
+					kind:    odNormal,
+					text:    profile.Name,
+					id:      idProfBase + i,
+					enabled: true,
+					checked: profile.Active,
+				})
+			}
+			addODPopup(hMenu, hSub, odItem{kind: odNormal, text: "Профиль", enabled: true, popup: true})
+		}
+	}
 
 	// Подменю серверов
 	if len(servers) > 0 {
@@ -734,6 +760,11 @@ func handleMenuCommand(id int) {
 		win32MenuState.Unlock()
 		if srvID != "" && cb.OnServerSwitch != nil {
 			cb.OnServerSwitch(srvID)
+		}
+	case id >= idProfBase && id < idProfBase+maxProfileSlots:
+		idx := id - idProfBase + 1
+		if cb.OnProfileSwitch != nil {
+			cb.OnProfileSwitch(idx)
 		}
 	}
 }

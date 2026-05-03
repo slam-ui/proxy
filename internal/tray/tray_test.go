@@ -45,6 +45,31 @@ func TestSetServerList_TruncatesAtMax(t *testing.T) {
 	}
 }
 
+func TestSetServerList_SortsByPing(t *testing.T) {
+	SetServerList([]ServerItem{
+		{ID: "slow", Name: "slow", Ping: "120ms"},
+		{ID: "fast", Name: "fast", Ping: "23ms"},
+		{ID: "unknown", Name: "unknown"},
+	})
+	win32MenuState.Lock()
+	got := append([]ServerItem(nil), win32MenuState.servers...)
+	win32MenuState.Unlock()
+	if got[0].ID != "fast" || got[1].ID != "slow" || got[2].ID != "unknown" {
+		t.Fatalf("server order = %+v", got)
+	}
+}
+
+func TestSetProfileListAndActive(t *testing.T) {
+	SetProfileList([]ProfileItem{{Name: "Default"}, {Name: "Work"}})
+	SetActiveProfile("Work")
+	win32MenuState.Lock()
+	got := append([]ProfileItem(nil), win32MenuState.profiles...)
+	win32MenuState.Unlock()
+	if len(got) != 2 || got[0].Active || !got[1].Active {
+		t.Fatalf("profiles = %+v", got)
+	}
+}
+
 // TestSetActiveServer_NoPanic проверяет что SetActiveServer не паникует без трея.
 func TestSetActiveServer_NoPanic(t *testing.T) {
 	defer func() {
@@ -162,6 +187,16 @@ func TestCallbackOnServerSwitch(t *testing.T) {
 
 	if calledWith != "server-42" {
 		t.Errorf("OnServerSwitch вызван с %q, ожидалось %q", calledWith, "server-42")
+	}
+}
+
+func TestCallbackOnProfileSwitch(t *testing.T) {
+	var calledWith int
+	cb.OnProfileSwitch = func(index int) { calledWith = index }
+	defer func() { cb.OnProfileSwitch = nil }()
+	handleMenuCommand(idProfBase + 1)
+	if calledWith != 2 {
+		t.Fatalf("OnProfileSwitch=%d, want 2", calledWith)
 	}
 }
 

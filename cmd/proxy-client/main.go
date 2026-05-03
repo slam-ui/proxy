@@ -473,9 +473,10 @@ func run(output io.Writer) error {
 		tray.WaitReady()
 		<-apiReady
 		app.refreshTrayServers(cfg.APIAddress)
-		// Периодически синхронизируем список серверов в трее (каждые 15с).
+		app.refreshTrayProfiles(cfg.APIAddress)
+		// Периодически синхронизируем список серверов и профилей в трее (каждые 15с).
 		// Это гарантирует актуальность списка если пользователь добавил/переключил
-		// сервер через UI, а не через меню трея.
+		// сервер или профиль через UI, а не через меню трея.
 		t := time.NewTicker(15 * time.Second)
 		defer t.Stop()
 		for {
@@ -484,6 +485,7 @@ func run(output io.Writer) error {
 				return
 			case <-t.C:
 				app.refreshTrayServers(cfg.APIAddress)
+				app.refreshTrayProfiles(cfg.APIAddress)
 			}
 		}
 	}()
@@ -637,6 +639,37 @@ func (a *App) refreshTrayServers(apiAddress string) {
 	tray.SetActiveServer(activeName)
 }
 
+func (a *App) refreshTrayProfiles(apiAddress string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(apiBaseURL(apiAddress) + "/api/profiles")
+	if err != nil {
+		a.mainLogger.Warn("Не удалось получить профили из API: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		a.mainLogger.Warn("API /api/profiles вернул статус %d", resp.StatusCode)
+		return
+	}
+	var body struct {
+		Profiles []struct {
+			Name string `json:"name"`
+		} `json:"profiles"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		a.mainLogger.Warn("Не удалось распарсить профили: %v", err)
+		return
+	}
+	items := make([]tray.ProfileItem, 0, len(body.Profiles))
+	for _, profile := range body.Profiles {
+		name := strings.TrimSpace(profile.Name)
+		if name != "" {
+			items = append(items, tray.ProfileItem{Name: name})
+		}
+	}
+	tray.SetProfileList(items)
+}
+
 // serverDisplayName возвращает отображаемое имя сервера.
 // Приоритет: 1) фрагмент VLESS URL (#Название), 2) сохранённое имя в servers.json.
 // Логика совпадает с JS функцией serverDisplayName() в index.html.
@@ -774,6 +807,7 @@ func (a *App) applyProfileByIndex(apiAddress string, index int) error {
 	if applyResp.StatusCode != http.StatusOK {
 		return fmt.Errorf("profile apply returned %d", applyResp.StatusCode)
 	}
+	tray.SetActiveProfile(name)
 	return nil
 }
 
