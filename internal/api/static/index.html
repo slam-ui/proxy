@@ -98,13 +98,13 @@
     <div class="header-r">
       <div class="warm-dot" id="warmDot"></div>
       <div class="offline-badge" id="offlineBadge">⚠ offline</div>
-      <button class="hbtn" id="srvBtn" onclick="toggleSrv()" title="Выбор сервера" aria-label="Выбор сервера">
+      <button class="hbtn" id="srvBtn" onclick="toggleSrv()" title="Выбор сервера" aria-label="Выбор сервера" data-i18n-title="servers.choose" data-i18n-aria-label="servers.choose">
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="5" rx="2"/><rect x="4" y="14" width="16" height="5" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>
-        <span>Серверы</span>
+        <span data-i18n="nav.servers">Серверы</span>
       </button>
-      <button class="hbtn" id="diagBtn" onclick="runDiag()" title="Диагностика соединения" aria-label="Диагностика соединения">
+      <button class="hbtn" id="diagBtn" onclick="runDiag()" title="Диагностика соединения" aria-label="Диагностика соединения" data-i18n-title="diagnostics.connection" data-i18n-aria-label="diagnostics.connection">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 5 14 3-7h3"/><path d="M4 19h16"/></svg>
-        <span>Диагностика</span>
+        <span data-i18n="nav.diagnostics">Диагностика</span>
       </button>
       <!-- Window controls — заменяют нативный titlebar (WS_CAPTION удалён в window.go) -->
       <div class="wctrl">
@@ -546,9 +546,9 @@
     <div class="subpage-upper">
       <div class="page-header">
         <div class="page-title-group">
-          <div class="page-kicker">Параметры</div>
-          <h2>Настройки SafeSky</h2>
-          <p>Серверы, автозапуск, защита маршрута, диагностика и резервные копии.</p>
+          <div class="page-kicker" data-i18n="settings.kicker">Параметры</div>
+          <h2 data-i18n="settings.title">Настройки SafeSky</h2>
+          <p data-i18n="settings.subtitle">Серверы, автозапуск, защита маршрута, диагностика и резервные копии.</p>
         </div>
         <div class="page-hero-stats">
           <div><strong>2.4.1</strong><span>версия</span></div>
@@ -603,9 +603,17 @@
 
     <!-- ── Основное ── -->
     <div class="pg-section">
-      <div class="pg-section-ttl">Основное</div>
+      <div class="pg-section-ttl" data-i18n="settings.basic">Основное</div>
       <div class="pg-row">
-        <div><div class="pg-lbl">Advanced settings</div><div class="pg-sub">Показать редкие и рискованные параметры</div></div>
+        <div><div class="pg-lbl" data-i18n="settings.language">Язык</div><div class="pg-sub" data-i18n="settings.language.sub">Язык интерфейса приложения</div></div>
+        <select class="pg-inp" id="languageInp" onchange="changeLanguage(this.value)" style="max-width:170px">
+          <option value="system" data-i18n="settings.language.system">Как в системе</option>
+          <option value="ru" data-i18n="settings.language.ru">Русский</option>
+          <option value="en" data-i18n="settings.language.en">English</option>
+        </select>
+      </div>
+      <div class="pg-row">
+        <div><div class="pg-lbl" data-i18n="settings.advanced">Advanced settings</div><div class="pg-sub" data-i18n="settings.advanced.sub">Показать редкие и рискованные параметры</div></div>
         <div class="rule-toggle" id="advancedSettingsToggle" onclick="toggleAdvancedSettings()" title="Показать advanced настройки"></div>
       </div>
       <div class="pg-row">

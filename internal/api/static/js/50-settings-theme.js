@@ -362,6 +362,7 @@ function applyLifecycleControls(d) {
   $id('networkStrictToggle')?.classList.toggle('on', !!(_appSettingsCache.network_protection && _appSettingsCache.network_protection.strict_on_change));
   $id('trafficBudgetToggle')?.classList.toggle('on', !!(_appSettingsCache.traffic_budget && _appSettingsCache.traffic_budget.enabled));
   $id('closeToTrayToggle')?.classList.toggle('on', _appSettingsCache.close_to_tray !== false);
+  if ($id('languageInp')) $id('languageInp').value = _appSettingsCache.language || 'system';
   if ($id('keepaliveIntervalInp')) $id('keepaliveIntervalInp').value = _appSettingsCache.keepalive_interval_sec || 120;
   if ($id('reconnectIntervalInp')) $id('reconnectIntervalInp').value = _appSettingsCache.reconnect_interval_min || 0;
   if ($id('memoryLimitInp')) $id('memoryLimitInp').value = _appSettingsCache.memory_limit_mb || 0;
@@ -413,6 +414,7 @@ async function saveLifecycleSettings() {
     keepalive_interval_sec: Number($id('keepaliveIntervalInp')?.value || 120),
     reconnect_interval_min: Number($id('reconnectIntervalInp')?.value || 0),
     close_to_tray: $id('closeToTrayToggle')?.classList.contains('on') !== false,
+    language: $id('languageInp')?.value || _appSettingsCache.language || 'system',
     memory_limit_mb: Number($id('memoryLimitInp')?.value || 0),
     manual_singbox_config: !!$id('manualConfigToggle')?.classList.contains('on'),
     smart_failover: {

@@ -33,6 +33,25 @@ func TestEffectiveLocale(t *testing.T) {
 	}
 }
 
+func TestLocaleFilesHaveSameKeys(t *testing.T) {
+	messages, err := LoadMessages()
+	if err != nil {
+		t.Fatalf("LoadMessages: %v", err)
+	}
+	ru := messages[LocaleRU]
+	en := messages[LocaleEN]
+	for key := range ru {
+		if _, ok := en[key]; !ok {
+			t.Fatalf("en locale missing key %q", key)
+		}
+	}
+	for key := range en {
+		if _, ok := ru[key]; !ok {
+			t.Fatalf("ru locale missing key %q", key)
+		}
+	}
+}
+
 func TestPlural(t *testing.T) {
 	if Plural(LocaleRU, "one", "few", "many", 1) != "one" {
 		t.Fatal("ru 1 should use one")

@@ -1,6 +1,7 @@
 // SafeSky UI script entrypoint. Edit files in js/ by domain.
 const SAFE_SCRIPT_SOURCES = Object.freeze([
   "js/00-core.js",
+  "js/05-i18n.js",
   "js/10-servers.js",
   "js/20-navigation.js",
   "js/30-rules-processes.js",

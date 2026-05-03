@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -30,6 +32,7 @@ var cssAssetPaths = []string{
 
 var jsAssetPaths = []string{
 	"js/00-core.js",
+	"js/05-i18n.js",
 	"js/10-servers.js",
 	"js/20-navigation.js",
 	"js/30-rules-processes.js",
@@ -105,6 +108,35 @@ func TestAdvancedSettingsAreProgressivelyDisclosed(t *testing.T) {
 	} {
 		if !strings.Contains(html+css+js, required) {
 			t.Fatalf("advanced disclosure missing %q", required)
+		}
+	}
+}
+
+func TestStaticI18nKeysExistInLocales(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	js := readStaticBundle(t, jsAssetPaths...)
+	re := regexp.MustCompile(`data-i18n(?:-[a-z-]+)?="([^"]+)"`)
+	keys := map[string]bool{}
+	for _, match := range re.FindAllStringSubmatch(html+js, -1) {
+		keys[match[1]] = true
+	}
+	if len(keys) == 0 {
+		t.Fatal("static UI has no data-i18n keys")
+	}
+
+	for _, path := range []string{"../i18n/locales/ru.json", "../i18n/locales/en.json"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var messages map[string]string
+		if err := json.Unmarshal(data, &messages); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		for key := range keys {
+			if _, ok := messages[key]; !ok {
+				t.Fatalf("%s missing UI i18n key %q", path, key)
+			}
 		}
 	}
 }
