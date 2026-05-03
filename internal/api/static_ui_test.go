@@ -125,6 +125,8 @@ func TestTelemetryPrivacyControlsExist(t *testing.T) {
 		`function currentTelemetrySettings()`,
 		`telemetry: currentTelemetrySettings()`,
 		`function toggleTelemetryOption(key)`,
+		`/telemetry/delete`,
+		`/telemetry/export`,
 	} {
 		if !strings.Contains(html+js, required) {
 			t.Fatalf("telemetry privacy controls missing %q", required)

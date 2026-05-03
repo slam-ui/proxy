@@ -162,3 +162,48 @@ func TestManagerOptOutDoesNotBuffer(t *testing.T) {
 		t.Fatalf("opt-out manager buffered events: %d", m.Len())
 	}
 }
+
+func TestExportAndDeleteUseExistingAnonymousID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "telemetry_id")
+	client := Client{Enabled: true, AnonymousPath: path}
+	id, err := client.EnsureAnonymousID()
+	if err != nil {
+		t.Fatalf("EnsureAnonymousID: %v", err)
+	}
+	var deletedID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case DefaultEndpointPath + "/export":
+			if r.URL.Query().Get("anonymous_id") != id {
+				t.Fatalf("export anonymous_id=%q", r.URL.Query().Get("anonymous_id"))
+			}
+			_, _ = w.Write([]byte(`{"events":[{"type":"connect_success"}]}`))
+		case DefaultEndpointPath + "/delete":
+			var req map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			deletedID = req["anonymous_id"]
+			_, _ = w.Write([]byte(`{"deleted":true}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client.BaseURL = srv.URL
+	client.HTTPClient = srv.Client()
+	data, err := client.ExportData(t.Context())
+	if err != nil {
+		t.Fatalf("ExportData: %v", err)
+	}
+	if !strings.Contains(string(data), "connect_success") {
+		t.Fatalf("export data=%s", data)
+	}
+	if err := client.DeleteData(t.Context()); err != nil {
+		t.Fatalf("DeleteData: %v", err)
+	}
+	if deletedID != id {
+		t.Fatalf("deleted id=%q want %q", deletedID, id)
+	}
+	if got, err := LoadAnonymousID(path); err != nil || got != "" {
+		t.Fatalf("local id after delete=%q err=%v", got, err)
+	}
+}

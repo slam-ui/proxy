@@ -309,6 +309,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	SetupOnboardingRoutes(s)
 	SetupEngineRoutes(s)
 	SetupUpdateRoutes(s)
+	SetupTelemetryRoutes(s)
 	SetupLeakTestRoutes(s)
 	SetupImprovementRoutes(s)
 	SetupClientFeatureRoutes(s, ctx)

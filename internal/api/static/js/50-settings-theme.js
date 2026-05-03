@@ -655,12 +655,16 @@ async function toggleTelemetryOption(key) {
   await saveLifecycleSettings();
 }
 
-function deleteTelemetryData() {
-  showToast('Удаление данных будет отправлено на telemetry server', 'info');
+async function deleteTelemetryData() {
+  try {
+    const r = await fetch(API + '/telemetry/delete', {method:'POST', timeoutMs:30000});
+    if (!r.ok) throw new Error(await r.text());
+    showToast('Telemetry data delete request sent', 'on');
+  } catch(e) { showToast('Telemetry delete: ' + e.message, 'off'); }
 }
 
 function downloadTelemetryData() {
-  showToast('Экспорт данных будет доступен через telemetry server', 'info');
+  window.location.href = API + '/telemetry/export';
 }
 
 function openLocalHelp() {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -252,6 +253,76 @@ func (c Client) EnsureAnonymousID() (string, error) {
 	return id, nil
 }
 
+func LoadAnonymousID(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read anonymous id: %w", err)
+	}
+	plain, err := dpapi.Decrypt(data)
+	if err != nil {
+		return "", fmt.Errorf("decrypt anonymous id: %w", err)
+	}
+	return strings.TrimSpace(string(plain)), nil
+}
+
+func (c Client) DeleteData(ctx context.Context) error {
+	if !c.Enabled {
+		return nil
+	}
+	id, err := LoadAnonymousID(c.AnonymousPath)
+	if err != nil {
+		return err
+	}
+	if id == "" {
+		return nil
+	}
+	endpoint, err := telemetrySubURL(c.BaseURL, "/delete")
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]string{"anonymous_id": id})
+	if err := c.doJSON(ctx, http.MethodPost, endpoint, body, nil); err != nil {
+		return err
+	}
+	_ = os.Remove(c.AnonymousPath)
+	return nil
+}
+
+func (c Client) ExportData(ctx context.Context) ([]byte, error) {
+	if !c.Enabled {
+		return []byte(`{"events":[]}`), nil
+	}
+	id, err := LoadAnonymousID(c.AnonymousPath)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return []byte(`{"events":[]}`), nil
+	}
+	endpoint, err := telemetrySubURL(c.BaseURL, "/export")
+	if err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	q := u.Query()
+	q.Set("anonymous_id", id)
+	u.RawQuery = q.Encode()
+	var out []byte
+	if err := c.doJSON(ctx, http.MethodGet, u.String(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c Client) Flush(ctx context.Context, payload Payload) error {
 	if !c.Enabled {
 		return nil
@@ -273,11 +344,17 @@ func (c Client) Flush(ctx context.Context, payload Payload) error {
 	if len(body) > MaxRequestBytes {
 		return fmt.Errorf("telemetry payload too large: %d bytes", len(body))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	return c.doJSON(ctx, http.MethodPost, endpoint, body, nil)
+}
+
+func (c Client) doJSON(ctx context.Context, method, endpoint string, body []byte, rawOut *[]byte) error {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 	if c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
@@ -294,10 +371,21 @@ func (c Client) Flush(ctx context.Context, payload Payload) error {
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return fmt.Errorf("send telemetry: HTTP %d", resp.StatusCode)
 	}
+	if rawOut != nil {
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if err != nil {
+			return err
+		}
+		*rawOut = data
+	}
 	return nil
 }
 
 func telemetryURL(baseURL string) (string, error) {
+	return telemetrySubURL(baseURL, "")
+}
+
+func telemetrySubURL(baseURL, suffix string) (string, error) {
 	if strings.TrimSpace(baseURL) == "" {
 		return "", fmt.Errorf("telemetry base URL is required")
 	}
@@ -308,7 +396,7 @@ func telemetryURL(baseURL string) (string, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("absolute telemetry base URL required")
 	}
-	u.Path = strings.TrimRight(u.Path, "/") + DefaultEndpointPath
+	u.Path = strings.TrimRight(u.Path, "/") + DefaultEndpointPath + suffix
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
