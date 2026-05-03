@@ -36,14 +36,16 @@ function setLogStreamState(mode) {
 }
 
 function _currentLogLevelFilter() {
-  return $id('logLevelFilter')?.value || 'all';
+  return $id('logLevelFilter')?.value || 'warn';
 }
 
 function _logMatchesFilters(line) {
   const f = $id('logFilter')?.value.toLowerCase().trim() || '';
   const level = _currentLogLevelFilter();
   const msgOk = !f || (line.dataset.search || line.dataset.msg || '').includes(f);
-  const lvlOk = level === 'all' || line.dataset.level === level;
+  const lvlOk = level === 'all'
+    || (level === 'warn' && ['W', 'E'].includes(line.dataset.level))
+    || line.dataset.level === level;
   return msgOk && lvlOk;
 }
 
@@ -195,8 +197,8 @@ function _cleanLogMsg(msg) {
 }
 
 function _isRoutineHttpLog(lvlChar, msg) {
-  if (lvlChar !== 'I') return false;
-  const m = String(msg || '').match(/^(?:→\s*)?(GET|HEAD)\s+(\/api\/[^\s]+)\s+200(?:\s|$)/i);
+  if (!['I', 'D'].includes(lvlChar)) return false;
+  const m = String(msg || '').match(/^(?:→\s*)?(GET|HEAD)\s+(\/api\/[^\s]+)\s+(200|304)(?:\s|$)/i);
   if (!m) return false;
   return /^\/api\/(?:settings|engine\/version|geoip|clipboard\/vless|tun\/rules|singbox-config|diagnostics\/crashes|servers\/ping-all|apps\/processes|profiles|stats|connections|servers|lan-info)(?:\?|$|\/)/i.test(m[2]);
 }
@@ -239,8 +241,18 @@ function _storeAnomalySnapshots(list) {
 }
 
 function _isLogAnomaly(lvlChar, cleanMsg) {
+  if (_isRoutineHttpLog(lvlChar, cleanMsg)) return false;
+  if (lvlChar === 'W' && _isBenignLogWarning(cleanMsg)) return false;
   if (lvlChar === 'E' || lvlChar === 'W') return true;
   return /\b(error|failed|fail|panic|timeout|denied|refused|unreachable|deadline|ошибка|сбой|таймаут|отказ|недоступ)\b/i.test(cleanMsg);
+}
+
+function _isBenignLogWarning(msg) {
+  const m = String(msg || '').toLowerCase();
+  if (!m.includes('dns')) return false;
+  return m.includes('context canceled')
+    || m.includes('read/write on closed pipe')
+    || m.includes('clientconn.close');
 }
 
 function _rememberAnomaly(ts, lvlChar, rawMsg, cleanMsg) {
@@ -291,12 +303,12 @@ function renderAnomalyList() {
   }).join('');
 
   if (!currentHtml && !savedHtml) {
-    el.innerHTML = '<div class="log-anomaly-empty">Ошибок и предупреждений пока нет</div>';
+    el.innerHTML = '<div class="log-anomaly-empty">Предупреждений пока нет</div>';
     return;
   }
   el.innerHTML =
     (currentHtml ? `<div class="log-anomaly-section">Текущие</div>${currentHtml}` : '') +
-    (savedHtml ? `<div class="log-anomaly-section saved">Сохранённые снимки</div>${savedHtml}` : '');
+    (savedHtml ? `<div class="log-anomaly-section saved">Сохранённые разборы</div>${savedHtml}` : '');
 }
 
 function pushLog(ts, level, msg) {
@@ -377,10 +389,11 @@ function clearLogFilter() {
 }
 
 function setLogLevelFilter(level) {
+  const normalized = level || 'warn';
   const input = $id('logLevelFilter');
-  if (input) input.value = level || 'all';
+  if (input) input.value = normalized;
   document.querySelectorAll('.log-level-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.level === (level || 'all'));
+    btn.classList.toggle('active', btn.dataset.level === normalized);
   });
   filterLogs();
 }
@@ -424,7 +437,7 @@ function exportLogs() {
 
 function saveAnomalySnapshot() {
   if (!logAnomalies.length) {
-    showToast('Нет аномалий для сохранения', 'info');
+    showToast('Нет предупреждений для сохранения', 'info');
     renderAnomalyList();
     return;
   }
@@ -442,7 +455,7 @@ function saveAnomalySnapshot() {
   };
   const saved = [snapshot, ..._savedAnomalySnapshots()].slice(0, 12);
   _storeAnomalySnapshots(saved);
-  showToast('Снимок аномалий сохранён', 'on');
+  showToast('Снимок предупреждений сохранён', 'on');
   renderAnomalyList();
 }
 
@@ -461,7 +474,7 @@ function exportAnomalies() {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
-  a.href = url; a.download = 'safesky-anomalies.json'; a.click();
+  a.href = url; a.download = 'safesky-warnings.json'; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 

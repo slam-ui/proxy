@@ -45,6 +45,7 @@ let _appSettingsCache = {};
 let _speedProgressTimer = null;
 let _speedProgressValue = 0;
 let _singboxConfigDirty = false;
+let _profileHotkeyNames = [];
 
 function setSpeedProgress(pct, text) {
   _speedProgressValue = Math.max(0, Math.min(100, pct));
@@ -257,6 +258,26 @@ function downloadDiagnosticsPackage() {
   window.location.href = API + '/diagnostics/package';
 }
 
+async function runConnectionCheck() {
+  const btn = $id('connectionCheckBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Проверка...'; }
+  if ($id('connectionCheckResult')) $id('connectionCheckResult').textContent = 'проверка...';
+  try {
+    await Promise.allSettled([runSpeedTest(), runLeakCheck(), runIntegrityCheck()]);
+    const statusText = ['speedTestResult', 'leakCheckResult', 'integrityResult']
+      .map(id => ($id(id)?.textContent || '').toLowerCase())
+      .join(' ');
+    const failed = statusText.includes('ошибка') || statusText.includes('проблем') || statusText.includes('утечк');
+    if ($id('connectionCheckResult')) $id('connectionCheckResult').textContent = failed ? 'есть проблемы' : 'OK';
+    showToast(failed ? 'Проверка соединения: есть проблемы' : 'Соединение проверено', failed ? 'warn' : 'on');
+  } catch(e) {
+    if ($id('connectionCheckResult')) $id('connectionCheckResult').textContent = 'ошибка';
+    showToast('Проверка соединения не завершилась', 'off');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Проверить соединение'; }
+  }
+}
+
 async function runDiagnose() {
   const btn = $id('diagnoseBtn');
   if (btn) { btn.disabled = true; btn.textContent = '...'; }
@@ -272,10 +293,10 @@ async function runDiagnose() {
     }
     showToast(failed.length ? 'Диагностика нашла проблему' : 'Диагностика без ошибок', failed.length ? 'warn' : 'on');
   } catch(e) {
-    if ($id('diagnoseResult')) $id('diagnoseResult').textContent = 'ошибка';
-    showToast('Диагностика: ' + e.message, 'off');
+    if ($id('diagnoseResult')) $id('diagnoseResult').textContent = 'внутренняя ошибка';
+    showToast('Диагностика не завершилась. Скачайте диагностический пакет.', 'off');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Diagnose'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Диагностика проблем'; }
   }
 }
 
@@ -481,8 +502,32 @@ function hotkeyActionLabel(action) {
   if (action === 'toggle_connection') return 'Toggle connection';
   if (action === 'next_server') return 'Next server';
   if (action === 'show_hide_window') return 'Show / hide window';
-  if (/^profile_\d$/.test(action || '')) return 'Profile ' + action.slice(-1);
+  if (/^profile_\d$/.test(action || '')) {
+    const idx = Number(action.slice(-1)) - 1;
+    return _profileHotkeyNames[idx] || ('Profile ' + action.slice(-1));
+  }
   return action || 'Hotkey';
+}
+
+async function loadHotkeyProfiles() {
+  try {
+    const r = await fetch(API + '/profiles');
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    _profileHotkeyNames = (d.profiles || [])
+      .map(p => String(p && p.name || '').trim())
+      .filter(Boolean)
+      .slice(0, 9);
+  } catch(_) {
+    _profileHotkeyNames = [];
+  }
+}
+
+function shouldShowHotkeyBinding(binding) {
+  const action = binding && binding.action;
+  const profileMatch = String(action || '').match(/^profile_(\d)$/);
+  if (!profileMatch) return true;
+  return Number(profileMatch[1]) <= _profileHotkeyNames.length;
 }
 
 function renderHotkeySettings(settings) {
@@ -490,7 +535,12 @@ function renderHotkeySettings(settings) {
   if (!rows) return;
   const hotkeys = settings && Array.isArray(settings.bindings) ? settings : defaultHotkeySettings();
   $id('hotkeysToggle')?.classList.toggle('on', hotkeys.enabled !== false);
-  rows.innerHTML = hotkeys.bindings.map((binding, idx) => {
+  const visibleBindings = hotkeys.bindings.filter(shouldShowHotkeyBinding);
+  if (!visibleBindings.length) {
+    rows.innerHTML = '<div class="pg-sub" style="padding:8px;text-align:center">сочетания для профилей появятся после создания профилей</div>';
+    return;
+  }
+  rows.innerHTML = visibleBindings.map((binding, idx) => {
     const action = esc(binding.action || '');
     const actionArg = jsArg(binding.action || '');
     return `<div class="hotkey-row" data-action="${action}">
@@ -628,6 +678,7 @@ function applyTelemetryControls(tel) {
   $id('telemetryEnabledToggle')?.classList.toggle('on', !!settings.enabled);
   $id('telemetryCrashToggle')?.classList.toggle('on', !!settings.enabled && !!settings.crash_reports);
   $id('telemetryUsageToggle')?.classList.toggle('on', !!settings.enabled && !!settings.usage_events);
+  if ($id('privacyDetails')) $id('privacyDetails').open = !!settings.enabled;
   if ($id('telemetryBaseURLInp')) $id('telemetryBaseURLInp').value = settings.base_url || _appSettingsCache.updates?.base_url || 'https://example.com/safesky';
 }
 
@@ -653,6 +704,10 @@ async function toggleTelemetryOption(key) {
   if (key === 'crash_reports' && $id('telemetryEnabledToggle')?.classList.contains('on')) $id('telemetryCrashToggle')?.classList.toggle('on');
   if (key === 'usage_events' && $id('telemetryEnabledToggle')?.classList.contains('on')) $id('telemetryUsageToggle')?.classList.toggle('on');
   await saveLifecycleSettings();
+}
+
+async function togglePrivacyMaster() {
+  await toggleTelemetryOption('enabled');
 }
 
 async function deleteTelemetryData() {
@@ -880,6 +935,8 @@ async function loadSettingsPage() {
       const startupEl = $id('startupProxyToggle');
       if (startupEl) startupEl.classList.toggle('on', !!d.start_proxy_on_launch);
       applyLifecycleControls(d);
+      await loadHotkeyProfiles();
+      renderHotkeySettings(_appSettingsCache.hotkeys || {});
     }
   } catch(_) {}
   try {
@@ -907,28 +964,32 @@ async function loadSettingsPage() {
       const missing = list.filter(g => !g.available);
       if (!available.length) {
         el.innerHTML = `<div class="geo-empty-state">
-          <div class="geo-empty-icon">📦</div>
           <div class="geo-empty-title">Базы не загружены</div>
-          <div class="geo-empty-sub">Нажмите «Обновить базы из правил» — будут скачаны только geosite, которые используются в маршрутизации</div>
-          ${missing.length ? `<div class="geo-missing-list">${missing.map(g => `<span class="geo-chip missing">${esc(g.name)}</span>`).join('')}</div>` : ''}
+          <div class="geo-empty-sub">Будут скачаны только geosite, которые используются в правилах.</div>
+          ${missing.length ? `<details class="geo-compact-details"><summary>Доступные базы (${missing.length})</summary><div class="geo-missing-list">${missing.map(g => `<span class="geo-chip missing">${esc(g.name)}</span>`).join('')}</div></details>` : ''}
         </div>`;
       } else {
-        el.innerHTML = available.map(g => {
-          const sizeMb = g.file_size ? (g.file_size / 1024).toFixed(1) + ' KB' : '';
+        const totalBytes = available.reduce((sum, g) => sum + Number(g.file_size || 0), 0);
+        el.innerHTML = `<div class="pg-row geo-item-row">
+          <div>
+            <div class="pg-lbl">Загружено ${available.length} баз</div>
+            <div class="pg-sub">${totalBytes ? formatBytes(totalBytes) : 'размер неизвестен'}</div>
+          </div>
+          <span class="geo-badge ok">готово</span>
+        </div>` + available.slice(0, 6).map(g => {
+          const sizeLabel = g.file_size ? formatBytes(g.file_size) : '';
           return `<div class="pg-row geo-item-row">
             <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
               <span class="geo-dot available"></span>
               <div>
                 <div class="pg-lbl">${esc(g.name)}</div>
-                ${sizeMb ? `<div class="pg-sub">${sizeMb}</div>` : ''}
+                ${sizeLabel ? `<div class="pg-sub">${sizeLabel}</div>` : ''}
               </div>
             </div>
             <span class="geo-badge ok">✓ загружена</span>
           </div>`;
-        }).join('') + (missing.length ? `<div class="geo-missing-block">
-          <div class="pg-sub" style="margin-bottom:6px">Не загружены (${missing.length}):</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px">${missing.map(g => `<span class="geo-chip missing">${esc(g.name)}</span>`).join('')}</div>
-        </div>` : '');
+        }).join('') + (available.length > 6 ? `<details class="geo-compact-details"><summary>Ещё загружены (${available.length - 6})</summary><div class="geo-missing-list">${available.slice(6).map(g => `<span class="geo-chip">${esc(g.name)}</span>`).join('')}</div></details>` : '')
+          + (missing.length ? `<details class="geo-compact-details"><summary>Не загружены (${missing.length})</summary><div class="geo-missing-list">${missing.map(g => `<span class="geo-chip missing">${esc(g.name)}</span>`).join('')}</div></details>` : '');
       }
     }
   } catch(_) {}

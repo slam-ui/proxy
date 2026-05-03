@@ -517,7 +517,7 @@
         <div class="page-title-group">
           <div class="page-kicker">Журнал</div>
           <h2>Логи и события</h2>
-          <p>Живой поток событий клиента, фильтры по уровню и быстрый разбор предупреждений.</p>
+          <p>По умолчанию показаны предупреждения и ошибки; подробные info/debug доступны через фильтр.</p>
         </div>
         <div class="page-hero-stats">
           <div><strong id="logHeroTotal">0</strong><span>событий</span></div>
@@ -537,13 +537,12 @@
               <input class="pg-inp log-filter" id="logFilter" placeholder="поиск по тексту, домену, IP или процессу" oninput="filterLogs()">
               <button class="log-filter-clear" onclick="clearLogFilter()" title="Очистить фильтр" aria-label="Очистить фильтр">×</button>
             </div>
-            <input type="hidden" id="logLevelFilter" value="all">
+            <input type="hidden" id="logLevelFilter" value="warn">
             <div class="log-level-tabs" role="tablist" aria-label="Фильтр уровня логов">
-              <button class="log-level-btn active" data-level="all" onclick="setLogLevelFilter('all')">Все</button>
+              <button class="log-level-btn active" data-level="warn" onclick="setLogLevelFilter('warn')">Warn+Error</button>
               <button class="log-level-btn" data-level="E" onclick="setLogLevelFilter('E')">Ошибки</button>
-              <button class="log-level-btn" data-level="W" onclick="setLogLevelFilter('W')">Warn</button>
               <button class="log-level-btn" data-level="I" onclick="setLogLevelFilter('I')">Info</button>
-              <button class="log-level-btn" data-level="D" onclick="setLogLevelFilter('D')">Debug</button>
+              <button class="log-level-btn" data-level="all" onclick="setLogLevelFilter('all')" title="Показать info и debug">Все</button>
             </div>
             <div class="log-actions">
               <button class="pg-btn log-auto" id="logAutoBtn" onclick="toggleLogAuto()" title="Автопрокрутка">
@@ -553,6 +552,7 @@
               <button class="pg-btn danger" onclick="clearLogs()">Очистить</button>
             </div>
           </div>
+          <div class="log-user-hint" id="logUserHint">Показываются только события, требующие внимания. Для полного потока выберите «Все».</div>
           <div class="log-console-head">
             <span>Время</span>
             <span>Уровень</span>
@@ -571,31 +571,27 @@
               </div>
               <span class="log-stream-pill" id="logStreamState">IDLE</span>
             </div>
-            <div class="log-summary-grid">
-              <div class="log-summary-cell"><b id="logVisibleCount">0</b><span>видно</span></div>
+            <div class="log-summary-grid compact">
               <div class="log-summary-cell warn"><b id="logWarnCount">0</b><span>warn</span></div>
               <div class="log-summary-cell err"><b id="logErrorCount">0</b><span>error</span></div>
-              <div class="log-summary-cell"><b id="logDebugCount">0</b><span>debug</span></div>
             </div>
             <div class="log-meter">
               <div class="log-meter-row"><span>Последнее событие</span><b id="logLastEvent">—</b></div>
-              <div class="log-meter-row"><span>Снимков</span><b id="logHeroSaved">0</b></div>
-              <div class="log-meter-row"><span>Аномалий</span><b id="logHeroAnomalies">0</b></div>
             </div>
           </div>
           <div class="log-panel">
             <div class="log-card-head">
               <div>
-                <div class="log-panel-title">Аномалии</div>
-                <div class="log-panel-sub">Ошибки и предупреждения до очистки журнала</div>
+                <div class="log-panel-title">Предупреждения</div>
+                <div class="log-panel-sub">Ошибки и важные предупреждения до очистки журнала</div>
               </div>
             </div>
             <div class="log-panel-actions">
-              <button class="pg-btn acc" onclick="saveAnomalySnapshot()">Сохранить</button>
-              <button class="pg-btn" onclick="exportAnomalies()">JSON</button>
+              <button class="pg-btn acc" onclick="saveAnomalySnapshot()">Снимок</button>
+              <button class="pg-btn" onclick="exportAnomalies()">Экспорт</button>
             </div>
             <div class="log-anomaly-list" id="logAnomalyList">
-              <div class="log-anomaly-empty">Ошибок и предупреждений пока нет</div>
+              <div class="log-anomaly-empty">Предупреждений пока нет</div>
             </div>
           </div>
         </aside>
@@ -752,8 +748,12 @@
           <div><div class="pg-lbl">Доступ из LAN</div><div class="pg-sub" id="lanInfoResult">загрузка...</div></div>
           <div class="rule-toggle" id="lanShareToggle" onclick="toggleRoutingOption('lan_share_enabled')" title="Раздать SOCKS в LAN"></div>
         </div>
-        <div class="pg-inp-row" style="margin-top:8px">
-          <input class="pg-inp" id="lanSharePortInp" type="number" min="1024" max="65535" placeholder="10808">
+        <div class="pg-inp-row setting-grid" style="margin-top:8px">
+          <label class="setting-field">
+            <span>Порт LAN SOCKS</span>
+            <input class="pg-inp" id="lanSharePortInp" type="number" min="1024" max="65535" placeholder="10808">
+            <small>1024-65535, только если включён доступ из LAN</small>
+          </label>
           <button class="pg-btn" onclick="saveRoutingOptions()">Сохранить порт</button>
         </div>
       </div>
@@ -763,9 +763,17 @@
     <details class="pg-section">
       <summary class="pg-section-ttl">Защита соединения</summary>
       <div class="pg-section-body">
-        <div class="pg-inp-row advanced-setting" style="margin-bottom:8px">
-          <input class="pg-inp" id="failoverMaxLatencyInp" type="number" min="50" placeholder="Пинг, мс">
-          <input class="pg-inp" id="failoverIntervalInp" type="number" min="15" placeholder="Интервал, сек">
+        <div class="pg-inp-row advanced-setting setting-grid" style="margin-bottom:8px">
+          <label class="setting-field">
+            <span>Макс. пинг</span>
+            <input class="pg-inp" id="failoverMaxLatencyInp" type="number" min="50" placeholder="800">
+            <small>мс, сервер хуже порога считается деградировавшим</small>
+          </label>
+          <label class="setting-field">
+            <span>Интервал проверки</span>
+            <input class="pg-inp" id="failoverIntervalInp" type="number" min="15" placeholder="60">
+            <small>сек, как часто проверять failover</small>
+          </label>
           <button class="pg-btn" onclick="checkFailoverStatus()">Оценить</button>
         </div>
         <div class="pg-row">
@@ -788,9 +796,17 @@
           <div><div class="pg-lbl">Лимит трафика</div><div class="pg-sub" id="trafficBudgetResult">Лимиты трафика отключены</div></div>
           <div class="rule-toggle" id="trafficBudgetToggle" onclick="toggleLifecycleOption('traffic_budget')" title="Включить лимиты трафика"></div>
         </div>
-        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
-          <input class="pg-inp" id="trafficSessionMBInp" type="number" min="0" placeholder="Сессия, МБ">
-          <input class="pg-inp" id="trafficTotalMBInp" type="number" min="0" placeholder="Всего, МБ">
+        <div class="pg-inp-row advanced-setting setting-grid" style="margin-top:8px">
+          <label class="setting-field">
+            <span>Лимит сессии</span>
+            <input class="pg-inp" id="trafficSessionMBInp" type="number" min="0" placeholder="0">
+            <small>МБ, 0 отключает лимит сессии</small>
+          </label>
+          <label class="setting-field">
+            <span>Общий лимит</span>
+            <input class="pg-inp" id="trafficTotalMBInp" type="number" min="0" placeholder="0">
+            <small>МБ, 0 отключает общий лимит</small>
+          </label>
           <button class="pg-btn" onclick="saveTrafficBudget()">Сохранить</button>
         </div>
       </div>
@@ -804,10 +820,22 @@
           <div><div class="pg-lbl">Проверка связи</div><div class="pg-sub">Периодическая проверка соединения</div></div>
           <div class="rule-toggle" id="keepaliveToggle" onclick="toggleLifecycleOption('keepalive_enabled')" title="Включить проверку связи"></div>
         </div>
-        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
-          <input class="pg-inp" id="keepaliveIntervalInp" type="number" min="30" placeholder="Проверка, сек">
-          <input class="pg-inp" id="reconnectIntervalInp" type="number" min="0" placeholder="Переподключение, мин">
-          <input class="pg-inp" id="memoryLimitInp" type="number" min="0" placeholder="Память, МБ">
+        <div class="pg-inp-row advanced-setting setting-grid" style="margin-top:8px">
+          <label class="setting-field">
+            <span>Проверка связи</span>
+            <input class="pg-inp" id="keepaliveIntervalInp" type="number" min="30" placeholder="120">
+            <small>сек, минимально 30</small>
+          </label>
+          <label class="setting-field">
+            <span>Переподключение</span>
+            <input class="pg-inp" id="reconnectIntervalInp" type="number" min="0" placeholder="0">
+            <small>мин, 0 отключает автоматический reconnect</small>
+          </label>
+          <label class="setting-field">
+            <span>Лимит памяти</span>
+            <input class="pg-inp" id="memoryLimitInp" type="number" min="0" placeholder="0">
+            <small>МБ, 0 без лимита</small>
+          </label>
         </div>
         <div class="pg-row advanced-setting">
           <div><div class="pg-lbl">Расписание</div><div class="pg-sub">Окно автоматического включения туннеля</div></div>
@@ -817,14 +845,18 @@
           <div><div class="pg-lbl">Закрывать в трей</div><div class="pg-sub">Кнопка закрытия скрывает окно, клиент продолжает работать</div></div>
           <div class="rule-toggle" id="closeToTrayToggle" onclick="toggleLifecycleOption('close_to_tray')" title="Закрывать окно в трей"></div>
         </div>
-        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
-          <input class="pg-inp" id="scheduleOnInp" type="time" value="09:00">
-          <input class="pg-inp" id="scheduleOffInp" type="time" value="18:00">
+        <div class="pg-inp-row advanced-setting setting-grid" style="margin-top:8px">
+          <label class="setting-field">
+            <span>Включать</span>
+            <input class="pg-inp" id="scheduleOnInp" type="time" value="09:00">
+            <small>локальное время</small>
+          </label>
+          <label class="setting-field">
+            <span>Выключать</span>
+            <input class="pg-inp" id="scheduleOffInp" type="time" value="18:00">
+            <small>локальное время</small>
+          </label>
           <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>
-        </div>
-        <div class="pg-row" style="margin-top:6px">
-          <div><div class="pg-lbl">Завершить работу</div><div class="pg-sub">Остановить клиент</div></div>
-          <button class="pg-btn danger" onclick="quitApp()">Выход</button>
         </div>
         <div class="pg-row" style="margin-top:6px">
           <div><div class="pg-lbl">Помощь</div><div class="pg-sub">Quick start, profiles, troubleshooting</div></div>
@@ -842,25 +874,28 @@
       <summary class="pg-section-ttl">Privacy</summary>
       <div class="pg-section-body">
         <div class="pg-row">
-          <div><div class="pg-lbl">Анонимная статистика</div><div class="pg-sub">Версия клиента, Windows, протоколы и коды ошибок без IP, серверов и доменов</div></div>
-          <div class="rule-toggle" id="telemetryEnabledToggle" onclick="toggleTelemetryOption('enabled')" title="Отправлять анонимную статистику"></div>
+          <div><div class="pg-lbl">Отправка данных</div><div class="pg-sub">Главный переключатель для crash reports и usage events. IP, серверы и домены не отправляются.</div></div>
+          <div class="rule-toggle" id="telemetryEnabledToggle" onclick="togglePrivacyMaster()" title="Разрешить отправку диагностических данных"></div>
         </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Crash reports</div><div class="pg-sub">Санитизированные отчёты о сбоях без памяти процесса и секретов</div></div>
-          <div class="rule-toggle" id="telemetryCrashToggle" onclick="toggleTelemetryOption('crash_reports')" title="Отправлять crash reports"></div>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Usage events</div><div class="pg-sub">События подключения, ошибок и окончания сессии</div></div>
-          <div class="rule-toggle" id="telemetryUsageToggle" onclick="toggleTelemetryOption('usage_events')" title="Отправлять usage events"></div>
-        </div>
-        <div class="pg-inp-row advanced-setting" style="margin-top:8px">
-          <input class="pg-inp" id="telemetryBaseURLInp" type="url" placeholder="https://example.com/safesky">
-          <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>
-        </div>
-        <div class="pg-inp-row" style="margin-top:8px">
-          <button class="pg-btn danger" onclick="deleteTelemetryData()">Удалить мои данные на сервере</button>
-          <button class="pg-btn" onclick="downloadTelemetryData()">Скачать мои данные</button>
-        </div>
+        <details class="privacy-details" id="privacyDetails">
+          <summary>Что именно отправлять</summary>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Crash reports</div><div class="pg-sub">Санитизированные отчёты о сбоях без памяти процесса и секретов</div></div>
+            <div class="rule-toggle" id="telemetryCrashToggle" onclick="toggleTelemetryOption('crash_reports')" title="Отправлять crash reports"></div>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Usage events</div><div class="pg-sub">События подключения, ошибок и окончания сессии</div></div>
+            <div class="rule-toggle" id="telemetryUsageToggle" onclick="toggleTelemetryOption('usage_events')" title="Отправлять usage events"></div>
+          </div>
+          <div class="pg-inp-row advanced-setting" style="margin-top:8px">
+            <input class="pg-inp" id="telemetryBaseURLInp" type="url" placeholder="https://example.com/safesky">
+            <button class="pg-btn" onclick="saveLifecycleSettings()">Сохранить</button>
+          </div>
+          <div class="pg-inp-row" style="margin-top:8px">
+            <button class="pg-btn danger" onclick="deleteTelemetryData()">Удалить мои данные на сервере</button>
+            <button class="pg-btn" onclick="downloadTelemetryData()">Скачать мои данные</button>
+          </div>
+        </details>
       </div>
     </details>
 
@@ -883,56 +918,64 @@
     <details class="pg-section">
       <summary class="pg-section-ttl">Диагностика</summary>
       <div class="pg-section-body">
-        <div class="pg-row">
-          <div style="flex:1;min-width:0">
-            <div class="pg-lbl">Тест скорости</div>
-            <div class="pg-sub" id="speedTestResult">—</div>
-            <div class="speed-progress" id="speedProgress">
-              <div class="speed-track"><div class="speed-fill" id="speedProgressFill"></div></div>
-              <div class="speed-meta"><span id="speedProgressText">Подготовка</span><span id="speedProgressPct">0%</span></div>
+        <div class="diagnostics-actions">
+          <button class="pg-btn acc" id="connectionCheckBtn" onclick="runConnectionCheck()">Проверить соединение</button>
+          <button class="pg-btn acc" id="diagnoseBtn" onclick="runDiagnose()">Диагностика проблем</button>
+          <button class="pg-btn" onclick="downloadDiagnosticsPackage()">Скачать пакет</button>
+        </div>
+        <div class="diagnostics-status-grid">
+          <div><span>Соединение</span><b id="connectionCheckResult">—</b></div>
+          <div><span>Утечки</span><b id="leakCheckResult">—</b></div>
+          <div><span>Диагностика</span><b id="diagnoseResult">—</b></div>
+        </div>
+        <details class="diagnostics-advanced advanced-setting">
+          <summary>Advanced checks</summary>
+          <div class="pg-row">
+            <div style="flex:1;min-width:0">
+              <div class="pg-lbl">Тест скорости</div>
+              <div class="pg-sub" id="speedTestResult">—</div>
+              <div class="speed-progress" id="speedProgress">
+                <div class="speed-track"><div class="speed-fill" id="speedProgressFill"></div></div>
+                <div class="speed-meta"><span id="speedProgressText">Подготовка</span><span id="speedProgressPct">0%</span></div>
+              </div>
             </div>
+            <button class="pg-btn" id="speedTestBtn" onclick="runSpeedTest()">Тест</button>
           </div>
-          <button class="pg-btn" id="speedTestBtn" onclick="runSpeedTest()">Тест</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Проверка утечек</div><div class="pg-sub" id="leakCheckResult">—</div></div>
-          <button class="pg-btn" id="leakCheckBtn" onclick="runLeakCheck()">Проверить</button>
-          <button class="pg-btn" onclick="openWebRTCTest()">WebRTC</button>
-        </div>
-        <div class="pg-inp-row" style="margin-top:8px">
-          <input class="pg-inp" id="leakDomainInp" type="text" placeholder="dnsleak.example.com">
-          <input class="pg-inp" id="leakReportURLInp" type="url" placeholder="https://example.com/api/dnsleak/check">
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Итоговый трафик</div><div class="pg-sub" id="totalStatsResult">загрузка...</div></div>
-          <button class="pg-btn" onclick="loadTotalStats()">Обновить</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">События соединения</div><div class="pg-sub" id="connHistoryResult">загрузка...</div></div>
-          <button class="pg-btn" onclick="loadConnectionHistory()">Обновить</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Отчёты об ошибках</div><div class="pg-sub" id="crashReportsResult">загрузка...</div></div>
-          <button class="pg-btn" onclick="loadCrashReports()">Обновить</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Анализ правил</div><div class="pg-sub" id="ruleAnalysisResult">—</div></div>
-          <button class="pg-btn" onclick="runRuleAnalyze()">Анализ</button>
-          <button class="pg-btn" onclick="fixRuleAnalyze()">Исправить</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Диагностика подключения</div><div class="pg-sub" id="diagnoseResult">—</div></div>
-          <button class="pg-btn acc" id="diagnoseBtn" onclick="runDiagnose()">Diagnose</button>
-          <button class="pg-btn" onclick="openLogFolder()">Логи</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Проверка целостности</div><div class="pg-sub" id="integrityResult">—</div></div>
-          <button class="pg-btn" onclick="runIntegrityCheck()">Проверить</button>
-        </div>
-        <div class="pg-row">
-          <div><div class="pg-lbl">Диагностический пакет</div><div class="pg-sub">JSON без раскрытия содержимого secret.key</div></div>
-          <button class="pg-btn" onclick="downloadDiagnosticsPackage()">Скачать</button>
-        </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Проверка утечек</div><div class="pg-sub">DNS, IPv6 и WebRTC</div></div>
+            <button class="pg-btn" id="leakCheckBtn" onclick="runLeakCheck()">Проверить</button>
+            <button class="pg-btn" onclick="openWebRTCTest()">WebRTC</button>
+          </div>
+          <div class="pg-inp-row" style="margin-top:8px">
+            <input class="pg-inp" id="leakDomainInp" type="text" placeholder="dnsleak.example.com">
+            <input class="pg-inp" id="leakReportURLInp" type="url" placeholder="https://example.com/api/dnsleak/check">
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Проверка целостности</div><div class="pg-sub" id="integrityResult">—</div></div>
+            <button class="pg-btn" onclick="runIntegrityCheck()">Проверить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Итоговый трафик</div><div class="pg-sub" id="totalStatsResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadTotalStats()">Обновить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">События соединения</div><div class="pg-sub" id="connHistoryResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadConnectionHistory()">Обновить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Отчёты об ошибках</div><div class="pg-sub" id="crashReportsResult">загрузка...</div></div>
+            <button class="pg-btn" onclick="loadCrashReports()">Обновить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Анализ правил</div><div class="pg-sub" id="ruleAnalysisResult">—</div></div>
+            <button class="pg-btn" onclick="runRuleAnalyze()">Анализ</button>
+            <button class="pg-btn" onclick="fixRuleAnalyze()">Исправить</button>
+          </div>
+          <div class="pg-row">
+            <div><div class="pg-lbl">Папка логов</div><div class="pg-sub">Локальные файлы журнала и диагностики</div></div>
+            <button class="pg-btn" onclick="openLogFolder()">Открыть</button>
+          </div>
+        </details>
       </div>
     </details>
 
@@ -957,7 +1000,7 @@
           <div id="geositeList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">
             <div class="pg-sub" style="text-align:center;padding:8px">загрузка...</div>
           </div>
-          <button class="pg-btn" id="geoUpdateBtn" style="width:100%;justify-content:center;display:block;text-align:center" onclick="downloadGeosite()">Обновить базы Geosite</button>
+          <button class="pg-btn" id="geoUpdateBtn" style="width:100%;justify-content:center;display:block;text-align:center" onclick="downloadGeosite()">Обновить базы из правил</button>
         </div>
       </div>
     </details>
