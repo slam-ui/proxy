@@ -5,6 +5,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"proxyclient/internal/fileutil"
 )
@@ -23,7 +24,17 @@ var (
 	saveMu      sync.Mutex
 	sessionDown atomic.Int64
 	sessionUp   atomic.Int64
+
+	statsCacheMu sync.RWMutex
+	statsCache   cachedStats
 )
+
+type cachedStats struct {
+	stats   Stats
+	modTime time.Time
+	size    int64
+	loaded  bool
+}
 
 func AddSession(down, up int64) {
 	sessionDown.Add(down)
@@ -31,7 +42,7 @@ func AddSession(down, up int64) {
 }
 
 func Current() Stats {
-	s := load()
+	s := loadCached()
 	s.SessionDownloadBytes = sessionDown.Load()
 	s.SessionUploadBytes = sessionUp.Load()
 	return s
@@ -41,7 +52,7 @@ func SaveToFile() error {
 	saveMu.Lock()
 	defer saveMu.Unlock()
 
-	s := load()
+	s := loadCached()
 	down := sessionDown.Swap(0)
 	up := sessionUp.Swap(0)
 	s.TotalDownloadBytes += down
@@ -56,10 +67,26 @@ func SaveToFile() error {
 		sessionUp.Add(up)
 		return err
 	}
+	storeCache(s)
 	return nil
 }
 
-func load() Stats {
+func loadCached() Stats {
+	fi, err := os.Stat(statsFile)
+	if err != nil {
+		return Stats{}
+	}
+	modTime := fi.ModTime()
+	size := fi.Size()
+
+	statsCacheMu.RLock()
+	if statsCache.loaded && statsCache.modTime.Equal(modTime) && statsCache.size == size {
+		s := statsCache.stats
+		statsCacheMu.RUnlock()
+		return s
+	}
+	statsCacheMu.RUnlock()
+
 	data, err := os.ReadFile(statsFile)
 	if err != nil {
 		return Stats{}
@@ -68,5 +95,18 @@ func load() Stats {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return Stats{}
 	}
+	statsCacheMu.Lock()
+	statsCache = cachedStats{stats: s, modTime: modTime, size: size, loaded: true}
+	statsCacheMu.Unlock()
 	return s
+}
+
+func storeCache(s Stats) {
+	fi, err := os.Stat(statsFile)
+	if err != nil {
+		return
+	}
+	statsCacheMu.Lock()
+	statsCache = cachedStats{stats: s, modTime: fi.ModTime(), size: fi.Size(), loaded: true}
+	statsCacheMu.Unlock()
 }
