@@ -117,3 +117,48 @@ func TestFlushSendsPrivacySafePayload(t *testing.T) {
 		t.Fatalf("decoded payload=%+v", decoded)
 	}
 }
+
+func TestManagerFlushBuildsPayloadAndDrains(t *testing.T) {
+	var decoded Payload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&decoded); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	m := NewManager(ManagerConfig{
+		Client: Client{
+			Enabled:       true,
+			BaseURL:       srv.URL,
+			AnonymousPath: filepath.Join(t.TempDir(), "telemetry_id"),
+			HTTPClient:    srv.Client(),
+		},
+		ClientVersion: "1.2.3",
+		OSVersion:     "Windows 11",
+		Locale:        "en",
+		Now:           func() time.Time { return now },
+	})
+	m.Record(Event{Type: "connect_success", Protocol: "vless", Transport: "grpc"})
+	if err := m.Flush(t.Context()); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if m.Len() != 0 {
+		t.Fatalf("buffer len=%d, want 0", m.Len())
+	}
+	if decoded.ClientVersion != "1.2.3" || decoded.Locale != "en" {
+		t.Fatalf("payload metadata=%+v", decoded)
+	}
+	if len(decoded.Events) != 1 || decoded.Events[0].Timestamp.IsZero() {
+		t.Fatalf("payload events=%+v", decoded.Events)
+	}
+}
+
+func TestManagerOptOutDoesNotBuffer(t *testing.T) {
+	m := NewManager(ManagerConfig{Client: Client{Enabled: false}})
+	m.Record(Event{Type: "connect_success"})
+	if m.Len() != 0 {
+		t.Fatalf("opt-out manager buffered events: %d", m.Len())
+	}
+}

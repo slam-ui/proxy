@@ -92,6 +92,130 @@ type Client struct {
 	UserAgent     string
 }
 
+type Manager struct {
+	client        Client
+	buffer        *Buffer
+	clientVersion string
+	osVersion     string
+	locale        string
+	started       time.Time
+	now           func() time.Time
+}
+
+type ManagerConfig struct {
+	Client        Client
+	ClientVersion string
+	OSVersion     string
+	Locale        string
+	Capacity      int
+	Now           func() time.Time
+}
+
+func NewManager(cfg ManagerConfig) *Manager {
+	now := cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &Manager{
+		client:        cfg.Client,
+		buffer:        NewBuffer(cfg.Capacity),
+		clientVersion: cfg.ClientVersion,
+		osVersion:     cfg.OSVersion,
+		locale:        cfg.Locale,
+		started:       now(),
+		now:           now,
+	}
+}
+
+func (m *Manager) Record(event Event) {
+	if m == nil || !m.client.Enabled {
+		return
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = m.now().UTC()
+	}
+	shouldFlush := m.buffer.Add(event)
+	if shouldFlush {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			_ = m.Flush(ctx)
+		}()
+	}
+}
+
+func (m *Manager) Flush(ctx context.Context) error {
+	if m == nil || !m.client.Enabled {
+		return nil
+	}
+	events := m.buffer.Drain(MaxEventsPerBatch)
+	if len(events) == 0 {
+		return nil
+	}
+	anonymousID, err := m.client.EnsureAnonymousID()
+	if err != nil {
+		m.requeue(events)
+		return err
+	}
+	payload := Payload{
+		AnonymousID:          anonymousID,
+		ClientVersion:        m.clientVersion,
+		OSVersion:            m.osVersion,
+		Locale:               m.locale,
+		Events:               events,
+		SessionUptimeSeconds: int64(m.now().Sub(m.started).Seconds()),
+	}
+	if err := m.client.Flush(ctx, payload); err != nil {
+		m.requeue(events)
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) Start(ctx context.Context, interval time.Duration) {
+	if m == nil || !m.client.Enabled {
+		return
+	}
+	if interval <= 0 {
+		interval = 10 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = m.Flush(flushCtx)
+				cancel()
+				return
+			case <-ticker.C:
+				flushCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				_ = m.Flush(flushCtx)
+				cancel()
+			}
+		}
+	}()
+}
+
+func (m *Manager) Len() int {
+	if m == nil || m.buffer == nil {
+		return 0
+	}
+	return m.buffer.Len()
+}
+
+func (m *Manager) requeue(events []Event) {
+	for i := len(events) - 1; i >= 0; i-- {
+		m.buffer.mu.Lock()
+		m.buffer.events = append([]Event{events[i]}, m.buffer.events...)
+		if len(m.buffer.events) > m.buffer.capacity {
+			m.buffer.events = m.buffer.events[:m.buffer.capacity]
+		}
+		m.buffer.mu.Unlock()
+	}
+}
+
 func (c Client) EnsureAnonymousID() (string, error) {
 	if !c.Enabled {
 		return "", nil
