@@ -14,6 +14,9 @@ func TestLoadAppSettings_MissingFileUsesDefault(t *testing.T) {
 	if !settings.StartProxyOnLaunch {
 		t.Error("StartProxyOnLaunch default should be true")
 	}
+	if !settings.CloseToTray {
+		t.Error("CloseToTray default should be true")
+	}
 }
 
 func TestLoadAppSettings_EmptyJSONKeepsDefault(t *testing.T) {
@@ -28,11 +31,14 @@ func TestLoadAppSettings_EmptyJSONKeepsDefault(t *testing.T) {
 	if !settings.StartProxyOnLaunch {
 		t.Error("empty JSON should keep StartProxyOnLaunch default true")
 	}
+	if !settings.CloseToTray {
+		t.Error("empty JSON should keep CloseToTray default true")
+	}
 }
 
 func TestSaveAndLoadAppSettings_FalseValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data", "settings.json")
-	want := AppSettings{StartProxyOnLaunch: false}
+	want := AppSettings{StartProxyOnLaunch: false, CloseToTray: false}
 	if err := SaveAppSettings(path, want); err != nil {
 		t.Fatalf("SaveAppSettings returned error: %v", err)
 	}
@@ -42,6 +48,9 @@ func TestSaveAndLoadAppSettings_FalseValue(t *testing.T) {
 	}
 	if got.StartProxyOnLaunch {
 		t.Error("StartProxyOnLaunch should persist false")
+	}
+	if got.CloseToTray {
+		t.Error("CloseToTray should persist false")
 	}
 }
 

@@ -92,6 +92,7 @@ type Config struct {
 	SilentPaths   []string      // дополнительные пути, которые не нужно логировать
 
 	SecretKeyUpdatedFn func()
+	CloseToTrayFn      func(bool)
 }
 
 // Server HTTP API сервер

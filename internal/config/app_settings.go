@@ -13,6 +13,7 @@ const AppSettingsFile = DataDir + "/settings.json"
 
 type AppSettings struct {
 	StartProxyOnLaunch   bool                      `json:"start_proxy_on_launch"`
+	CloseToTray          bool                      `json:"close_to_tray"`
 	ReconnectIntervalMin int                       `json:"reconnect_interval_min"`
 	KeepaliveEnabled     bool                      `json:"keepalive_enabled"`
 	KeepaliveIntervalSec int                       `json:"keepalive_interval_sec"`
@@ -31,6 +32,7 @@ type AppSettings struct {
 func DefaultAppSettings() AppSettings {
 	return AppSettings{
 		StartProxyOnLaunch:   true,
+		CloseToTray:          true,
 		KeepaliveEnabled:     true,
 		KeepaliveIntervalSec: 120,
 		SmartFailover: SmartFailoverSettings{
@@ -160,6 +162,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 
 	var raw struct {
 		StartProxyOnLaunch   *bool                      `json:"start_proxy_on_launch"`
+		CloseToTray          *bool                      `json:"close_to_tray"`
 		ReconnectIntervalMin *int                       `json:"reconnect_interval_min"`
 		KeepaliveEnabled     *bool                      `json:"keepalive_enabled"`
 		KeepaliveIntervalSec *int                       `json:"keepalive_interval_sec"`
@@ -179,6 +182,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	}
 	if raw.StartProxyOnLaunch != nil {
 		settings.StartProxyOnLaunch = *raw.StartProxyOnLaunch
+	}
+	if raw.CloseToTray != nil {
+		settings.CloseToTray = *raw.CloseToTray
 	}
 	if raw.ReconnectIntervalMin != nil {
 		settings.ReconnectIntervalMin = *raw.ReconnectIntervalMin

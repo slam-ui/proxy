@@ -360,6 +360,7 @@ function applyLifecycleControls(d) {
   $id('dnsGuardToggle')?.classList.toggle('on', !!(_appSettingsCache.dns_guard && _appSettingsCache.dns_guard.enabled));
   $id('networkStrictToggle')?.classList.toggle('on', !!(_appSettingsCache.network_protection && _appSettingsCache.network_protection.strict_on_change));
   $id('trafficBudgetToggle')?.classList.toggle('on', !!(_appSettingsCache.traffic_budget && _appSettingsCache.traffic_budget.enabled));
+  $id('closeToTrayToggle')?.classList.toggle('on', _appSettingsCache.close_to_tray !== false);
   if ($id('keepaliveIntervalInp')) $id('keepaliveIntervalInp').value = _appSettingsCache.keepalive_interval_sec || 120;
   if ($id('reconnectIntervalInp')) $id('reconnectIntervalInp').value = _appSettingsCache.reconnect_interval_min || 0;
   if ($id('memoryLimitInp')) $id('memoryLimitInp').value = _appSettingsCache.memory_limit_mb || 0;
@@ -409,6 +410,7 @@ async function saveLifecycleSettings() {
     keepalive_enabled: !!$id('keepaliveToggle')?.classList.contains('on'),
     keepalive_interval_sec: Number($id('keepaliveIntervalInp')?.value || 120),
     reconnect_interval_min: Number($id('reconnectIntervalInp')?.value || 0),
+    close_to_tray: $id('closeToTrayToggle')?.classList.contains('on') !== false,
     memory_limit_mb: Number($id('memoryLimitInp')?.value || 0),
     manual_singbox_config: !!$id('manualConfigToggle')?.classList.contains('on'),
     smart_failover: {
@@ -648,6 +650,7 @@ function toggleLifecycleOption(key) {
   if (key === 'dns_guard') $id('dnsGuardToggle')?.classList.toggle('on');
   if (key === 'network_strict') $id('networkStrictToggle')?.classList.toggle('on');
   if (key === 'traffic_budget') $id('trafficBudgetToggle')?.classList.toggle('on');
+  if (key === 'close_to_tray') $id('closeToTrayToggle')?.classList.toggle('on');
   saveLifecycleSettings();
 }
 

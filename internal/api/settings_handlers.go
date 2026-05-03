@@ -77,6 +77,7 @@ func SetupSettingsRoutes(s *Server) {
 func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ReconnectIntervalMin *int                              `json:"reconnect_interval_min"`
+		CloseToTray          *bool                             `json:"close_to_tray"`
 		KeepaliveEnabled     *bool                             `json:"keepalive_enabled"`
 		KeepaliveIntervalSec *int                              `json:"keepalive_interval_sec"`
 		Schedule             *config.Schedule                  `json:"schedule"`
@@ -106,6 +107,9 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		settings.ReconnectIntervalMin = *body.ReconnectIntervalMin
+	}
+	if body.CloseToTray != nil {
+		settings.CloseToTray = *body.CloseToTray
 	}
 	if body.KeepaliveEnabled != nil {
 		settings.KeepaliveEnabled = *body.KeepaliveEnabled
@@ -165,6 +169,9 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	} else {
 		h.server.StopPeriodicReconnect()
 	}
+	if h.server.config.CloseToTrayFn != nil {
+		h.server.config.CloseToTrayFn(settings.CloseToTray)
+	}
 	h.server.respondJSON(w, http.StatusOK, settings)
 }
 
@@ -175,6 +182,7 @@ type SettingsResponse struct {
 	KillSwitchState      killswitch.State                 `json:"kill_switch_state"`     // persisted fail-close state
 	ProxyGuard           bool                             `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
 	StartProxyOnLaunch   bool                             `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
+	CloseToTray          bool                             `json:"close_to_tray"`         // закрытие окна сворачивает в трей вместо выхода
 	ReconnectIntervalMin int                              `json:"reconnect_interval_min"`
 	KeepaliveEnabled     bool                             `json:"keepalive_enabled"`
 	KeepaliveIntervalSec int                              `json:"keepalive_interval_sec"`
@@ -203,6 +211,7 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		KillSwitchState:      loadKillSwitchStateForResponse(h.server.logger),
 		ProxyGuard:           h.server.IsProxyGuardEnabled(),
 		StartProxyOnLaunch:   appSettings.StartProxyOnLaunch,
+		CloseToTray:          appSettings.CloseToTray,
 		ReconnectIntervalMin: appSettings.ReconnectIntervalMin,
 		KeepaliveEnabled:     appSettings.KeepaliveEnabled,
 		KeepaliveIntervalSec: appSettings.KeepaliveIntervalSec,

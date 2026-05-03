@@ -66,6 +66,47 @@ func TestHandleSetSettingsAcceptsHotkeys(t *testing.T) {
 	}
 }
 
+func TestHandleSetSettingsAcceptsCloseToTrayFalse(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"close_to_tray":false}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		CloseToTray bool `json:"close_to_tray"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.CloseToTray {
+		t.Fatal("close_to_tray should persist false")
+	}
+}
+
+func TestHandleSetSettingsInvokesCloseToTrayCallback(t *testing.T) {
+	h := newSettingsHandlers(t)
+	called := false
+	h.server.config.CloseToTrayFn = func(enabled bool) {
+		called = true
+		if enabled {
+			t.Fatal("callback enabled=true, want false")
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"close_to_tray":false}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	if !called {
+		t.Fatal("CloseToTrayFn was not called")
+	}
+}
+
 func TestHandleSetSettingsRejectsInvalidHotkey(t *testing.T) {
 	h := newSettingsHandlers(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/settings",

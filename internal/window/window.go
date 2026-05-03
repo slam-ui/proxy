@@ -20,6 +20,9 @@ var (
 	mu       sync.Mutex
 	instance webview2.WebView
 	opened   bool
+
+	closeToTrayMu sync.RWMutex
+	closeToTray   = true
 )
 
 var (
@@ -49,6 +52,7 @@ var (
 const (
 	swRestore          = 9
 	swShow             = 5
+	swHide             = 0
 	wmSetIcon          = 0x0080
 	iconBig            = 1
 	iconSmall          = 0
@@ -395,6 +399,18 @@ func BringToFront(url string) {
 	ignoreWin32Call(bringWindowToTopFn, rootHwnd)
 }
 
+func SetCloseToTray(enabled bool) {
+	closeToTrayMu.Lock()
+	closeToTray = enabled
+	closeToTrayMu.Unlock()
+}
+
+func CloseToTray() bool {
+	closeToTrayMu.RLock()
+	defer closeToTrayMu.RUnlock()
+	return closeToTray
+}
+
 // Open открывает окно с Web UI.
 func Open(url string) {
 	mu.Lock()
@@ -514,6 +530,10 @@ func Open(url string) {
 		_ = w.Bind("windowClose", func() {
 			if s, ok := readRect(rootHwnd); ok {
 				writeState(s)
+			}
+			if CloseToTray() {
+				ignoreWin32Call(showWindowProc, rootHwnd, swHide)
+				return
 			}
 			ignoreWin32Call(postMessageW, rootHwnd, wmClose, 0, 0)
 		})

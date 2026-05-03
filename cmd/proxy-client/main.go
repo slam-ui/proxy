@@ -315,6 +315,7 @@ func run(output io.Writer) error {
 		cfg.Schedule = appSettings.Schedule
 		cfg.MemoryLimitMB = appSettings.MemoryLimitMB
 	}
+	window.SetCloseToTray(appSettings.CloseToTray)
 	app := NewApp(cfg, output)
 
 	initDataDir(app.mainLogger)
@@ -406,6 +407,7 @@ func run(output io.Writer) error {
 		SecretKeyUpdatedFn: func() {
 			go app.refreshTrayServers(cfg.APIAddress)
 		},
+		CloseToTrayFn: window.SetCloseToTray,
 	}, app.lifecycleCtx)
 
 	// Собираем app rules.

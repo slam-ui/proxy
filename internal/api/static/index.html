@@ -739,6 +739,10 @@
           <div><div class="pg-lbl">Расписание</div><div class="pg-sub">Окно автоматического включения туннеля</div></div>
           <div class="rule-toggle" id="scheduleToggle" onclick="toggleLifecycleOption('schedule_enabled')" title="Включить расписание"></div>
         </div>
+        <div class="pg-row">
+          <div><div class="pg-lbl">Закрывать в трей</div><div class="pg-sub">Кнопка закрытия скрывает окно, клиент продолжает работать</div></div>
+          <div class="rule-toggle" id="closeToTrayToggle" onclick="toggleLifecycleOption('close_to_tray')" title="Закрывать окно в трей"></div>
+        </div>
         <div class="pg-inp-row" style="margin-top:8px">
           <input class="pg-inp" id="scheduleOnInp" type="time" value="09:00">
           <input class="pg-inp" id="scheduleOffInp" type="time" value="18:00">
