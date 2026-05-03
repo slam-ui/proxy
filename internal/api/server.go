@@ -124,6 +124,7 @@ type Server struct {
 	silentCache     map[string]bool
 	tunHandlers     *TunHandlers
 	serversHandlers *ServersHandlers
+	subscriptionsMu sync.RWMutex
 	subscriptions   *subscription.Manager
 	reconnectMu     sync.Mutex
 	reconnectCancel context.CancelFunc
@@ -324,18 +325,8 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 		s.serversHandlers = SetupServerRoutes(s, s.config.SecretKeyPath)
 		s.serversHandlers.StartHealthMonitor(ctx)
 		s.serversHandlers.StartSmartFailover(ctx)
-		if mgr, err := subscription.NewManager(subscription.Options{
-			Dir:          filepath.Join(config.DataDir, "subscriptions"),
-			Client:       newManagedSubscriptionHTTPClient(),
-			IsSupported:  isSupportedServerURI,
-			ApplyServers: s.serversHandlers.applySubscriptionServers,
-		}); err != nil {
-			s.logger.Warn("subscriptions disabled: %v", err)
-		} else {
-			s.subscriptions = mgr
-			SetupSubscriptionRoutes(s)
-			go mgr.Start(ctx)
-		}
+		SetupSubscriptionRoutes(s)
+		go s.startSubscriptions(ctx)
 	}
 
 	api := s.router.PathPrefix("/api").Subrouter()
@@ -366,6 +357,38 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/servers/health")
 	s.addSilentPath("/api/update/status")
 	s.addSilentPath("/api/subscriptions")
+}
+
+func (s *Server) startSubscriptions(ctx context.Context) {
+	mgr, err := subscription.NewManager(subscription.Options{
+		Dir:          filepath.Join(config.DataDir, "subscriptions"),
+		Client:       newManagedSubscriptionHTTPClient(),
+		IsSupported:  isSupportedServerURI,
+		ApplyServers: s.serversHandlers.applySubscriptionServers,
+	})
+	if err != nil {
+		s.logger.Warn("subscriptions disabled: %v", err)
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	s.setSubscriptionManager(mgr)
+	mgr.Start(ctx)
+}
+
+func (s *Server) setSubscriptionManager(mgr *subscription.Manager) {
+	s.subscriptionsMu.Lock()
+	defer s.subscriptionsMu.Unlock()
+	s.subscriptions = mgr
+}
+
+func (s *Server) subscriptionManager() *subscription.Manager {
+	s.subscriptionsMu.RLock()
+	defer s.subscriptionsMu.RUnlock()
+	return s.subscriptions
 }
 
 func apiDebugEnabled() bool {

@@ -144,3 +144,25 @@ func TestManagedSubscriptionHTTPClientRejectsHTTPRedirect(t *testing.T) {
 		t.Fatal("CheckRedirect accepted http redirect")
 	}
 }
+
+func TestSubscriptionListAvailableWhileManagerLoads(t *testing.T) {
+	srv := NewServer(Config{Logger: &logger.NoOpLogger{}}, context.Background())
+	SetupSubscriptionRoutes(srv)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/subscriptions", nil)
+	srv.router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/subscriptions = %d, body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Subscriptions []subscription.Subscription `json:"subscriptions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Subscriptions) != 0 {
+		t.Fatalf("subscriptions = %d, want 0", len(body.Subscriptions))
+	}
+}

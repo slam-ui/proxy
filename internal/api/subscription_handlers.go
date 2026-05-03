@@ -47,11 +47,12 @@ func SetupSubscriptionRoutes(s *Server) {
 }
 
 func (s *Server) handleSubscriptionsList(w http.ResponseWriter, _ *http.Request) {
-	if s.subscriptions == nil {
+	mgr := s.subscriptionManager()
+	if mgr == nil {
 		s.respondJSON(w, http.StatusOK, map[string]any{"subscriptions": []subscription.Subscription{}})
 		return
 	}
-	list := s.subscriptions.List()
+	list := mgr.List()
 	for _, sub := range list {
 		sub.URL = maskSubscriptionURL(sub.URL)
 	}
@@ -59,7 +60,8 @@ func (s *Server) handleSubscriptionsList(w http.ResponseWriter, _ *http.Request)
 }
 
 func (s *Server) handleSubscriptionsAdd(w http.ResponseWriter, r *http.Request) {
-	if s.subscriptions == nil {
+	mgr := s.subscriptionManager()
+	if mgr == nil {
 		s.respondError(w, http.StatusServiceUnavailable, "subscriptions are not available")
 		return
 	}
@@ -84,11 +86,11 @@ func (s *Server) handleSubscriptionsAdd(w http.ResponseWriter, r *http.Request) 
 		UpdateEvery: interval,
 		UserAgent:   strings.TrimSpace(req.UserAgent),
 	}
-	if err := s.subscriptions.Add(sub); err != nil {
+	if err := mgr.Add(sub); err != nil {
 		s.respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := s.subscriptions.UpdateNow(r.Context(), sub.ID)
+	result, err := mgr.UpdateNow(r.Context(), sub.ID)
 	if err != nil {
 		s.respondJSON(w, http.StatusAccepted, map[string]any{
 			"success":      false,
@@ -105,12 +107,13 @@ func (s *Server) handleSubscriptionsAdd(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request) {
-	if s.subscriptions == nil {
+	mgr := s.subscriptionManager()
+	if mgr == nil {
 		s.respondError(w, http.StatusServiceUnavailable, "subscriptions are not available")
 		return
 	}
 	id := mux.Vars(r)["id"]
-	result, err := s.subscriptions.UpdateNow(r.Context(), id)
+	result, err := mgr.UpdateNow(r.Context(), id)
 	if err != nil {
 		s.respondError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -119,12 +122,13 @@ func (s *Server) handleSubscriptionUpdate(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleSubscriptionRemove(w http.ResponseWriter, r *http.Request) {
-	if s.subscriptions == nil {
+	mgr := s.subscriptionManager()
+	if mgr == nil {
 		s.respondError(w, http.StatusServiceUnavailable, "subscriptions are not available")
 		return
 	}
 	id := mux.Vars(r)["id"]
-	if err := s.subscriptions.Remove(id); err != nil {
+	if err := mgr.Remove(id); err != nil {
 		s.respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
