@@ -16,6 +16,10 @@ bin/
 build/
 out/
 release/
+!build/
+build/*
+!build/installer/
+!build/installer/**
 
 # dist/ -- коммитим только README, всё остальное генерируется build.ps1
 dist/
