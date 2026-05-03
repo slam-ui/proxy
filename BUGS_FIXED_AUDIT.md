@@ -1,7 +1,7 @@
 # Bug audit fix log
 
 ## TL;DR
-- Fixed: 29 (Critical: 0, High: 8, Medium: 20, Low: 1)
+- Fixed: 30 (Critical: 0, High: 8, Medium: 21, Low: 1)
 - Audit confirmations: 3 (F-050..F-052, not counted as fixes)
 - Skipped (in BUG_REVIEW_NEEDED.md): 1; additional endpoint/lint review items tracked separately.
 - Tools delta: build/race/vet/staticcheck unchanged green; gosec improved from 291 to 128 findings; golangci-lint clean; govulncheck clean with Go 1.26.2.
@@ -567,6 +567,17 @@ Summary:
 - **Fix:** Check `win32hwnd` while holding `win32mu`; if the tray window is gone, do not update global icon state and destroy the transient owned icon immediately.
 - **Test:** existing tray package tests
 - **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/tray/... -count=1 -race -timeout=180s`
+
+### [F-054] Benign DNS cancellations created warning bursts
+- **Severity:** Medium
+- **Category:** I
+- **File(s):** internal/anomalylog/detector.go:221, internal/anomalylog/detector_test.go:181
+- **Commit:** 00e37ad
+- **Symptom:** Routine sing-box DNS cancellation warnings could create `_warn_burst` anomaly files.
+- **Root cause:** Warn burst detection counted every warning after crash classification, including normal DNS cancellations during shutdown or connection changes.
+- **Fix:** Skip benign DNS `context canceled`, closed-pipe, and `ClientConn.Close` warnings before updating the burst counter.
+- **Test:** `TestDetector_BenignDNSWarningsDoNotCreateBurst`
+- **Verified:** `go build ./...`, `GOOS=linux go build ./...`, `go test ./internal/anomalylog/... -count=1 -race -timeout=180s`
 
 ## Audit confirmations
 
