@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="SafeSky"
+    Manufacturer="SafeSky"
+    Version="$(var.Version)"
+    UpgradeCode="{A4BA58D5-6EB5-4A33-9E76-64C1EAA9C2E8}"
+    Scope="perUser">
+
+    <SummaryInformation Description="SafeSky Windows proxy client" Manufacturer="SafeSky" />
+    <MajorUpgrade DowngradeErrorMessage="A newer SafeSky version is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="AppIcon" SourceFile="$(var.SourceDir)\app_icon.ico" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="InstallRoot" Name="SafeSky">
+        <Directory Id="INSTALLFOLDER" Name="SafeSky" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="SafeSky" />
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="SafeSky" Level="1">
+      <ComponentGroupRef Id="SafeSkyComponents" />
+    </Feature>
+
+    <ComponentGroup Id="SafeSkyComponents" Directory="INSTALLFOLDER">
+      <Component Id="MainExecutable" Guid="{1893C3F4-8ED3-4416-9A61-010B97A2E6B7}">
+        <File Id="SafeSkyExe" Source="$(var.SourceDir)\SafeSky.exe" KeyPath="yes">
+          <Shortcut
+            Id="StartMenuShortcut"
+            Directory="ApplicationProgramsFolder"
+            Name="SafeSky"
+            Description="SafeSky proxy client"
+            WorkingDirectory="INSTALLFOLDER"
+            Icon="AppIcon"
+            Advertise="true" />
+        </File>
+      </Component>
+
+      <Component Id="UpdaterExecutable" Guid="{3DF08A1A-7351-4A7E-9D2B-CB4D9737944B}">
+        <File Id="ProxyUpdaterExe" Source="$(var.SourceDir)\proxy-updater.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="RuntimeBinaries" Guid="{C28E3792-22BF-4854-956C-19E48A6735BF}">
+        <File Id="SingBoxExe" Source="$(var.SourceDir)\sing-box.exe" KeyPath="yes" />
+        <File Id="WintunDll" Source="$(var.SourceDir)\wintun.dll" />
+      </Component>
+
+      <Component Id="ReadmeFile" Guid="{31C1B946-E715-4EF9-823C-3287B704C4EA}">
+        <File Id="ReadmeTxt" Source="$(var.SourceDir)\README.txt" KeyPath="yes" />
+      </Component>
+
+      <Component Id="DefaultData" Guid="{AE84D883-73CC-4732-BB1F-176CC2489849}">
+        <CreateFolder />
+        <RegistryValue Root="HKCU" Key="Software\SafeSky" Name="InstallDir" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>
