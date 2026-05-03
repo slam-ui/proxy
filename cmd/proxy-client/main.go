@@ -78,6 +78,7 @@ var (
 const (
 	logFile         = "safesky.log" // FIX 34: переименован с proxy-client.log
 	shutdownTimeout = 10 * time.Second
+	defaultGOGC     = 75
 
 	dpiAwarenessContextPerMonitorAwareV2 = ^uintptr(3) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 	processPerMonitorDPIAware            = uintptr(2)  // PROCESS_PER_MONITOR_DPI_AWARE
@@ -137,6 +138,7 @@ func configureDPIAwareness() {
 }
 
 func main() {
+	configureRuntimeTuning()
 	configureDPIAwareness()
 
 	if exe, err := os.Executable(); err == nil {
@@ -228,6 +230,19 @@ func main() {
 		}
 		log.Fatalf("Приложение завершилось с ошибкой: %v", err)
 	}
+}
+
+func configureRuntimeTuning() {
+	if percent, ok := defaultGCPercent(os.Getenv); ok {
+		debug.SetGCPercent(percent)
+	}
+}
+
+func defaultGCPercent(getenv func(string) string) (int, bool) {
+	if strings.TrimSpace(getenv("GOGC")) != "" {
+		return 0, false
+	}
+	return defaultGOGC, true
 }
 
 // preflightCheck проверяет что ни один из критичных портов не занят.
