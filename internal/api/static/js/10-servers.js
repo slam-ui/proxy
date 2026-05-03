@@ -355,8 +355,12 @@ async function showLatencyHistory(e, id) {
   }
 }
 
+let _pingAllRunning = false;
 async function pingAll() {
-  $id('pingSpin').classList.add('vis');
+  if (_pingAllRunning) return;
+  _pingAllRunning = true;
+  const spin = $id('pingSpin');
+  spin?.classList.add('vis');
   try {
     const r = await fetch(API + '/servers/ping-all');
     if (!r.ok) throw new Error(r.status);
@@ -366,7 +370,8 @@ async function pingAll() {
     renderServerList();
     updateServerPill();
   } catch (_) { /* ignore */ } finally {
-    $id('pingSpin').classList.remove('vis');
+    spin?.classList.remove('vis');
+    _pingAllRunning = false;
   }
 }
 

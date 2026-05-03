@@ -134,7 +134,6 @@
   <div class="home-upper">
   <div class="hero layer">
     <div class="hero-info">
-      <div class="hero-eyebrow">Туннель SafeSky</div>
       <div class="hero-status-row">
         <button class="orb-stage off" id="orbStage" type="button" onclick="toggle()" aria-label="Включить или отключить туннель">
           <div class="orb">
@@ -159,13 +158,13 @@
       <div class="srv-meta" id="srvMeta">
         <span class="srv-meta-item"><span id="srvMetaPing">—</span></span>
         <span class="srv-meta-item" id="srvMetaMode">—</span>
-        <span class="srv-meta-item" id="srvMetaTraf">↑ — ↓ —</span>
+        <span class="srv-meta-item" id="srvMetaLocation">—</span>
       </div>
     </div>
   </div>
 
   <div class="quick-actions layer">
-    <button class="quick-action wide" onclick="toggle()">
+    <button class="quick-action quick-primary wide" onclick="toggle()">
       <span class="quick-icon">
         <svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a8 8 0 1 1-12.8 0"/></svg>
       </span>
@@ -180,7 +179,7 @@
       </span>
       <span class="quick-copy">
         <span>Серверы</span>
-        <small>выбор и задержка</small>
+        <small>выбор узла</small>
       </span>
     </button>
     <button class="quick-action" onclick="navTo(1)">
@@ -188,8 +187,8 @@
         <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z"/><path d="M9 12h6"/></svg>
       </span>
       <span class="quick-copy">
-        <span>Маршруты</span>
-        <small>proxy/direct/block</small>
+        <span>Правила</span>
+        <small>маршруты трафика</small>
       </span>
     </button>
     <button class="quick-action" onclick="runDiag()">
@@ -198,7 +197,7 @@
       </span>
       <span class="quick-copy">
         <span>Диагностика</span>
-        <small>IP и задержка</small>
+        <small>проверка защиты</small>
       </span>
     </button>
   </div>
@@ -209,12 +208,12 @@
       <div class="chart-ttl">Трафик</div>
       <div class="chart-nums">
         <div class="cn-item">
-          <span class="cn-dir">↑</span>
+          <span class="cn-dir">Отдача</span>
           <span class="cn-val u" id="upv">0.0</span>
           <span class="cn-unit" id="upUnit">MB/s</span>
         </div>
         <div class="cn-item">
-          <span class="cn-dir">↓</span>
+          <span class="cn-dir">Загрузка</span>
           <span class="cn-val d" id="dnv">0.0</span>
           <span class="cn-unit" id="dnUnit">MB/s</span>
         </div>
@@ -227,6 +226,32 @@
   </div><!-- /home-upper -->
 
   <div class="home-sheet">
+  <!-- ── Security status ── -->
+  <div class="security-card layer">
+    <div class="security-head">
+      <div class="security-title">Защита</div>
+      <button class="pg-btn security-refresh" onclick="pollSecurityStatus(true)">↻</button>
+    </div>
+    <div class="security-list">
+      <button class="security-row" onclick="navTo(0)" id="secTunnelRow">
+        <span class="security-mark wait" id="secTunnelMark">⏳</span>
+        <span class="security-copy"><b id="secTunnelTitle">Проверяем туннель</b><small id="secTunnelSub">—</small></span>
+      </button>
+      <button class="security-row" onclick="openSecurityTarget('dns')" id="secDNSRow">
+        <span class="security-mark wait" id="secDNSMark">⏳</span>
+        <span class="security-copy"><b id="secDNSTitle">Проверяем DNS защиту</b><small id="secDNSSub">—</small></span>
+      </button>
+      <button class="security-row" onclick="openSecurityTarget('kill')" id="secKillRow">
+        <span class="security-mark wait" id="secKillMark">⏳</span>
+        <span class="security-copy"><b id="secKillTitle">Проверяем kill switch</b><small id="secKillSub">—</small></span>
+      </button>
+      <button class="security-row" onclick="openSecurityTarget('backup')" id="secBackupRow">
+        <span class="security-mark wait" id="secBackupMark">⏳</span>
+        <span class="security-copy"><b id="secBackupTitle">Проверяем резервный сервер</b><small id="secBackupSub">—</small></span>
+      </button>
+    </div>
+  </div>
+
   <!-- ── Stats ── -->
   <div class="stats layer">
     <div class="stat">
@@ -246,30 +271,6 @@
     </div>
   </div>
 
-  <!-- ── Connections ── -->
-  <div class="conn-card layer">
-    <div class="conn-hd">
-      <div class="conn-ttl">Активные соединения</div>
-      <button class="pg-btn" id="reconnectBtn" style="display:none;font-size:8px;padding:3px 8px" onclick="toggle()">↻ Включить</button>
-      <div class="conn-cnt" id="ccnt">0</div>
-    </div>
-    <div class="conn-col-hd" id="connColHd">
-      <div></div>
-      <div></div>
-      <div class="conn-col-hd-cell">Процесс</div>
-      <div class="conn-col-hd-cell">Хост</div>
-      <div class="conn-col-hd-cell" style="text-align:right">Маршрут</div>
-      <div id="exeColHandle" class="col-resize-handle" title="Тянуть — изменить ширину · Двойной клик — авто"></div>
-    </div>
-    <div class="conn-filters">
-      <button class="cf-btn active"  id="cfAll"  onclick="setConnFilter('all')">Все</button>
-      <button class="cf-btn"         id="cfUser" onclick="setConnFilter('user')">Пользовательские</button>
-      <button class="cf-btn"         id="cfSys"  onclick="setConnFilter('sys')">Системные</button>
-    </div>
-    <div class="conn-list" id="connList">
-      <div class="conn-empty">нет соединений</div>
-    </div>
-  </div>
   </div><!-- /home-sheet -->
   </div><!-- /page0 -->
 
@@ -431,6 +432,12 @@
     </div>
     <div class="subpage-sheet">
       <div class="pg-section proc-page" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+      <div class="proc-subtabs">
+        <button class="seg-btn active" id="procTabApps" onclick="setProcessSubtab('apps')">Все процессы</button>
+        <button class="seg-btn" id="procTabProxy" onclick="setProcessSubtab('proxy')">Через прокси</button>
+        <button class="seg-btn" id="procTabConnections" onclick="setProcessSubtab('connections')">Активные соединения</button>
+      </div>
+      <div id="procAppsPanel" class="proc-panel">
       <div class="pg-section-ttl proc-title">
         <span>Процессы и правила</span>
         <span class="proc-title-note">сопоставление с TUN-маршрутизацией</span>
@@ -442,6 +449,32 @@
       <div class="proc-scroll">
         <div class="proc-list" id="procList">
           <div class="rules-empty">загрузка процессов...</div>
+        </div>
+      </div>
+      </div>
+      <div id="procConnectionsPanel" class="proc-panel" style="display:none">
+        <div class="conn-card layer proc-conn-card">
+          <div class="conn-hd">
+            <div class="conn-ttl">Активные соединения</div>
+            <button class="pg-btn" id="reconnectBtn" style="display:none;font-size:8px;padding:3px 8px" onclick="toggle()">↻ Включить</button>
+            <div class="conn-cnt" id="ccnt">0</div>
+          </div>
+          <div class="conn-col-hd" id="connColHd">
+            <div></div>
+            <div></div>
+            <div class="conn-col-hd-cell">Процесс</div>
+            <div class="conn-col-hd-cell">Хост</div>
+            <div class="conn-col-hd-cell" style="text-align:right">Маршрут</div>
+            <div id="exeColHandle" class="col-resize-handle" title="Тянуть — изменить ширину · Двойной клик — авто"></div>
+          </div>
+          <div class="conn-filters">
+            <button class="cf-btn active"  id="cfAll"  onclick="setConnFilter('all')">Все</button>
+            <button class="cf-btn"         id="cfUser" onclick="setConnFilter('user')">Пользовательские</button>
+            <button class="cf-btn"         id="cfSys"  onclick="setConnFilter('sys')">Системные</button>
+          </div>
+          <div class="conn-list" id="connList">
+            <div class="conn-empty">нет соединений</div>
+          </div>
         </div>
       </div>
     </div>

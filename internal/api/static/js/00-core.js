@@ -285,7 +285,7 @@ function renderState() {
   if (qaToggleLabel) {
     qaToggleLabel.textContent = pending || warming
       ? 'Подключение...'
-      : isOn ? 'Отключить туннель' : 'Подключить туннель';
+      : isOn ? 'Отключить' : 'Подключить';
   }
   if (qaState) {
     qaState.textContent = pending || warming

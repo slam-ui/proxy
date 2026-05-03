@@ -334,6 +334,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	api.HandleFunc("/geosite/download", s.handleGeositeDownload).Methods("POST", "OPTIONS")
 	api.HandleFunc("/singbox-config", s.handleGetSingBoxConfig).Methods("GET", "OPTIONS")
 	api.HandleFunc("/singbox-config", s.handleSetSingBoxConfig).Methods("POST", "OPTIONS")
+	api.HandleFunc("/security/status", s.handleSecurityStatus).Methods("GET", "OPTIONS")
 	// B-8: Backup и restore endpoints
 	api.HandleFunc("/backup", s.handleBackup).Methods("GET", "OPTIONS")
 	api.HandleFunc("/backup/restore", s.handleBackupRestore).Methods("POST", "OPTIONS")
@@ -351,6 +352,7 @@ func (s *Server) SetupFeatureRoutes(ctx context.Context) {
 	s.addSilentPath("/api/connections/history")
 	s.addSilentPath("/api/connections/inspect")
 	s.addSilentPath("/api/security/dns-guard/check")
+	s.addSilentPath("/api/security/status")
 	s.addSilentPath("/api/security/network")
 	s.addSilentPath("/api/security/traffic-budget")
 	s.addSilentPath("/api/servers/failover")

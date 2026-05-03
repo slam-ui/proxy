@@ -963,6 +963,24 @@ async function deleteProfile(name) {
 // PROCESSES PAGE  →  /api/apps/processes
 // ═══════════════════════════════════════════════════
 let _processRulesLoadPromise = null;
+let _processSubtab = 'apps';
+
+function setProcessSubtab(tab) {
+  _processSubtab = tab === 'connections' ? 'connections' : tab === 'proxy' ? 'proxy' : 'apps';
+  $id('procTabApps')?.classList.toggle('active', _processSubtab === 'apps');
+  $id('procTabProxy')?.classList.toggle('active', _processSubtab === 'proxy');
+  $id('procTabConnections')?.classList.toggle('active', _processSubtab === 'connections');
+  const apps = $id('procAppsPanel');
+  const conns = $id('procConnectionsPanel');
+  if (apps) apps.style.display = _processSubtab === 'connections' ? 'none' : 'flex';
+  if (conns) conns.style.display = _processSubtab === 'connections' ? 'flex' : 'none';
+  if (_processSubtab === 'connections') {
+    pollConnections?.();
+    setTimeout(autoFitExeColumn, 60);
+    return;
+  }
+  loadProcs();
+}
 
 async function ensureProcessRulesLoaded() {
   if (Array.isArray(_allRules) && _allRules.length) return;
@@ -1118,7 +1136,7 @@ async function loadProcs() {
 
     const makeGroups = () => ({ proxy: [], direct: [], block: [], unknown: [] });
     const buckets = { USER: makeGroups(), SYS: makeGroups() };
-    const rows = uniqueProcs.map((p, idx) => {
+    let rows = uniqueProcs.map((p, idx) => {
       const nm = basename(p.path || p.executable || p.name || '');
       const fullPath = p.executable || p.path || '';
       const matchedRule = matchProcessTunRule(p);
@@ -1126,6 +1144,9 @@ async function loadProcs() {
       const hay = [nm, fullPath, p.name || '', matchedRule?.value || '', mode].join(' ').toLowerCase();
       return { p, idx, nm, fullPath, matchedRule, mode, hay, system: isSystemProc(nm || p.name || p.executable) };
     }).filter(row => !filterVal || row.hay.includes(filterVal));
+    if (_processSubtab === 'proxy') {
+      rows = rows.filter(row => row.mode === 'proxy');
+    }
 
     const groupedRows = groupProcessRows(rows);
 

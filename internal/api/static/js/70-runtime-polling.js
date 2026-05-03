@@ -25,6 +25,7 @@ async function pollStatus() {
     state.proxyMode = addr ? (addr.includes('1080') ? 'PROXY' : 'TUN') : 'TUN';
     renderState();
     _updateSrvMeta();
+    pollSecurityStatus();
 
     // OpTimer: warming / restarting — показываем обратный отсчёт
     const healthStatus = d.xray?.health_status || '';
@@ -96,22 +97,104 @@ function _updateSrvMeta() {
       pingEl.className = 'srv-meta-ping ' + (pingMs < 80 ? 'fast' : pingMs < 200 ? 'ok' : 'slow');
     }
   }
-  // Аптайм / режим
+  // Режим
   const modeEl = $id('srvMetaMode');
   if (modeEl) {
-    const uptimeSec = state.uptimeSec || 0;
-    modeEl.textContent = uptimeSec > 0
-      ? (uptimeSec < 60 ? uptimeSec + 'с' : Math.floor(uptimeSec/60) + 'м ' + (uptimeSec%60) + 'с')
-      : 'TUN';
+    modeEl.textContent = state.proxyMode || 'TUN';
+  }
+  const locEl = $id('srvMetaLocation');
+  if (locEl) {
+    locEl.textContent = srv ? serverDisplayName(srv) : 'Нет сервера';
   }
 }
 
 function _updateSrvMetaFromStats(d) {
-  const el = $id('srvMetaTraf');
-  if (!el) return;
-  const up = fmtBytes(d.sess_up_bytes || 0);
-  const dn = fmtBytes(d.sess_dn_bytes || 0);
-  el.textContent = '↑ ' + up + '  ↓ ' + dn;
+  void d;
+}
+
+let _securityStatusRunning = false;
+let _securityStatusLastFetch = 0;
+
+async function pollSecurityStatus(force = false) {
+  const now = Date.now();
+  if (_securityStatusRunning || (!force && now - _securityStatusLastFetch < 10000)) return;
+  _securityStatusRunning = true;
+  try {
+    const r = await fetch(API + '/security/status');
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    _securityStatusLastFetch = now;
+    renderSecurityStatus(d);
+  } catch (_) {
+    renderSecurityStatus(null);
+  } finally {
+    _securityStatusRunning = false;
+  }
+}
+
+function _setSecurityRow(key, level, mark, title, sub) {
+  const row = $id('sec' + key + 'Row');
+  const markEl = $id('sec' + key + 'Mark');
+  const titleEl = $id('sec' + key + 'Title');
+  const subEl = $id('sec' + key + 'Sub');
+  if (row) row.className = 'security-row ' + level;
+  if (markEl) {
+    markEl.className = 'security-mark ' + level;
+    markEl.textContent = mark;
+  }
+  if (titleEl) titleEl.textContent = title;
+  if (subEl) subEl.textContent = sub || '';
+}
+
+function renderSecurityStatus(d) {
+  if (!d) {
+    _setSecurityRow('Tunnel', 'wait', '⏳', 'Статус защиты недоступен', 'нет ответа API');
+    _setSecurityRow('DNS', 'wait', '⏳', 'DNS защита', 'статус будет обновлён позже');
+    _setSecurityRow('Kill', 'wait', '⏳', 'Kill switch', 'статус будет обновлён позже');
+    _setSecurityRow('Backup', 'wait', '⏳', 'Резервный сервер', 'статус будет обновлён позже');
+    return;
+  }
+  const tunnelOn = !!(d.tunnel && d.tunnel.active);
+  _setSecurityRow('Tunnel', tunnelOn ? 'ok' : 'bad', tunnelOn ? '✓' : '✕',
+    tunnelOn ? 'Туннель активен' : 'Туннель отключён',
+    tunnelOn ? 'маршрут защищён' : 'нажмите Подключить');
+
+  const dnsOn = !!(d.dns_guard && d.dns_guard.enabled);
+  const dnsMode = (d.dns_guard && d.dns_guard.mode) || 'warn';
+  _setSecurityRow('DNS', dnsOn ? 'ok' : 'warn', dnsOn ? '✓' : '⚠',
+    dnsOn ? 'DNS защита включена' : 'DNS защита выключена',
+    dnsOn ? (dnsMode === 'strict' ? 'строгий режим' : 'режим предупреждений') : 'включается в настройках');
+
+  const killOn = !!(d.kill_switch && d.kill_switch.enabled);
+  _setSecurityRow('Kill', killOn ? 'ok' : 'warn', killOn ? '✓' : '⚠',
+    killOn ? 'Kill switch включён' : 'Kill switch выключен',
+    killOn ? 'fail-close защита активна' : 'можно включить в настройках');
+
+  const count = d.backup_server && Number.isFinite(Number(d.backup_server.count)) ? Number(d.backup_server.count) : 0;
+  const backup = !!(d.backup_server && d.backup_server.available);
+  _setSecurityRow('Backup', backup ? 'ok' : 'warn', backup ? '✓' : '⚠',
+    backup ? 'Резервный сервер есть' : 'Нет резервного сервера',
+    count ? `${count} сервер(а) в списке` : 'добавьте второй сервер');
+}
+
+function openSecurityTarget(target) {
+  if (target === 'dns') {
+    navTo(4);
+    setTimeout(() => {
+      const section = $id('leakCheckBtn')?.closest('details');
+      if (section) section.open = true;
+      $id('leakCheckBtn')?.focus();
+    }, 80);
+    return;
+  }
+  if (target === 'kill') {
+    navTo(4);
+    setTimeout(() => $id('dnsGuardToggle')?.closest('details')?.scrollIntoView({ block: 'center' }), 80);
+    return;
+  }
+  if (target === 'backup') {
+    toggleSrv();
+  }
 }
 
 // ═══════════════════════════════════════════════════
