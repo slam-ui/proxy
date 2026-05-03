@@ -57,6 +57,13 @@ func NormalizeLocale(locale Locale) Locale {
 	return LocaleEN
 }
 
+func EffectiveLocale(setting string) Locale {
+	if strings.EqualFold(strings.TrimSpace(setting), "system") || strings.TrimSpace(setting) == "" {
+		return SystemLocale()
+	}
+	return NormalizeLocale(Locale(setting))
+}
+
 func (t *Translator) T(key string, args ...any) string {
 	if t == nil {
 		return key

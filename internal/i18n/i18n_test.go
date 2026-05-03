@@ -24,6 +24,15 @@ func TestNormalizeLocale(t *testing.T) {
 	}
 }
 
+func TestEffectiveLocale(t *testing.T) {
+	if EffectiveLocale("ru") != LocaleRU {
+		t.Fatal("ru should be effective ru")
+	}
+	if EffectiveLocale("en") != LocaleEN {
+		t.Fatal("en should be effective en")
+	}
+}
+
 func TestPlural(t *testing.T) {
 	if Plural(LocaleRU, "one", "few", "many", 1) != "one" {
 		t.Fatal("ru 1 should use one")

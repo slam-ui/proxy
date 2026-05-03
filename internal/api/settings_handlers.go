@@ -12,6 +12,7 @@ import (
 	"proxyclient/internal/autorun"
 	"proxyclient/internal/config"
 	"proxyclient/internal/hotkeys"
+	"proxyclient/internal/i18n"
 	"proxyclient/internal/killswitch"
 	"proxyclient/internal/logger"
 )
@@ -78,6 +79,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	var body struct {
 		ReconnectIntervalMin *int                              `json:"reconnect_interval_min"`
 		CloseToTray          *bool                             `json:"close_to_tray"`
+		Language             *string                           `json:"language"`
 		KeepaliveEnabled     *bool                             `json:"keepalive_enabled"`
 		KeepaliveIntervalSec *int                              `json:"keepalive_interval_sec"`
 		Schedule             *config.Schedule                  `json:"schedule"`
@@ -110,6 +112,15 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	}
 	if body.CloseToTray != nil {
 		settings.CloseToTray = *body.CloseToTray
+	}
+	if body.Language != nil {
+		switch *body.Language {
+		case "ru", "en", "system":
+			settings.Language = *body.Language
+		default:
+			h.server.respondError(w, http.StatusBadRequest, "language: ru | en | system")
+			return
+		}
 	}
 	if body.KeepaliveEnabled != nil {
 		settings.KeepaliveEnabled = *body.KeepaliveEnabled
@@ -193,6 +204,8 @@ type SettingsResponse struct {
 	ProxyGuard           bool                             `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
 	StartProxyOnLaunch   bool                             `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
 	CloseToTray          bool                             `json:"close_to_tray"`         // закрытие окна сворачивает в трей вместо выхода
+	Language             string                           `json:"language"`
+	EffectiveLanguage    i18n.Locale                      `json:"effective_language"`
 	ReconnectIntervalMin int                              `json:"reconnect_interval_min"`
 	KeepaliveEnabled     bool                             `json:"keepalive_enabled"`
 	KeepaliveIntervalSec int                              `json:"keepalive_interval_sec"`
@@ -223,6 +236,8 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		ProxyGuard:           h.server.IsProxyGuardEnabled(),
 		StartProxyOnLaunch:   appSettings.StartProxyOnLaunch,
 		CloseToTray:          appSettings.CloseToTray,
+		Language:             appSettings.Language,
+		EffectiveLanguage:    i18n.EffectiveLocale(appSettings.Language),
 		ReconnectIntervalMin: appSettings.ReconnectIntervalMin,
 		KeepaliveEnabled:     appSettings.KeepaliveEnabled,
 		KeepaliveIntervalSec: appSettings.KeepaliveIntervalSec,

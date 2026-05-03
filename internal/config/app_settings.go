@@ -14,6 +14,7 @@ const AppSettingsFile = DataDir + "/settings.json"
 type AppSettings struct {
 	StartProxyOnLaunch   bool                      `json:"start_proxy_on_launch"`
 	CloseToTray          bool                      `json:"close_to_tray"`
+	Language             string                    `json:"language"`
 	ReconnectIntervalMin int                       `json:"reconnect_interval_min"`
 	KeepaliveEnabled     bool                      `json:"keepalive_enabled"`
 	KeepaliveIntervalSec int                       `json:"keepalive_interval_sec"`
@@ -33,6 +34,7 @@ func DefaultAppSettings() AppSettings {
 	return AppSettings{
 		StartProxyOnLaunch:   true,
 		CloseToTray:          true,
+		Language:             "system",
 		KeepaliveEnabled:     true,
 		KeepaliveIntervalSec: 120,
 		SmartFailover: SmartFailoverSettings{
@@ -163,6 +165,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	var raw struct {
 		StartProxyOnLaunch   *bool                      `json:"start_proxy_on_launch"`
 		CloseToTray          *bool                      `json:"close_to_tray"`
+		Language             *string                    `json:"language"`
 		ReconnectIntervalMin *int                       `json:"reconnect_interval_min"`
 		KeepaliveEnabled     *bool                      `json:"keepalive_enabled"`
 		KeepaliveIntervalSec *int                       `json:"keepalive_interval_sec"`
@@ -185,6 +188,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	}
 	if raw.CloseToTray != nil {
 		settings.CloseToTray = *raw.CloseToTray
+	}
+	if raw.Language != nil {
+		settings.Language = *raw.Language
 	}
 	if raw.ReconnectIntervalMin != nil {
 		settings.ReconnectIntervalMin = *raw.ReconnectIntervalMin
@@ -256,6 +262,11 @@ func normalizeAppSettings(settings *AppSettings) {
 	}
 	if settings.Updates.Channel != "beta" {
 		settings.Updates.Channel = "stable"
+	}
+	switch settings.Language {
+	case "ru", "en", "system":
+	default:
+		settings.Language = "system"
 	}
 	if settings.Updates.BaseURL == "" {
 		settings.Updates.BaseURL = "https://example.com/safesky"

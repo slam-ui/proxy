@@ -88,6 +88,37 @@ func TestHandleSetSettingsAcceptsCloseToTrayFalse(t *testing.T) {
 	}
 }
 
+func TestHandleSetSettingsAcceptsLanguage(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"language":"en"}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Language string `json:"language"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Language != "en" {
+		t.Fatalf("language=%q, want en", resp.Language)
+	}
+}
+
+func TestHandleSetSettingsRejectsInvalidLanguage(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"language":"de"}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleSetSettingsInvokesCloseToTrayCallback(t *testing.T) {
 	h := newSettingsHandlers(t)
 	called := false

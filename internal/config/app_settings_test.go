@@ -17,6 +17,25 @@ func TestLoadAppSettings_MissingFileUsesDefault(t *testing.T) {
 	if !settings.CloseToTray {
 		t.Error("CloseToTray default should be true")
 	}
+	if settings.Language != "system" {
+		t.Fatalf("Language=%q, want system", settings.Language)
+	}
+}
+
+func TestSaveAppSettings_NormalizesLanguage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data", "settings.json")
+	settings := DefaultAppSettings()
+	settings.Language = "de"
+	if err := SaveAppSettings(path, settings); err != nil {
+		t.Fatalf("SaveAppSettings returned error: %v", err)
+	}
+	got, err := LoadAppSettings(path)
+	if err != nil {
+		t.Fatalf("LoadAppSettings returned error: %v", err)
+	}
+	if got.Language != "system" {
+		t.Fatalf("Language=%q, want system", got.Language)
+	}
 }
 
 func TestLoadAppSettings_EmptyJSONKeepsDefault(t *testing.T) {
