@@ -1,6 +1,7 @@
 const onboarding = {
   step: 'welcome',
   source: 'subscription',
+  telemetry: 'off',
   busy: false,
   message: '',
   test: null
@@ -13,9 +14,10 @@ function onboardingShow(step) {
   renderOnboarding();
 }
 
-function onboardingOption(id, title, sub) {
-  const active = onboarding.source === id ? ' active' : '';
-  return `<button class="onboarding-option${active}" onclick="onboarding.source='${esc(id)}';renderOnboarding()">
+function onboardingOption(id, title, sub, field) {
+  const target = field || 'source';
+  const active = onboarding[target] === id ? ' active' : '';
+  return `<button class="onboarding-option${active}" onclick="onboarding['${esc(target)}']='${esc(id)}';renderOnboarding()">
     <span class="onboarding-dot"></span>
     <span><b>${esc(title)}</b><br><span class="pg-sub">${esc(sub)}</span></span>
   </button>`;
@@ -43,7 +45,24 @@ function renderOnboarding() {
     body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.welcome.kicker'))}</div>
       <div class="onboarding-title">${esc(tr('onboarding.welcome.title'))}</div>
       <div class="onboarding-copy">${esc(tr('onboarding.welcome.copy'))}</div>
-      ${onboardingActions(tr('onboarding.action.start'), "onboardingShow('source')", '')}`;
+      ${onboardingActions(tr('onboarding.action.start'), "onboardingShow('telemetry')", '')}`;
+    return;
+  }
+  if (onboarding.step === 'telemetry') {
+    body.innerHTML = `<div class="onboarding-kicker">${esc(tr('onboarding.telemetry.kicker'))}</div>
+      <div class="onboarding-title">${esc(tr('onboarding.telemetry.title'))}</div>
+      <div class="onboarding-copy">${esc(tr('onboarding.telemetry.copy'))}</div>
+      <div class="onboarding-options">
+        ${onboardingOption('on', tr('onboarding.telemetry.enable'), tr('onboarding.telemetry.enable.sub'), 'telemetry')}
+        ${onboardingOption('off', tr('onboarding.telemetry.disable'), tr('onboarding.telemetry.disable.sub'), 'telemetry')}
+      </div>
+      ${msg}
+      <div class="onboarding-actions">
+        <button class="pg-btn" onclick="onboardingShow('welcome')">${esc(tr('onboarding.action.back'))}</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="pg-btn acc" onclick="onboardingApplyTelemetry()" ${onboarding.busy ? 'disabled' : ''}>${esc(tr('onboarding.action.next'))}</button>
+        </div>
+      </div>`;
     return;
   }
   if (onboarding.step === 'source') {
@@ -131,6 +150,27 @@ async function onboardingComplete() {
 async function onboardingSkip() {
   await fetch(API + '/onboarding/skip', { method: 'POST' }).catch(() => {});
   onboardingFinish();
+}
+
+async function onboardingApplyTelemetry() {
+  onboarding.busy = true;
+  onboarding.message = '';
+  renderOnboarding();
+  const enabled = onboarding.telemetry === 'on';
+  try {
+    const r = await fetch(API + '/settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({telemetry: {enabled, crash_reports: enabled, usage_events: enabled}})
+    });
+    if (!r.ok) throw new Error(await r.text());
+    onboardingShow('source');
+  } catch(e) {
+    onboarding.message = tr('onboarding.telemetry.error', {error: e.message});
+    renderOnboarding();
+  } finally {
+    onboarding.busy = false;
+  }
 }
 
 function onboardingFinish() {
@@ -241,6 +281,7 @@ function onboardingFinishAfterTest() {
 function restartOnboarding() {
   onboarding.step = 'welcome';
   onboarding.source = 'subscription';
+  onboarding.telemetry = 'off';
   onboarding.busy = false;
   onboarding.message = '';
   onboarding.test = null;

@@ -58,6 +58,9 @@ func TestOnboardingUIAssets(t *testing.T) {
 		`/servers/auto-connect`,
 		`/diagnostics/test`,
 		`restartOnboarding()`,
+		`onboardingApplyTelemetry`,
+		`onboarding.telemetry.title`,
+		`telemetry: {enabled, crash_reports: enabled, usage_events: enabled}`,
 	} {
 		if !strings.Contains(html+js, required) {
 			t.Fatalf("onboarding UI missing %q", required)
