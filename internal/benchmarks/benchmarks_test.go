@@ -95,3 +95,32 @@ func BenchmarkMemoryUnderLoadBuffers(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkCPUIdleSchedulerYield(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		runtime.Gosched()
+	}
+}
+
+func BenchmarkCPUStreamingCopy(b *testing.B) {
+	const streamSize = 256 << 20
+	buf := make([]byte, 64<<10)
+	b.SetBytes(streamSize)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := io.CopyBuffer(io.Discard, io.LimitReader(deterministicReader{}, streamSize), buf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+type deterministicReader struct{}
+
+func (deterministicReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(i)
+	}
+	return len(p), nil
+}
