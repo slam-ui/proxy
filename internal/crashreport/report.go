@@ -25,14 +25,26 @@ type CrashReport struct {
 func Generate(output, errMsg, configPath string, memoryMB uint64) *CrashReport {
 	report := &CrashReport{
 		Timestamp:  time.Now().Format(time.RFC3339),
-		LastOutput: output,
-		ErrorMsg:   errMsg,
+		LastOutput: Sanitize(output),
+		ErrorMsg:   Sanitize(errMsg),
 		MemoryMB:   memoryMB,
 	}
 	if data, err := os.ReadFile(configPath); err == nil {
-		report.ConfigSafe = maskUUIDs(string(data))
+		report.ConfigSafe = Sanitize(string(data))
 	}
 	return report
+}
+
+func (r *CrashReport) SanitizedForUpload() CrashReport {
+	if r == nil {
+		return CrashReport{}
+	}
+	cp := *r
+	cp.LastOutput = Sanitize(cp.LastOutput)
+	cp.ConfigSafe = Sanitize(cp.ConfigSafe)
+	cp.ErrorMsg = Sanitize(cp.ErrorMsg)
+	cp.MemoryMB = 0
+	return cp
 }
 
 func (r *CrashReport) SaveToFile() (string, error) {
@@ -59,4 +71,13 @@ func ListLatest(limit int) []string {
 func maskUUIDs(s string) string {
 	re := regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 	return re.ReplaceAllString(s, "****-****")
+}
+
+func Sanitize(s string) string {
+	s = maskUUIDs(s)
+	ipv4 := regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	s = ipv4.ReplaceAllString(s, "<ip>")
+	base64Like := regexp.MustCompile(`\b[A-Za-z0-9+/=_-]{21,}\b`)
+	s = base64Like.ReplaceAllString(s, "<redacted>")
+	return s
 }
