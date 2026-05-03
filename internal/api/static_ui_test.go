@@ -58,6 +58,20 @@ func TestOnboardingUIAssets(t *testing.T) {
 	}
 }
 
+func TestServerEmptyStateGuidesImport(t *testing.T) {
+	js := readStaticBundle(t, jsAssetPaths...)
+	for _, required := range []string{
+		`У вас пока нет серверов`,
+		`openImportSettings('subscription')`,
+		`openImportSettings('key')`,
+		`Где найти серверы`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("server empty state missing %q", required)
+		}
+	}
+}
+
 func readStaticBundle(t *testing.T, paths ...string) string {
 	t.Helper()
 	var b strings.Builder

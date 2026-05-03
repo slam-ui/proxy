@@ -161,7 +161,16 @@ function renderServerList() {
   const list = state.servers;
   const el = $id('splist');
   if (!list.length) {
-    el.innerHTML = '<div class="sp-noservers">Серверов нет.<br>Добавьте vless/trojan/ss/hy2/tuic/wireguard/vmess ссылку в настройках.</div>';
+    el.innerHTML = `<div class="sp-noservers">
+      <div class="sp-empty-title">У вас пока нет серверов</div>
+      <div class="sp-empty-sub">Добавьте подписку или один server URI, чтобы подключиться.</div>
+      <div class="sp-empty-actions">
+        <button class="pg-btn acc" onclick="openImportSettings('subscription')">Добавить через подписку</button>
+        <button class="pg-btn" onclick="openImportSettings('key')">Добавить ключом</button>
+        <button class="pg-btn" onclick="showToast('WireGuard .conf импорт будет доступен в onboarding flow', 'info')">Импортировать WireGuard</button>
+      </div>
+      <button class="pg-btn ghost" onclick="showToast('Источник обычно выдаёт ваш VPN-провайдер или администратор сервера', 'info')">Где найти серверы</button>
+    </div>`;
     updateSrvPanelSummary(list, []);
     return;
   }
@@ -240,6 +249,12 @@ function renderServerList() {
       </div>
     </div>`;
   }).join('');
+}
+
+function openImportSettings(target) {
+  navTo(4);
+  const id = target === 'subscription' ? 'subUrlInp' : 'srvUrlInp';
+  setTimeout(() => $id(id)?.focus(), 80);
 }
 
 function updateSrvPanelSummary(all, visible) {
