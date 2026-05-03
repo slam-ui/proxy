@@ -108,3 +108,27 @@
   color: var(--muted);
   font-size: 12px;
 }
+
+.onboarding-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.onboarding-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--hairline2);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, .03);
+}
+
+.onboarding-check.ok {
+  color: var(--on);
+}
+
+.onboarding-check.warn {
+  color: var(--warn);
+}

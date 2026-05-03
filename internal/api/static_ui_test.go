@@ -51,6 +51,10 @@ func TestOnboardingUIAssets(t *testing.T) {
 		`/onboarding/status`,
 		`/onboarding/complete`,
 		`/onboarding/skip`,
+		`onboardingRunTest`,
+		`/servers/auto-connect`,
+		`/diagnostics/test`,
+		`restartOnboarding()`,
 	} {
 		if !strings.Contains(html+js, required) {
 			t.Fatalf("onboarding UI missing %q", required)

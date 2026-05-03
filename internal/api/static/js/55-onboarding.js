@@ -2,12 +2,14 @@ const onboarding = {
   step: 'welcome',
   source: 'subscription',
   busy: false,
-  message: ''
+  message: '',
+  test: null
 };
 
 function onboardingShow(step) {
   onboarding.step = step;
   onboarding.message = '';
+  if (step !== 'test') onboarding.test = null;
   renderOnboarding();
 }
 
@@ -80,6 +82,31 @@ function renderOnboarding() {
       ${onboardingActions('Продолжить', 'onboardingWGNotReady()', 'source')}`;
     return;
   }
+  if (onboarding.step === 'test') {
+    const test = onboarding.test || {};
+    const rows = [
+      ['server', 'Сервер доступен', test.server],
+      ['handshake', 'Handshake успешен', test.handshake],
+      ['dns', 'DNS защищён', test.dns],
+      ['ipv6', 'IPv6 проверка', test.ipv6]
+    ].map(([id, label, value]) => {
+      const ok = value === true;
+      const warn = value === 'warn';
+      const mark = ok ? '✓' : warn ? '⚠' : '...';
+      return `<div class="onboarding-check ${ok ? 'ok' : warn ? 'warn' : ''}" data-check="${id}">
+        <span>${mark}</span><span>${esc(label)}</span>
+      </div>`;
+    }).join('');
+    body.innerHTML = `<div class="onboarding-kicker">Проверка подключения</div>
+      <div class="onboarding-title">${onboarding.busy ? 'Проверяю подключение...' : 'Проверка завершена'}</div>
+      <div class="onboarding-checks">${rows}</div>
+      ${msg}
+      <div class="onboarding-actions">
+        <button class="pg-btn" onclick="onboardingShow('source')" ${onboarding.busy ? 'disabled' : ''}>Назад</button>
+        <button class="pg-btn acc" onclick="onboardingFinishAfterTest()" ${onboarding.busy ? 'disabled' : ''}>Готово</button>
+      </div>`;
+    return;
+  }
   body.innerHTML = `<div class="onboarding-kicker">Готово</div>
     <div class="onboarding-title">Всё готово</div>
     <div class="onboarding-copy">Иконка в трее даёт быстрый доступ. Ctrl+Alt+P включает и отключает подключение. Профили можно настроить в Settings.</div>
@@ -133,8 +160,7 @@ async function onboardingImportSubscription() {
     if (!r.ok && r.status !== 202) throw new Error(d.error || await r.text());
     const added = d.result && Number.isFinite(Number(d.result.added)) ? Number(d.result.added) : 0;
     onboarding.message = added ? `Найдено серверов: ${added}` : (d.error || 'Подписка сохранена, серверы не найдены');
-    await onboardingComplete();
-    onboardingShow('done');
+    await onboardingRunTest();
   } catch(e) {
     onboarding.message = 'Не удалось загрузить подписку: ' + e.message;
   } finally {
@@ -160,8 +186,7 @@ async function onboardingImportKey() {
       body: JSON.stringify({name: 'Default', url})
     });
     if (!r.ok && r.status !== 409) throw new Error(await r.text());
-    await onboardingComplete();
-    onboardingShow('done');
+    await onboardingRunTest();
     loadServers?.();
   } catch(e) {
     onboarding.message = 'Не удалось добавить ключ: ' + e.message;
@@ -173,6 +198,52 @@ async function onboardingImportKey() {
 
 function onboardingWGNotReady() {
   onboarding.message = 'Импорт WireGuard .conf будет добавлен отдельным шагом. Можно пропустить и импортировать позже.';
+  renderOnboarding();
+}
+
+async function onboardingRunTest() {
+  onboarding.step = 'test';
+  onboarding.busy = true;
+  onboarding.test = { server: false, handshake: false, dns: false, ipv6: 'warn' };
+  onboarding.message = 'Подключаюсь к лучшему серверу...';
+  renderOnboarding();
+  try {
+    const connect = await fetch(API + '/servers/auto-connect', { method: 'POST', timeoutMs: 45000 });
+    if (!connect.ok) throw new Error(await connect.text());
+    onboarding.test.server = true;
+    onboarding.test.handshake = true;
+    onboarding.message = 'Проверяю внешний IP и DNS...';
+    renderOnboarding();
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const diag = await fetch(API + '/diagnostics/test', { timeoutMs: 30000 });
+    const d = await diag.json().catch(() => ({}));
+    if (!diag.ok || d.ok === false) throw new Error(d.error || 'diagnostics failed');
+    onboarding.test.dns = !d.dns_leak;
+    onboarding.test.ipv6 = d.vpn_works ? true : 'warn';
+    onboarding.message = `Подключено${d.latency_ms ? `, ${d.latency_ms}ms` : ''}`;
+  } catch(e) {
+    onboarding.message = 'Импорт выполнен, но проверка подключения не прошла: ' + e.message;
+    onboarding.test.dns = 'warn';
+    onboarding.test.ipv6 = 'warn';
+  } finally {
+    await onboardingComplete().catch(() => {});
+    onboarding.busy = false;
+    renderOnboarding();
+    pollStatus?.();
+    loadServers?.();
+  }
+}
+
+function onboardingFinishAfterTest() {
+  onboardingShow('done');
+}
+
+function restartOnboarding() {
+  onboarding.step = 'welcome';
+  onboarding.source = 'subscription';
+  onboarding.busy = false;
+  onboarding.message = '';
+  onboarding.test = null;
   renderOnboarding();
 }
 
