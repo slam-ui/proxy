@@ -25,20 +25,35 @@ a{color:#38c8ff}
       <li>Выберите сервер в списке и нажмите подключение.</li>
       <li>Проверьте статус на главном экране или в меню трея.</li>
     </ol>
+    <p>Если это первый запуск, пройдите onboarding wizard: он предложит телеметрию, источник сервера и короткий connection test.</p>
   </div>
   <div class="card">
-    <h2>VLESS, Trojan, Hysteria2, WireGuard</h2>
-    <p>Это форматы доступа к серверу. Обычно провайдер выдаёт ссылку вида <code>vless://...</code>, <code>trojan://...</code>, <code>hysteria2://...</code> или конфигурацию WireGuard.</p>
+    <h2>Protocols</h2>
+    <p>Поддерживаются VLESS, Trojan, Shadowsocks, Hysteria2, TUIC, WireGuard и VMess. Обычно провайдер выдаёт ссылку вида <code>vless://...</code>, <code>trojan://...</code>, <code>hy2://...</code> или конфигурацию WireGuard.</p>
+    <p>Для VLESS доступны TCP, WebSocket, gRPC, HTTP/2 и HTTPUpgrade transports. Reality требует <code>pbk</code>, а XTLS Vision не совмещается с multiplexing.</p>
+  </div>
+  <div class="card">
+    <h2>Subscriptions</h2>
+    <p>Подписки должны использовать HTTPS. SafeSky отклоняет HTTP redirects, шифрует metadata на диске и импортирует только поддерживаемые server URI.</p>
   </div>
   <div class="card">
     <h2>Profiles</h2>
-    <p>Профили сохраняют набор routing rules и выбор сервера. Используйте их для разных сценариев: работа, браузер, стриминг.</p>
+    <p>Профили сохраняют routing rules, DNS/settings state и выбор сервера. Используйте их для разных сценариев: работа, стриминг, игры, поездки.</p>
+  </div>
+  <div class="card">
+    <h2>Routing</h2>
+    <p>Routing rules бывают domain, IP/CIDR, process и geosite. Action может быть proxy, direct или block. Remote DNS идёт через туннель, direct DNS используется для локального inbound.</p>
+  </div>
+  <div class="card">
+    <h2>Kill switch</h2>
+    <p>Kill switch работает как fail-close: при падении туннеля блокировка может остаться активной до явного отключения или восстановления. Включайте его только если утечка хуже временной потери сети.</p>
   </div>
   <div class="card">
     <h2>Troubleshooting</h2>
     <ul>
-      <li>Если сервер не подключается, запустите Diagnostics.</li>
-      <li>Если DNS/IP leak test показывает риск, переключите сервер или включите строгую защиту DNS.</li>
+      <li>Если сервер не подключается, запустите Diagnostics и проверьте, свободны ли порты 10807, 9090 и API port.</li>
+      <li>Если DNS/IP leak test показывает риск, проверьте routing rules и DNS settings.</li>
+      <li>Если TUN не стартует, запустите SafeSky as administrator и дождитесь Wintun cleanup.</li>
       <li>Если hotkey занят другим приложением, выберите другое сочетание в Settings.</li>
     </ul>
   </div>
@@ -46,6 +61,7 @@ a{color:#38c8ff}
     <h2>FAQ</h2>
     <p><b>Можно закрыть окно?</b> Да, по умолчанию окно скрывается в трей, а клиент продолжает работать.</p>
     <p><b>Как быстро отключиться?</b> Используйте меню трея или <code>Ctrl+Alt+P</code>.</p>
+    <p><b>Отправляется ли telemetry?</b> Только после opt-in. Usage events и crash reports включаются отдельно.</p>
   </div>
 </main>
 </body>
