@@ -336,6 +336,7 @@ async function init() {
 
   // Первый опрос сразу
   await pollStatus();
+  initOnboarding?.();
 
   // Запускаем серверы чтобы знать activeId при старте
   try {

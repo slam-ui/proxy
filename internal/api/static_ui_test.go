@@ -21,6 +21,7 @@ var cssAssetPaths = []string{
 	"css/20-server-panel.css",
 	"css/30-pages.css",
 	"css/40-overlays.css",
+	"css/45-onboarding.css",
 	"css/50-responsive.css",
 	"css/60-vtb-home.css",
 	"css/70-themes.css",
@@ -34,9 +35,27 @@ var jsAssetPaths = []string{
 	"js/30-rules-processes.js",
 	"js/40-logs.js",
 	"js/50-settings-theme.js",
+	"js/55-onboarding.js",
 	"js/60-setup.js",
 	"js/70-runtime-polling.js",
 	"js/80-chart-utils-init.js",
+}
+
+func TestOnboardingUIAssets(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	js := readStaticBundle(t, jsAssetPaths...)
+	for _, required := range []string{
+		`id="onboardingOv"`,
+		`id="onboardingBody"`,
+		`async function initOnboarding()`,
+		`/onboarding/status`,
+		`/onboarding/complete`,
+		`/onboarding/skip`,
+	} {
+		if !strings.Contains(html+js, required) {
+			t.Fatalf("onboarding UI missing %q", required)
+		}
+	}
 }
 
 func readStaticBundle(t *testing.T, paths ...string) string {

@@ -6,6 +6,7 @@ const SAFE_SCRIPT_SOURCES = Object.freeze([
   "js/30-rules-processes.js",
   "js/40-logs.js",
   "js/50-settings-theme.js",
+  "js/55-onboarding.js",
   "js/60-setup.js",
   "js/70-runtime-polling.js",
   "js/80-chart-utils-init.js"
