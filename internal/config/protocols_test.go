@@ -3,7 +3,10 @@ package config
 import (
 	"encoding/base64"
 	"encoding/json"
+	"path/filepath"
 	"testing"
+
+	"proxyclient/internal/mtu"
 )
 
 func TestParseServerContentTrojanWS(t *testing.T) {
@@ -140,6 +143,33 @@ func TestParseServerContentWireGuardURL(t *testing.T) {
 	}
 	if got.Outbound.MTU != 1280 || got.Outbound.LocalAddress[0] != "10.0.0.2/32" {
 		t.Fatalf("unexpected wg outbound: %+v", got.Outbound)
+	}
+}
+
+func TestParseServerContentWireGuardUsesCachedMTUWhenMissing(t *testing.T) {
+	oldPath := wireGuardMTUCachePath
+	wireGuardMTUCachePath = filepath.Join(t.TempDir(), "mtu_cache.json")
+	t.Cleanup(func() { wireGuardMTUCachePath = oldPath })
+	if err := mtu.NewCache(wireGuardMTUCachePath, 0).Store("wg.example.com", 51820, 1420); err != nil {
+		t.Fatalf("Store MTU cache: %v", err)
+	}
+
+	got, err := ParseServerContent("wireguard://priv@wg.example.com:51820?publickey=pub&address=10.0.0.2%2F32#WG")
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Outbound.MTU != 1420 {
+		t.Fatalf("WireGuard MTU = %d, want cached 1420", got.Outbound.MTU)
+	}
+}
+
+func TestParseServerContentWireGuardClampsExplicitMTU(t *testing.T) {
+	got, err := ParseServerContent("wireguard://priv@wg.example.com:51820?publickey=pub&address=10.0.0.2%2F32&mtu=9000#WG")
+	if err != nil {
+		t.Fatalf("ParseServerContent: %v", err)
+	}
+	if got.Outbound.MTU != mtu.MaxMTU {
+		t.Fatalf("WireGuard MTU = %d, want %d", got.Outbound.MTU, mtu.MaxMTU)
 	}
 }
 

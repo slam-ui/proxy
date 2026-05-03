@@ -8,7 +8,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"proxyclient/internal/mtu"
 )
+
+var wireGuardMTUCachePath = DataDir + "/mtu_cache.json"
 
 type ParsedServer struct {
 	Proto       string
@@ -423,9 +427,7 @@ func buildWireGuardServer(p wireGuardParams) (*ParsedServer, error) {
 	if err != nil || port <= 0 || port > 65535 {
 		return nil, fmt.Errorf("wireguard endpoint port is invalid")
 	}
-	if p.MTU <= 0 {
-		p.MTU = 1408
-	}
+	p.MTU = wireGuardMTU(host, port, p.MTU)
 	out := SBOutbound{
 		Type:            "wireguard",
 		Tag:             "proxy-out",
@@ -441,6 +443,16 @@ func buildWireGuardServer(p wireGuardParams) (*ParsedServer, error) {
 		Reserved:        p.Reserved,
 	}
 	return &ParsedServer{Proto: "wireguard", DisplayName: firstNonEmpty(p.Name, host), Address: host, Port: port, Outbound: out}, nil
+}
+
+func wireGuardMTU(host string, port, requested int) int {
+	if requested > 0 {
+		return mtu.Clamp(requested, mtu.DefaultWireGuard)
+	}
+	if cached, ok := mtu.NewCache(wireGuardMTUCachePath, 0).Lookup(host, port); ok {
+		return cached
+	}
+	return mtu.DefaultWireGuard
 }
 
 func parseSSUserInfo(u *url.URL) (string, string, error) {
