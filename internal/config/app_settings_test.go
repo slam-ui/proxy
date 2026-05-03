@@ -20,6 +20,9 @@ func TestLoadAppSettings_MissingFileUsesDefault(t *testing.T) {
 	if settings.Language != "system" {
 		t.Fatalf("Language=%q, want system", settings.Language)
 	}
+	if settings.Telemetry.Enabled || settings.Telemetry.CrashReports || settings.Telemetry.UsageEvents {
+		t.Fatalf("Telemetry default should be fully opt-out: %+v", settings.Telemetry)
+	}
 }
 
 func TestSaveAppSettings_NormalizesLanguage(t *testing.T) {
@@ -35,6 +38,28 @@ func TestSaveAppSettings_NormalizesLanguage(t *testing.T) {
 	}
 	if got.Language != "system" {
 		t.Fatalf("Language=%q, want system", got.Language)
+	}
+}
+
+func TestSaveAppSettings_NormalizesTelemetryOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	settings := DefaultAppSettings()
+	settings.Telemetry.Enabled = false
+	settings.Telemetry.CrashReports = true
+	settings.Telemetry.UsageEvents = true
+	settings.Telemetry.BaseURL = ""
+	if err := SaveAppSettings(path, settings); err != nil {
+		t.Fatalf("SaveAppSettings returned error: %v", err)
+	}
+	got, err := LoadAppSettings(path)
+	if err != nil {
+		t.Fatalf("LoadAppSettings returned error: %v", err)
+	}
+	if got.Telemetry.CrashReports || got.Telemetry.UsageEvents {
+		t.Fatalf("Telemetry opt-out should disable subfeatures: %+v", got.Telemetry)
+	}
+	if got.Telemetry.BaseURL == "" {
+		t.Fatal("Telemetry BaseURL should default from update BaseURL")
 	}
 }
 

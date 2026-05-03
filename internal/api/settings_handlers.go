@@ -93,6 +93,7 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 		NetworkProtection    *config.NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *config.TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *config.UpdateSettings            `json:"updates"`
+		Telemetry            *config.TelemetrySettings         `json:"telemetry"`
 		LeakTest             *config.LeakTestSettings          `json:"leak_test"`
 		Hotkeys              *config.HotkeySettings            `json:"hotkeys"`
 	}
@@ -161,6 +162,13 @@ func (h *SettingsHandlers) handleSetSettings(w http.ResponseWriter, r *http.Requ
 	if body.Updates != nil {
 		settings.Updates = *body.Updates
 	}
+	if body.Telemetry != nil {
+		settings.Telemetry = *body.Telemetry
+		if !settings.Telemetry.Enabled {
+			settings.Telemetry.CrashReports = false
+			settings.Telemetry.UsageEvents = false
+		}
+	}
 	if body.LeakTest != nil {
 		settings.LeakTest = *body.LeakTest
 	}
@@ -223,6 +231,7 @@ type SettingsResponse struct {
 	NetworkProtection    config.NetworkProtectionSettings `json:"network_protection"`
 	TrafficBudget        config.TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              config.UpdateSettings            `json:"updates"`
+	Telemetry            config.TelemetrySettings         `json:"telemetry"`
 	LeakTest             config.LeakTestSettings          `json:"leak_test"`
 	Hotkeys              config.HotkeySettings            `json:"hotkeys"`
 	HotkeyConflicts      []hotkeys.Conflict               `json:"hotkey_conflicts,omitempty"`
@@ -255,6 +264,7 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 		NetworkProtection:    appSettings.NetworkProtection,
 		TrafficBudget:        appSettings.TrafficBudget,
 		Updates:              appSettings.Updates,
+		Telemetry:            appSettings.Telemetry,
 		LeakTest:             appSettings.LeakTest,
 		Hotkeys:              appSettings.Hotkeys,
 		HotkeyConflicts:      h.currentHotkeyConflicts(appSettings.Hotkeys, false),

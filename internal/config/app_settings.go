@@ -26,6 +26,7 @@ type AppSettings struct {
 	NetworkProtection    NetworkProtectionSettings `json:"network_protection"`
 	TrafficBudget        TrafficBudgetSettings     `json:"traffic_budget"`
 	Updates              UpdateSettings            `json:"updates"`
+	Telemetry            TelemetrySettings         `json:"telemetry"`
 	LeakTest             LeakTestSettings          `json:"leak_test"`
 	Hotkeys              HotkeySettings            `json:"hotkeys"`
 }
@@ -58,6 +59,12 @@ func DefaultAppSettings() AppSettings {
 			Channel:     "stable",
 			BaseURL:     "https://example.com/safesky",
 			AutoInstall: false,
+		},
+		Telemetry: TelemetrySettings{
+			Enabled:      false,
+			CrashReports: false,
+			UsageEvents:  false,
+			BaseURL:      "https://example.com/safesky",
 		},
 		LeakTest: LeakTestSettings{
 			Enabled:             true,
@@ -110,6 +117,13 @@ type UpdateSettings struct {
 	Channel     string `json:"channel"`
 	BaseURL     string `json:"base_url"`
 	AutoInstall bool   `json:"auto_install"`
+}
+
+type TelemetrySettings struct {
+	Enabled      bool   `json:"enabled"`
+	CrashReports bool   `json:"crash_reports"`
+	UsageEvents  bool   `json:"usage_events"`
+	BaseURL      string `json:"base_url"`
 }
 
 type LeakTestSettings struct {
@@ -177,6 +191,7 @@ func LoadAppSettings(path string) (AppSettings, error) {
 		NetworkProtection    *NetworkProtectionSettings `json:"network_protection"`
 		TrafficBudget        *TrafficBudgetSettings     `json:"traffic_budget"`
 		Updates              *UpdateSettings            `json:"updates"`
+		Telemetry            *TelemetrySettings         `json:"telemetry"`
 		LeakTest             *LeakTestSettings          `json:"leak_test"`
 		Hotkeys              *HotkeySettings            `json:"hotkeys"`
 	}
@@ -225,6 +240,9 @@ func LoadAppSettings(path string) (AppSettings, error) {
 	if raw.Updates != nil {
 		settings.Updates = *raw.Updates
 	}
+	if raw.Telemetry != nil {
+		settings.Telemetry = *raw.Telemetry
+	}
 	if raw.LeakTest != nil {
 		settings.LeakTest = *raw.LeakTest
 	}
@@ -270,6 +288,13 @@ func normalizeAppSettings(settings *AppSettings) {
 	}
 	if settings.Updates.BaseURL == "" {
 		settings.Updates.BaseURL = "https://example.com/safesky"
+	}
+	if settings.Telemetry.BaseURL == "" {
+		settings.Telemetry.BaseURL = settings.Updates.BaseURL
+	}
+	if !settings.Telemetry.Enabled {
+		settings.Telemetry.CrashReports = false
+		settings.Telemetry.UsageEvents = false
 	}
 	if settings.LeakTest.Domain == "" {
 		settings.LeakTest.Domain = "dnsleak.example.com"

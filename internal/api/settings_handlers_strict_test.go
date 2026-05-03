@@ -119,6 +119,46 @@ func TestHandleSetSettingsRejectsInvalidLanguage(t *testing.T) {
 	}
 }
 
+func TestHandleSetSettingsAcceptsTelemetryOptIn(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"telemetry":{"enabled":true,"crash_reports":true,"usage_events":true,"base_url":"https://telemetry.example.test/safesky"}}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Telemetry config.TelemetrySettings `json:"telemetry"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Telemetry.Enabled || !resp.Telemetry.CrashReports || !resp.Telemetry.UsageEvents {
+		t.Fatalf("telemetry response=%+v", resp.Telemetry)
+	}
+}
+
+func TestHandleSetSettingsTelemetryOptOutDisablesSubfeatures(t *testing.T) {
+	h := newSettingsHandlers(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/settings",
+		strings.NewReader(`{"telemetry":{"enabled":false,"crash_reports":true,"usage_events":true,"base_url":"https://telemetry.example.test/safesky"}}`))
+	w := httptest.NewRecorder()
+	h.handleSetSettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Telemetry config.TelemetrySettings `json:"telemetry"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Telemetry.CrashReports || resp.Telemetry.UsageEvents {
+		t.Fatalf("telemetry opt-out response=%+v", resp.Telemetry)
+	}
+}
+
 func TestHandleSetSettingsInvokesCloseToTrayCallback(t *testing.T) {
 	h := newSettingsHandlers(t)
 	called := false
