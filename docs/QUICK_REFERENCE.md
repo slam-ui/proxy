@@ -1,6 +1,6 @@
 # 🗂 Быстрая навигация по проекту proxy-client
 
-> **Справка для разработчиков и AI (Copilot/Claude)**  
+> **Справка для разработчиков**
 > Дата: 2026-04-04 | Статус: ✓ Оптимизировано и очищено
 
 ---
@@ -382,7 +382,6 @@ A: Смотри Event Log в Web UI (localhost:8080) или check anomaly-*.log
 | [OPTIMIZATION_ROADMAP.md](OPTIMIZATION_ROADMAP.md) | План оптимизации & recommendations |
 | [BUGS_FIXED.md](BUGS_FIXED.md) | История исправленных багов |
 | [SECTION_B_CHANGES.md](SECTION_B_CHANGES.md) | Section B improvements |
-| [.github/copilot-instructions.md](../.github/copilot-instructions.md) | AI assistants instructions |
 
 ---
 
@@ -395,7 +394,6 @@ A: Смотри Event Log в Web UI (localhost:8080) или check anomaly-*.log
   "recommendations": [
     "golang.go",
     "ms-vscode.makefile-tools",
-    "GitHub.copilot",
     "ESLint",
     "golang.tools"
   ]

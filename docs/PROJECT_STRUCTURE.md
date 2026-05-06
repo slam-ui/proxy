@@ -355,7 +355,6 @@ Platform-specific:  *_windows_test.go      (Windows-только)
 - [Readme.md](Readme.md) — Русский/English обзор функций
 - [BUGS_FIXED.md](BUGS_FIXED.md) — История багов и фиксов
 - [SECTION_B_CHANGES.md](SECTION_B_CHANGES.md) — Улучшения (config validation, proxy guard)
-- [.github/copilot-instructions.md](../.github/copilot-instructions.md) — AI рекомендации
 - **PROJECT_STRUCTURE.md** — Этот файл (навигация)
 
 ---

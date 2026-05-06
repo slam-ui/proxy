@@ -1,0 +1,52 @@
+{
+  "id": "work",
+  "name": "Работа",
+  "description": "Corporate apps direct, everything else proxy",
+  "icon": "briefcase",
+  "color": "#7c8cff",
+  "server_selector": {
+    "mode": "auto"
+  },
+  "routing_rules": [
+    {
+      "value": "teams.exe",
+      "type": "process",
+      "action": "direct"
+    },
+    {
+      "value": "outlook.exe",
+      "type": "process",
+      "action": "direct"
+    },
+    {
+      "value": "zoom.exe",
+      "type": "process",
+      "action": "direct"
+    }
+  ],
+  "routing": {
+    "default_action": "proxy",
+    "rules": [
+      {
+        "value": "teams.exe",
+        "type": "process",
+        "action": "direct"
+      },
+      {
+        "value": "outlook.exe",
+        "type": "process",
+        "action": "direct"
+      },
+      {
+        "value": "zoom.exe",
+        "type": "process",
+        "action": "direct"
+      }
+    ],
+    "block_quic": true
+  },
+  "kill_switch": "connected",
+  "auto_connect": true,
+  "created_at": "2026-05-03T18:20:05.8658322+03:00",
+  "updated_at": "2026-05-03T18:20:05.8658322+03:00"
+}

@@ -41,7 +41,8 @@ func checkMarkdown(root string) []string {
 			return nil
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == ".audit" || entry.Name() == ".claude" || entry.Name() == "dist" {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") || name == "dist" {
 				return filepath.SkipDir
 			}
 			return nil

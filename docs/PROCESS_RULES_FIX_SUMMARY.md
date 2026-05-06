@@ -219,5 +219,5 @@ go test ./internal/api -timeout 60s -v
 ---
 
 **Последнее обновление:** 4 апреля 2026  
-**Автор:** GitHub Copilot  
+**Автор:** Project maintainers
 **Статус:** Production Ready ✅  

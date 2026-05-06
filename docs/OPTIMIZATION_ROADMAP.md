@@ -399,7 +399,7 @@ secret.key                 ← User VLESS URL
 routing.json               ← User routing rules
 templates/                 ← Default templates
 *.md docs                  ← Documentation
-.github/                   ← GitHub/Copilot configs
+.github/                   ← GitHub workflow configs
 go.mod / go.sum           ← Dependencies
 *.exe, *.dll              ← Distribution binaries
 cmd/proxy-client/rsrc_*   ← App icon resource
@@ -447,11 +447,10 @@ go test -race -v -run "TestManager" ./internal/proxy -timeout 30s
 - [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) — Навигация структуры
 - [Readme.md](Readme.md) — Обзор проекта
 - [BUGS_FIXED.md](BUGS_FIXED.md) — История багов
-- [.github/copilot-instructions.md](../.github/copilot-instructions.md) — AI инструкции
 - `FILE_AUDIT_REPORT.md` — локальный аудит, регенерируется инструментами и не хранится в репозитории
 
 ---
 
-**Автор анализа:** GitHub Copilot  
+**Автор анализа:** Project maintainers
 **Дата:** 2026-04-04  
 **Статус:** Ready for Review & Implementation

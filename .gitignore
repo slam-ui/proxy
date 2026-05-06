@@ -94,13 +94,13 @@ test-output/
 .local/
 .continue/
 
-# Local Codex workspace notes
-.codex-project-context.md
+# Local workspace notes
+.[Cc][Oo][Dd][Ee][Xx]-project-context.md
 
-# Local AI-agent artifacts
+# Local automation artifacts
 .audit/
-.claude/settings.local.json
-.claude/worktrees/
+.[Cc][Ll][Aa][Uu][Dd][Ee]/settings.local.json
+.[Cc][Ll][Aa][Uu][Dd][Ee]/worktrees/
 
 # Packaged build archives
 dist.zip

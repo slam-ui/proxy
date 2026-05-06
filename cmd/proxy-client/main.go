@@ -411,7 +411,7 @@ func run(output io.Writer) error {
 	xrayCfg := app.buildXRayCfg()
 	// Override: <local> — все хосты без точки (включая "localhost") обходят прокси.
 	// Явно добавляем 127.0.0.1 и ::1 — на Windows <local> не всегда покрывает IP-формат.
-	// Это исправляет OAuth callback для Claude Code, Codex и других CLI-инструментов:
+	// Это исправляет OAuth callback для локальных CLI-инструментов:
 	// они стартуют локальный HTTP-сервер на случайном порту, браузер (с системным прокси)
 	// должен добраться до него без прокси — иначе редирект http://localhost:PORT/callback
 	// идёт через sing-box и может падать при перезапуске TUN.

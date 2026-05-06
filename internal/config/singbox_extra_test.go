@@ -327,7 +327,7 @@ func TestBuildRoute_BlockQUICExceptionPrecedesReject(t *testing.T) {
 		}
 		if r.Outbound == "proxy-out" {
 			for _, s := range r.DomainSuffix {
-				if s == "openai.com" {
+				if s == "github.com" {
 					exceptionIdx = i
 				}
 			}
@@ -337,7 +337,7 @@ func TestBuildRoute_BlockQUICExceptionPrecedesReject(t *testing.T) {
 		}
 	}
 	if exceptionIdx < 0 {
-		t.Fatal("QUIC AI exception rule not found")
+		t.Fatal("QUIC exception rule not found")
 	}
 	if rejectIdx < 0 {
 		t.Fatal("blanket QUIC reject rule not found")

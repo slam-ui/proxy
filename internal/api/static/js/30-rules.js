@@ -351,7 +351,7 @@ async function ruleDrop(e, targetVal, targetIdx) {
   _dragRuleId = null;
 }
 
-const _knownGeosites = ['youtube','instagram','google','github','twitter','facebook','netflix','twitch','amazon','microsoft','apple','cn','geolocation-!cn','category-ads-all','telegram','openai','anthropic','pinterest'];
+const _knownGeosites = ['youtube','instagram','google','github','twitter','facebook','netflix','twitch','amazon','microsoft','apple','cn','geolocation-!cn','category-ads-all','telegram','pinterest'];
 const _geositeAliases = [
   ['youtube', ['youtube.com','youtu.be','ytimg.com','googlevideo.com','youtube']],
   ['instagram', ['instagram.com','cdninstagram.com','threads.net','instagram']],
@@ -365,8 +365,6 @@ const _geositeAliases = [
   ['microsoft', ['microsoft.com','live.com','office.com','windows.net','microsoft']],
   ['apple', ['apple.com','icloud.com','mzstatic.com','apple']],
   ['telegram', ['telegram.org','t.me','telegram.me','telegram']],
-  ['openai', ['openai.com','chatgpt.com','oaistatic.com','oaiusercontent.com','openai','chatgpt']],
-  ['anthropic', ['anthropic.com','claude.ai','anthropic','claude']],
   ['pinterest', ['pinterest.com','pinimg.com','pinterest']]
 ];
 

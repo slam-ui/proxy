@@ -116,7 +116,7 @@ function processRuleText(matchedRule, nm, fullPath) {
 function processFallbackIcon(name) {
   return name.match(/chrome|chromium|edge/i) ? '🌐' : name.match(/firefox/i) ? '🦊' :
          name.match(/telegram/i) ? '✈️' : name.match(/discord/i) ? '💬' :
-         name.match(/code\.exe|cursor|codex/i) ? '▣' : name.match(/steam/i) ? '▶' :
+         name.match(/code\.exe|cursor/i) ? '▣' : name.match(/steam/i) ? '▶' :
          name.match(/spotify/i) ? '♪' : '⚙';
 }
 

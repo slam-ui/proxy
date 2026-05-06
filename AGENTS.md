@@ -1,182 +1,333 @@
-# AGENTS.md — правила работы с проектом SafeSky proxy-client
+# AGENTS.md — SafeSky proxy-client
 
-## Контекст проекта
+Project-level правила для SafeSky proxy-client.
 
-Windows-клиент для проксирования трафика на базе sing-box.
-- **Module:** `proxyclient`
-- **Go:** 1.24 (toolchain go1.26.2)
-- **UI:** WebView2 + HTML/JS, разбит на модули: `internal/api/static/index.html` + `internal/api/static/js/*.js`
-- **Платформа:** Windows 10/11 x64 only
-- **sing-box version:** 1.13+
-- **Зависимости (binaries):** `sing-box.exe`, `wintun.dll` — лежат рядом с .exe
-
-> Этот файл дополняет глобальный `~/.codex/AGENTS.md`. Если есть конфликт — этот выигрывает.
+Этот файл дополняет глобальные инструкции пользователя.
+Если есть конфликт — этот файл выигрывает.
 
 ---
 
-## 0. Перед началом любой задачи в этом проекте
+## 0. Hard rules for SafeSky
 
-1. Прочитать:
-   - `BUGS_FIXED_AUDIT.md` — что уже исправлено (чтобы не дублировать).
-   - `BUG_REVIEW_NEEDED.md` — что отложено и почему.
-   - `docs/ARCHITECTURE.md` — общая архитектура.
-   - `docs/BUGFIX_PROCESS_RULES.md` — процесс багфикса (если есть).
-2. Проверить `git status --porcelain` — должен быть пусто.
-3. Создать feature branch.
+1. SafeSky — Windows 10/11 x64 client.
+2. Не работать в dirty worktree.
+3. Перед задачей читать project docs и audit-файлы.
+4. Создавать feature branch перед изменениями.
+5. Windows-only Go files должны иметь `//go:build windows`.
+6. Для каждого Windows-only файла должен быть `*_other.go` stub, если пакет должен собираться на Linux.
+7. HTTP JSON handlers должны использовать:
+   - `http.MaxBytesReader`;
+   - `json.Decoder`;
+   - `DisallowUnknownFields`;
+   - второй `Decode` для trailing data check.
+8. API должен bind-иться только на `127.0.0.1`.
+9. Frontend user data — только через `esc()` или `textContent`.
+10. Не использовать native `alert/confirm/prompt` в UI.
+11. Использовать `fetchWithTimeout`, не raw `fetch`.
+12. Не логировать UUID/password/private keys/VLESS links целиком.
+13. Не коммитить `dist/`, `.exe`, `.dll`, `secret.key`, пользовательские config-файлы.
+14. Каждый багфикс — тест или явное объяснение, почему тест невозможен.
+15. После Win32 правок обязательно:
+    - `GOOS=windows go build ./...`
+    - `GOOS=linux go build ./...`
 
 ---
 
-## 1. Платформозависимый код
+## 1. Контекст проекта
 
-Весь код использующий Win32 API **должен** иметь build constraint:
+SafeSky proxy-client — Windows-клиент для проксирования трафика на базе sing-box.
+
+- Module: `proxyclient`
+- Go: 1.24
+- Toolchain: go1.26.2
+- UI: WebView2 + HTML/CSS/JS
+- Frontend:
+  - `internal/api/static/index.html`
+  - `internal/api/static/js/*.js`
+- Platform: Windows 10/11 x64 only
+- Engine: sing-box 1.13+
+- Bundled binaries:
+  - `sing-box.exe`
+  - `wintun.dll`
+- Build output:
+  - `dist/`
+
+---
+
+## 2. Перед началом любой задачи
+
+Выполнить:
+
+```bash
+git status --porcelain
+```
+
+Если worktree грязный — остановиться и спросить пользователя.
+
+Прочитать перед изменениями:
+
+```txt
+BUGS_FIXED_AUDIT.md
+BUG_REVIEW_NEEDED.md
+docs/ARCHITECTURE.md
+docs/BUGFIX_PROCESS_RULES.md
+```
+
+Если файла нет — не считать это ошибкой, но отметить в финальном отчёте.
+
+Создать feature branch:
+
+```bash
+bugfix/<topic>
+feat/<topic>
+chore/<topic>
+ui/<topic>
+```
+
+---
+
+## 3. Платформозависимый код
+
+### 3.1 — Windows-only files
+
+Любой Go-файл с Win32 API должен начинаться с:
 
 ```go
 //go:build windows
 ```
 
-Для каждого Windows-only файла **обязателен** файл-заглушка `*_other.go`:
+Примеры:
+
+```txt
+tray_win32.go
+window_windows.go
+procicon_handler_windows.go
+hotkeys_windows.go
+```
+
+### 3.2 — Non-Windows stubs
+
+Если пакет должен собираться на Linux, для Windows-only кода нужен stub:
 
 ```go
 //go:build !windows
+
 package api
-// stub
 ```
 
-Примеры: `procicon_handler_windows.go` / `procicon_handler_other.go`, `tray_win32.go` / `tray_other.go`.
+Пример пары:
 
-После правок Win32 кода обязательно:
+```txt
+procicon_handler_windows.go
+procicon_handler_other.go
+tray_win32.go
+tray_other.go
+```
+
+### 3.3 — Required builds
+
+SafeSky is Windows-only, but Linux build is required to validate stubs.
+
+После Win32/platform changes:
+
 ```bash
 GOOS=windows go build ./...
-GOOS=linux   go build ./...   # стабы валидны
+GOOS=linux go build ./...
 ```
+
+`GOOS=darwin go build ./...` не требуется для SafeSky, пока macOS support явно не добавлен.
 
 ---
 
-## 2. Win32 API — правила вызовов
+## 4. Win32 API rules
+
+### 4.1 — unsafe.Pointer
+
+Правильно:
 
 ```go
-// ПРАВИЛЬНО: unsafe.Pointer в том же выражении вызова
 proc.Call(uintptr(unsafe.Pointer(&data[0])), uintptr(size))
-
-// ПОСЛЕ вызова, если данные нужны — KeepAlive
 runtime.KeepAlive(data)
-
-// Размеры структур — uintptr, не uint32/uint64
-uintptr(unsafe.Sizeof(myStruct))
 ```
 
-Все Win32-проки объявляются как `var` на уровне пакета через `windows.NewLazySystemDLL` (для system DLL) или через explicit `LoadLibraryEx` с absolute path (для user DLL — wintun).
+Правила:
+- `unsafe.Pointer` использовать в том же выражении вызова, где возможно.
+- Если данные должны жить до конца вызова — `runtime.KeepAlive(data)`.
+- Размеры структур передавать как `uintptr(unsafe.Sizeof(x))`.
+- `.Call(...)` принимает `uintptr`, не `uint32`.
 
-### 2.1 — Callback функции (WndProc, hooks)
+### 4.2 — DLL loading
 
-**ВСЕГДА** с `defer recover()` первой строкой:
+System DLL:
 
 ```go
-func myCallback(hwnd, uMsg, wParam, lParam uintptr) (ret uintptr) {
+windows.NewLazySystemDLL("kernel32.dll")
+```
+
+Не использовать:
+
+```go
+windows.NewLazyDLL("kernel32.dll")
+```
+
+User DLL / bundled DLL:
+
+```go
+exePath, err := os.Executable()
+if err != nil {
+    return err
+}
+
+dllPath := filepath.Join(filepath.Dir(exePath), "wintun.dll")
+h, err := windows.LoadLibraryEx(
+    dllPath,
+    0,
+    windows.LOAD_LIBRARY_SEARCH_APPLICATION_DIR,
+)
+```
+
+### 4.3 — Callback functions
+
+WndProc, hooks и Win32 callbacks всегда с recover первой логической операцией:
+
+```go
+func myCallback(hwnd, msg, wParam, lParam uintptr) (ret uintptr) {
     defer func() {
         if recover() != nil {
             ret = 0
         }
     }()
-    // ... тело
+
+    // callback body
 }
 ```
 
-Без recover паника в callback кладёт процесс целиком.
+Callback должен храниться package-level:
 
-Callback должен иметь package-level хранение для lifetime:
 ```go
-var trayWndProcCallback = syscall.NewCallback(trayWndProc) // package var, не локальная
+var trayWndProcCallback = syscall.NewCallback(trayWndProc)
 ```
 
-Если создавать `NewCallback` в локальной переменной — Go GC может освободить, и Win32 вызовет protected memory.
+Не создавать callback только в локальной переменной — GC может освободить его.
 
-### 2.2 — HANDLE/GDI lifecycle
+### 4.4 — HANDLE / GDI lifecycle
 
-Каждый acquire — парный cleanup в defer **сразу** после проверки ошибки:
+Каждый acquire должен иметь release через defer сразу после проверки ошибки.
 
 ```go
 hIcon, _, _ := pExtractIcon.Call(...)
 if hIcon == 0 {
     return errors.New("ExtractIcon failed")
 }
-defer ignoreProcIconCall(pDestroyIcon, hIcon)
+defer ignoreWin32Call(pDestroyIcon, hIcon)
 ```
 
-Шаблон `ignoreProcIconCall`/`ignoreWin32Call` — игнорировать ошибку cleanup'а при выходе (всё равно ничего не сделать).
+Resource table:
 
-Чек-лист по типам ресурсов:
-| Acquire | Release |
-|---|---|
-| `CreateFile`/`OpenProcess`/`CreateMutex` | `CloseHandle` |
-| `RegOpenKey`/`RegCreateKey` | `RegCloseKey` |
-| `LoadLibrary`/`LoadLibraryEx` | `FreeLibrary` (но не для system-DLL через `NewLazySystemDLL`) |
-| `LoadIcon`/`ExtractIcon`/`CreateIconFromResource` | `DestroyIcon` |
-| `CreateBitmap`/`CreateDIBSection`/`LoadBitmap` | `DeleteObject` |
-| `GetDC`/`CreateCompatibleDC` | `ReleaseDC`/`DeleteDC` |
-| `LocalAlloc`/`GlobalAlloc` | `LocalFree`/`GlobalFree` |
-| `CoTaskMemAlloc` | `CoTaskMemFree` |
-| `MapViewOfFile` | `UnmapViewOfFile` |
-| `CreateWindowEx` | `DestroyWindow` |
-| `WintunCreateAdapter`/`WintunOpenAdapter` | `WintunCloseAdapter` |
-| `CreateMenu`/`CreatePopupMenu` | `DestroyMenu` |
+```txt
+CreateFile / OpenProcess / CreateMutex       -> CloseHandle
+RegOpenKey / RegCreateKey                    -> RegCloseKey
+LoadLibrary / LoadLibraryEx                  -> FreeLibrary
+LoadIcon / ExtractIcon / CreateIconFrom...   -> DestroyIcon
+CreateBitmap / CreateDIBSection / LoadBitmap -> DeleteObject
+GetDC                                        -> ReleaseDC
+CreateCompatibleDC                           -> DeleteDC
+LocalAlloc / GlobalAlloc                     -> LocalFree / GlobalFree
+CoTaskMemAlloc                               -> CoTaskMemFree
+MapViewOfFile                                -> UnmapViewOfFile
+CreateWindowEx                               -> DestroyWindow
+WintunCreateAdapter / WintunOpenAdapter      -> WintunCloseAdapter
+CreateMenu / CreatePopupMenu                 -> DestroyMenu
+```
 
 ---
 
-## 3. HTTP API в `internal/api/`
+## 5. HTTP API rules
 
-### 3.1 — Регистрация маршрутов
+HTTP API находится в:
 
-Новые маршруты — **только** в `SetupFeatureRoutes()` в `server.go`, не в `setupRoutes()`.
-
-```go
-// В SetupFeatureRoutes():
-api.HandleFunc("/newroute", s.handleNew).Methods("GET", "OPTIONS")
-s.addSilentPath("/api/newroute") // если запросы частые/шумные
+```txt
+internal/api/
 ```
 
-Это правило существует чтобы:
-- Старые тесты, использующие `buildTunServer`/`buildServersServer`, не трогались.
-- Новые routes легко находить.
+Главная регистрация:
 
-### 3.2 — JSON body strict decoding
+```txt
+internal/api/server.go
+```
 
-Каждый POST/PUT хендлер декодирующий body **обязательно**:
+### 5.1 — Routes
+
+Новые routes добавлять только в `SetupFeatureRoutes()`.
+
+Не добавлять новые routes в legacy `setupRoutes()`, если это не требуется для старого теста.
+
+Пример:
 
 ```go
-r.Body = http.MaxBytesReader(w, r.Body, <разумный_лимит>)
+func (s *Server) SetupFeatureRoutes() {
+    api.HandleFunc("/api/newroute", s.handleNewRoute).Methods("GET", "OPTIONS")
+    s.addSilentPath("/api/newroute")
+}
+```
+
+### 5.2 — Strict JSON body decoding
+
+Каждый POST/PUT handler, который читает JSON body, должен использовать этот шаблон:
+
+```go
+r.Body = http.MaxBytesReader(w, r.Body, limit)
+
 dec := json.NewDecoder(r.Body)
 dec.DisallowUnknownFields()
+
 if err := dec.Decode(&payload); err != nil {
     http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
     return
 }
-if dec.More() {
+
+var extra struct{}
+if err := dec.Decode(&extra); err != io.EOF {
     http.Error(w, "trailing data after JSON object", http.StatusBadRequest)
     return
 }
 ```
 
-Лимиты:
-- Конфиг JSON: 64 KiB
-- Опциональное body: 4 KiB
-- Profile/большие конфиги: 1 MiB
-- Bulk данные: 4 MiB
+Не использовать `dec.More()` для trailing data check после root object.
 
-Уже сделано для F-001..F-006, F-014..F-019. Шаблон копировать оттуда.
+Рекомендуемые лимиты:
 
-### 3.3 — Path traversal — обязательная защита
+```txt
+Small options:          4 KiB
+Config JSON:           64 KiB
+Profile/config import:  1 MiB
+Bulk data:              4 MiB
+```
 
-Любой хендлер принимающий имя файла:
+### 5.3 — Path traversal
+
+Любой handler, который принимает имя файла или путь, должен проверять traversal.
 
 ```go
 clean := filepath.Clean(input)
+
 if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
     http.Error(w, "invalid path", http.StatusBadRequest)
     return
 }
-abs, _ := filepath.Abs(filepath.Join(rootDir, clean))
-absRoot, _ := filepath.Abs(rootDir)
+
+abs, err := filepath.Abs(filepath.Join(rootDir, clean))
+if err != nil {
+    http.Error(w, "invalid path", http.StatusBadRequest)
+    return
+}
+
+absRoot, err := filepath.Abs(rootDir)
+if err != nil {
+    http.Error(w, "invalid root", http.StatusInternalServerError)
+    return
+}
+
 rel, err := filepath.Rel(absRoot, abs)
 if err != nil || strings.HasPrefix(rel, "..") {
     http.Error(w, "path escapes root", http.StatusBadRequest)
@@ -184,26 +335,57 @@ if err != nil || strings.HasPrefix(rel, "..") {
 }
 ```
 
-Файлы на Windows: запретить также reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9). Уже сделано в F-032.
+На Windows также запрещать reserved names:
 
-### 3.4 — Bind address
+```txt
+CON
+PRN
+AUX
+NUL
+COM1-COM9
+LPT1-LPT9
+```
 
-API биндится **строго** на `127.0.0.1`. Не `0.0.0.0`, не `::`. Уже сделано в F-030.
+### 5.4 — Bind address
 
-### 3.5 — Silent paths
+API должен bind-иться только на:
 
-Часто-опрашиваемые endpoints (poll каждые 1-2 сек) **обязательно** в silent paths:
-- `/api/stats` — Clash API статистика (~1s poll)
-- `/api/connections` — список соединений (~2s poll)
-- `/api/servers` — список серверов
-- `/api/geoip` — геолокация IP
-- `/api/procicon` — иконки процессов
+```txt
+127.0.0.1
+```
 
-Без silent path — лог захлёбывается через минуту.
+Запрещено:
 
-### 3.6 — Кэширование в API
+```txt
+0.0.0.0
+::
+localhost без явного resolve
+```
 
-Для ресурсозатратных операций (извлечение иконок, геолокация) — in-memory кэш с TTL:
+### 5.5 — Silent paths
+
+Часто опрашиваемые endpoints добавлять в silent paths, чтобы не зашумлять лог.
+
+Обычно silent:
+
+```txt
+/api/stats
+/api/connections
+/api/servers
+/api/geoip
+/api/procicon
+/api/diagnose
+```
+
+Пример:
+
+```go
+s.addSilentPath("/api/stats")
+```
+
+### 5.6 — API cache
+
+Для дорогих операций нужен in-memory cache с TTL и max size:
 
 ```go
 var (
@@ -214,147 +396,405 @@ var (
 )
 ```
 
-LRU eviction при превышении `cacheMax`.
+Применимо к:
+- process icons;
+- geoip;
+- server latency;
+- expensive diagnostics.
 
 ---
 
-## 4. Тесты
+## 6. Tests
 
-### 4.1 — Не ломать существующие
+### 6.1 — Existing tests must not break
 
-**Нельзя ломать**:
-- `handlers_test.go` — без Windows constraint, использует `buildTunServer`
-- `handlers_extra_test.go` — без Windows constraint
-- `servers_connect_test.go` — без Windows constraint, использует `buildServersServer`
+Не ломать старые helpers и tests:
 
-Тестовые helpers: `postJSON`, `getJSON`, `deleteJSON`, `buildTunServer`, `buildServersServer`.
-
-Стабы: `stubXray` / `stubProxy` (`handlers_test.go`), `mockXRayManager` / `mockProxyManager` (`server_lifecycle_test.go`).
-
-Новые хендлеры через `SetupFeatureRoutes` **не требуют** обновления существующих тестов.
-
-### 4.2 — Регрессионные тесты обязательны
-
-Каждый багфикс — с тестом, который падает до и проходит после. Особо для:
-- Concurrency: `-race -count=20` (гонки вероятностные).
-- HTTP handlers: тесты с `httptest.NewRecorder` + `httptest.NewRequest`.
-- Win32 (где можно): `GOOS=windows` тесты.
-
-### 4.3 — `goleak` для goroutine leak detection
-
-Где есть долгоживущие горутины (`internal/keepalive`, `internal/anomalylog`, etc):
-
-```go
-import "go.uber.org/goleak"
-
-func TestSomething(t *testing.T) {
-    defer goleak.VerifyNone(t)
-    // ... тест
-}
+```txt
+handlers_test.go
+handlers_extra_test.go
+servers_connect_test.go
+server_lifecycle_test.go
 ```
 
-### 4.4 — sing-box check для config-генерации
+Известные helpers:
 
-Любые изменения в `singbox_builder.go` или `singbox_types.go`:
-
-```go
-// Тест должен скармливать сгенерированный JSON в sing-box check
-// См. TestSingBoxCheck_VLESSTransports как пример
+```txt
+postJSON
+getJSON
+deleteJSON
+buildTunServer
+buildServersServer
+stubXray
+stubProxy
+mockXRayManager
+mockProxyManager
 ```
 
-Без sing-box check — schema drift пройдёт незамеченным.
+Новые handlers через `SetupFeatureRoutes()` не должны требовать переписывания legacy tests без необходимости.
 
-### 4.5 — Golden tests для backward compat
+### 6.2 — Regression tests
 
-При расширении функциональности (например, VLESS transports) — golden test для старых конфигов:
+Каждый bugfix требует тест.
+
+Особенно:
+- HTTP handlers → `httptest.NewRecorder`, `httptest.NewRequest`;
+- concurrency → `-race -count=20`;
+- config generation → sing-box check;
+- parser bugs → table-driven tests;
+- UI pure JS logic → если есть test harness, добавить test; если нет — указать manual verification.
+
+### 6.3 — Goleak
+
+Для пакетов с long-running goroutines использовать `goleak`, если уже подключён или уместен:
 
 ```go
-// TestBuildVLESSOutbound_TCPRealityGolden — байт-в-байт сравнение
-// JSON для исторически рабочего ключа
+defer goleak.VerifyNone(t)
 ```
+
+Применимо:
+- `internal/keepalive`;
+- `internal/anomalylog`;
+- `internal/netwatch`;
+- `internal/process`;
+- `internal/trafficstats`.
+
+### 6.4 — sing-box check
+
+При изменении:
+
+```txt
+internal/config/singbox_builder.go
+internal/config/singbox_types.go
+```
+
+обязательно прогнать generated config через:
+
+```bash
+sing-box check -c <generated-config>
+```
+
+Если в тестах уже есть helper — использовать его.
+
+### 6.5 — Golden tests
+
+При изменении VLESS/sing-box config generation добавить golden tests для старых рабочих конфигов.
 
 ---
 
-## 5. Логирование и шум
+## 7. Logging
 
-### 5.1 — Silent paths (см. 3.5)
+### 7.1 — No secret logs
 
-### 5.2 — Маскирование секретов
+Никогда не логировать целиком:
 
-Никогда не логировать `%v` от структур, содержащих UUID/private key. Маскировать:
+```txt
+VLESS URL
+UUID
+password
+private key
+short_id
+server key
+subscription URL with token
+config structs containing secrets
+```
+
+Использовать mask:
 
 ```go
 func maskSecret(s string) string {
-    if len(s) <= 8 { return "***" }
+    if len(s) <= 8 {
+        return "***"
+    }
     return s[:4] + "..." + s[len(s)-4:]
 }
 ```
 
-### 5.3 — UI-логи через `_normalizeLogKey`
+### 7.2 — Log noise
 
-`_normalizeLogKey(msg)` нормализует для дедупликации. При изменении **добавлять** паттерны, **не убирать** существующие. Текущие: порты, goroutine-ID, таймеры, IP, проценты, размеры файлов (MB/KB), скорость (MB/s).
+Polling endpoints должны быть silent.
+
+Не добавлять info log на каждый poll/tick.
+
+### 7.3 — UI log normalization
+
+Если изменяется `_normalizeLogKey(msg)`:
+- добавлять новые паттерны;
+- не удалять существующие без причины;
+- следить, чтобы dedup не схлопывал разные реальные ошибки.
 
 ---
 
-## 6. Структура пакетов
+## 8. Frontend / WebView UI
 
+Frontend находится:
+
+```txt
+internal/api/static/index.html
+internal/api/static/js/*.js
 ```
-cmd/proxy-client/          — точка входа; main.go, versioninfo.json, rsrc_windows_amd64.syso
+
+### 8.1 — XSS protection
+
+User data только через:
+
+```js
+textContent
+esc()
+```
+
+Плохо:
+
+```js
+el.innerHTML = `<div>${userInput}</div>`;
+```
+
+Хорошо:
+
+```js
+el.textContent = userInput;
+```
+
+или:
+
+```js
+el.innerHTML = `<div>${esc(userInput)}</div>`;
+```
+
+Если нужно подсветить текст regex-ом:
+1. сначала `esc()`;
+2. потом вставлять safe `<span>` в escaped text.
+
+### 8.2 — No native dialogs
+
+Не использовать в production UI:
+
+```js
+alert()
+confirm()
+prompt()
+window.alert()
+window.confirm()
+window.prompt()
+```
+
+Использовать:
+- styled app modal;
+- toast;
+- inline validation.
+
+Исключение: временный debug, не коммитить.
+
+### 8.3 — fetchWithTimeout
+
+Использовать:
+
+```js
+fetchWithTimeout(API + '/api/endpoint')
+```
+
+Не использовать raw:
+
+```js
+fetch('/api/endpoint')
+```
+
+### 8.4 — API constant
+
+Всегда использовать `API` constant.
+
+Плохо:
+
+```js
+fetch('http://127.0.0.1:8080/api/servers')
+```
+
+Хорошо:
+
+```js
+fetch(API + '/api/servers')
+```
+
+### 8.5 — Event listeners
+
+Если listener ставится на stable element, созданный один раз — cleanup не обязателен.
+
+Если listener ставится на dynamic/re-rendered element:
+- использовать event delegation;
+- или удалять старый listener;
+- или гарантировать, что listener не дублируется.
+
+### 8.6 — Layout safe areas
+
+Все страницы с bottom nav должны иметь bottom padding в scroll container.
+
+Контент не должен скрываться под нижней навигацией.
+
+Все страницы с fixed/sticky header должны иметь top safe area.
+
+### 8.7 — Scroll policy
+
+`html` и `body` не должны получать случайный системный scroll.
+
+Рекомендуемый принцип:
+
+```css
+html,
+body {
+  overflow: hidden;
+  height: 100%;
+}
+```
+
+Scroll только внутри page containers:
+
+```css
+.page-scroll,
+.settings-scroll,
+.logs-scroll,
+.processes-scroll,
+.rules-scroll {
+  overflow-y: auto;
+}
+```
+
+### 8.8 — UI polish commits
+
+UI polish разрешён, если задача явно про:
+- visual bug;
+- UI polish;
+- layout;
+- design system;
+- UX.
+
+Не смешивать UI polish с backend/security changes в одном коммите.
+
+### 8.9 — Buttons
+
+Единая иерархия:
+- primary — главное действие;
+- secondary — дополнительное;
+- danger — удаление/сброс/необратимое.
+
+Danger не использовать для:
+- import;
+- export;
+- update;
+- check;
+- open.
+
+### 8.10 — Modals
+
+Все modal/overlay должны иметь:
+- styled header;
+- close button справа;
+- focus state;
+- Escape close, если безопасно;
+- backdrop click close только если это не destructive flow.
+
+### 8.11 — Toast feedback
+
+После save/apply/update действий должен быть feedback:
+- success toast;
+- error toast;
+- inline validation для input errors.
+
+### 8.12 — Country flags
+
+WebView2 может плохо рендерить emoji flags.
+
+Предпочтительно:
+1. bundled/local flag assets;
+2. fallback text country code;
+3. remote CDN только если уже используется и нет локального набора.
+
+Если используется remote flag CDN:
+- обязательно fallback;
+- UI не должен ломаться без интернета;
+- не отправлять чувствительные server metadata во внешний сервис.
+
+### 8.13 — Process icons
+
+Process icons получать через local API:
+
+```js
+API + '/api/procicon?path=' + encodeURIComponent(exePath)
+```
+
+Всегда иметь fallback emoji/icon onerror.
+
+---
+
+## 9. Project structure
+
+```txt
+cmd/proxy-client/
+  main.go
+  versioninfo.json
+  rsrc_windows_amd64.syso
+
 internal/
-  api/                     — HTTP сервер; server.go — главный файл с регистрацией роутов
-                             static/index.html + static/js/*.js — frontend
-  tray/                    — системный трей (Win32 Shell_NotifyIcon)
-  window/                  — WebView2 окно; setAppIcon через LoadImageW(hMod, 1)
-  config/                  — RoutingRule, RuleType, конфигурация sing-box
-                             vless.go — парсер VLESS URL
-                             singbox_builder.go — сборка outbound
-                             singbox_types.go — структуры sing-box JSON
-  xray/                    — управление sing-box процессом (исторически назван xray)
-  proxy/                   — системный прокси (WinHTTP)
-  wintun/                  — TUN интерфейс
-  logger/, eventlog/       — логирование
-  engine/                  — координация запуска (xray + proxy + wintun)
-  keepalive/               — фоновый ping
-  latency/                 — измерения
-  connhistory/             — история соединений
-  trafficstats/            — счётчики трафика
-  netwatch/                — мониторинг сети
-  speedtest/               — speedtest клиент
-  notification/            — уведомления
-  killswitch/              — WFP rules для блокировки трафика
-  apprules/                — правила per-app
-  dpapi/                   — Windows DPAPI шифрование
-  anomalylog/              — детектор аномалий в логах
-  process/                 — мониторинг процессов
-  fileutil/                — atomic writes и т.д.
-  netutil/                 — сетевые утилиты
-  autorun/                 — автозапуск с Windows
-  clipboard/               — буфер обмена
-  crashreport/             — крашдампы
+  api/
+    server.go
+    static/index.html
+    static/js/*.js
+
+  tray/
+  window/
+  config/
+  xray/
+  proxy/
+  wintun/
+  logger/
+  eventlog/
+  engine/
+  keepalive/
+  latency/
+  connhistory/
+  trafficstats/
+  netwatch/
+  speedtest/
+  notification/
+  killswitch/
+  apprules/
+  dpapi/
+  anomalylog/
+  process/
+  fileutil/
+  netutil/
+  autorun/
+  clipboard/
+  crashreport/
 ```
 
 ---
 
-## 7. Ключевые типы
+## 10. Key types
+
+### 10.1 — Routing rules
 
 ```go
-// config/tun.go
 type RoutingRule struct {
     Value  string     `json:"value"`
-    Type   RuleType   `json:"type"`   // "domain"|"ip"|"process"|"geosite"
-    Action RuleAction `json:"action"` // "proxy"|"direct"|"block"
+    Type   RuleType   `json:"type"`   // domain | ip | process | geosite
+    Action RuleAction `json:"action"` // proxy | direct | block
 }
+```
 
-// GET /api/tun/rules возвращает:
+### 10.2 — Rules response
+
+```go
 type RulesResponse struct {
     DefaultAction RuleAction    `json:"default_action"`
     Rules         []RoutingRule `json:"rules"`
     DNS           *DNSConfig    `json:"dns,omitempty"`
 }
+```
 
-// config/singbox_types.go (после промта 08)
+### 10.3 — sing-box outbound transport
+
+```go
 type SBOutbound struct {
-    // ... поля для VLESS
     Transport *SBTransport `json:"transport,omitempty"`
 }
 
@@ -372,192 +812,194 @@ type SBTransport struct {
 
 ---
 
-## 8. Frontend (JS modules в `internal/api/static/js/`)
+## 11. Build
 
-### 8.1 — XSS защита
+### 11.1 — PowerShell build
 
-При вставке user data в HTML **всегда** через `esc()` (определён в `00-core.js`):
-
-```js
-// плохо
-el.innerHTML = `<div>${userInput}</div>`;
-
-// хорошо
-el.innerHTML = `<div>${esc(userInput)}</div>`;
-
-// или ещё лучше для простых случаев
-el.textContent = userInput;
-```
-
-`_highlightLogMsg` — корректный паттерн: сначала `esc()`, потом regex вставляет `<span>` теги в уже-escaped текст.
-
-### 8.2 — Fetch с таймаутом
-
-Использовать `fetchWithTimeout` (определён в `00-core.js` после F-036), не голый `fetch`:
-
-```js
-// автоматически с AbortController
-const r = await fetchWithTimeout(API + '/endpoint');
-```
-
-Default timeout — 10 секунд.
-
-### 8.3 — API const
-
-Всегда через `API` константу (= `http://127.0.0.1:PORT`), не хардкодить:
-
-```js
-fetch(API + '/api/servers')
-```
-
-### 8.4 — Флаги стран
-
-```js
-function countryFlag(code) {
-  const lc = code.toLowerCase(), uc = code.toUpperCase();
-  return `<img src="https://flagcdn.com/w20/${lc}.png" class="flag-img" ...
-    onerror="this.outerHTML='<span class=\\'cc-tag\\'>${uc}</span>'">`;
-}
-```
-
-WebView2 не рендерит Unicode emoji-флаги — всегда через flagcdn.com.
-
-### 8.5 — Иконки процессов
-
-```js
-// Через /api/procicon с emoji-fallback через onerror
-const ico = exePath
-  ? `<img src="${API}/procicon?path=${encodeURIComponent(exePath)}" ...
-     onerror="this.outerHTML='${fallbackEmoji}'">`
-  : fallbackEmoji;
-```
-
-### 8.6 — Event listeners
-
-Сейчас 14 `addEventListener`, 0 `removeEventListener`. При добавлении нового listener:
-- На стабильном элементе (создан раз при загрузке) — OK без cleanup.
-- На динамически пересоздаваемом — обязательно cleanup или event delegation.
-
----
-
-## 9. Сборка
+Debug:
 
 ```powershell
-# Debug-сборка (сохраняет пользовательские данные)
 .\build.ps1
+```
 
-# Release
+Release:
+
+```powershell
 .\build.ps1 -Release
+```
 
-# Пропустить тесты (только для быстрой итерации)
+Skip tests only for quick local iteration:
+
+```powershell
 .\build.ps1 -SkipTests
 ```
 
-**goversioninfo** вшивает `app_icon.ico` в .exe как ресурс ID=1 → иконка окна и трея берётся через `LoadImageW(hMod, 1, ...)`. Без этого иконки не работают.
+### 11.2 — PowerShell script rules
 
-Результат сборки: `dist/`. Не коммитить `dist/secret.key`.
+PowerShell scripts must have:
 
-PowerShell-скрипты должны иметь:
 ```powershell
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 ```
 
-И проверку `$LASTEXITCODE` после каждого `&` invocation.
+After external command invocation check `$LASTEXITCODE` if relevant.
 
----
+### 11.3 — Build output
 
-## 10. Иконка приложения
+Output:
 
-Три слоя (от приоритетного к запасному):
-
-1. **LoadImageW(hMod, 1, IMAGE_ICON, ...)** — из ресурсов .exe (требует goversioninfo)
-2. **CreateIconFromResourceEx(png_bytes, ...)** — из ICO-байт встроенных в icon.go
-3. **CreateIconFromResource(png_bytes, ...)** — старый fallback
-
-Трей: `tray_win32.go → buildIconHandle()`
-Окно: `window/window.go → setAppIcon(hwnd)`
-
----
-
-## 11. Bug audit — формат отчёта
-
-### 11.1 — `BUGS_FIXED_AUDIT.md`
-
-Сквозная нумерация F-NNN. Секции по проходам (`## Concurrency pass`, `## Win32 / unsafe pass`, etc).
-
-В TL;DR держать актуальные счётчики:
-- Total fixed.
-- По severity.
-- gosec / lint / vuln deltas.
-
-### 11.2 — `BUG_REVIEW_NEEDED.md`
-
-R-NNN. Только спорные/политические/blocked внешними условиями.
-
-### 11.3 — `.audit/<topic>/` для baseline
-
-Структура (накопленная за 8 промтов):
-```
-.audit/
-  baseline_*.txt       — пред-аудит снимки
-  final_*.txt          — пост-аудит снимки
-  concurrency/
-    scan_log.md        — построчный лог сканирования
-    race_baseline.txt
-    race_final.txt
-  win32/
-  security/
-  ui/
-  triage/
-  cleanup/
+```txt
+dist/
 ```
 
-### 11.4 — CodeRabbit review
+Do not commit:
 
-После каждого bugfix/audit pass запускать CodeRabbit и триажить результат по `docs/CODERABBIT_PROCESS.md`.
-Actionable findings фиксируются отдельными коммитами, discussable — в `CODERABBIT_DISCUSSION.md`, false positives — в `CODERABBIT_IGNORED.md` с обоснованием.
+```txt
+dist/
+dist/secret.key
+*.exe
+*.dll
+```
 
----
+### 11.4 — App icon
 
-## 12. Текущее состояние кодовой базы (на момент написания)
+`goversioninfo` embeds `app_icon.ico` into `.exe` as resource ID=1.
 
-Уже исправлено (F-001..F-046):
-- JSON decoders strict (11 хендлеров).
-- Concurrency: anomalylog, proxy guard, xray restart, network watcher, feature route lifecycle, ping probes.
-- Win32: DLL hijacking (system + wintun), callback recover (tray, netwatch), syscall conversions.
-- Security: bind address 127.0.0.1, backup path traversal, reserved names, secret key zeroing, geoip hardening.
-- UI: document.write removal, fetchWithTimeout.
-- Lint: errcheck, CI security gates, PowerShell strict.
-- VLESS transports: tcp, tcp+http-obf, ws, grpc, http/h2, httpupgrade. Backward compat golden test.
+Window/tray icon priority:
 
-Остался открытым:
-- R-003: kill switch policy (требует продуктового решения).
+```txt
+1. LoadImageW(hMod, 1, IMAGE_ICON, ...)
+2. CreateIconFromResourceEx(...)
+3. CreateIconFromResource(...)
+```
 
-В работе по roadmap (после промта 28 cleanup):
-- Phase 1: auto-update, leak protection, diagnostics, kill switch.
-- Phase 2-5: extensions, UX, production.
+Tray:
 
----
+```txt
+tray_win32.go -> buildIconHandle()
+```
 
-## 13. Частые ошибки
+Window:
 
-| Ошибка | Причина | Решение |
-|--------|---------|---------|
-| Иконка трея исчезла | `buildIconHandle` вернул 0 | 3-tier в buildIconHandle; проверить goversioninfo |
-| Флаги не отображаются | WebView2 не рендерит Unicode emoji-флаги | Всегда flagcdn.com img |
-| Geosite update обновляет мало баз | `downloadGeosite` не читал rules | Читать `/api/tun/rules` тоже |
-| Шумные логи при polling | Нет silent path | `s.addSilentPath("/api/...")` |
-| Тест не компилируется не на Windows | Win32 код без build tag | `//go:build windows` + заглушка `_other.go` |
-| `uint32` в `.Call(...)` | `.Call` принимает `...uintptr` | `uintptr(value)` |
-| sing-box не запускается после правки config | Schema drift | Прогнать через `sing-box check` в тесте |
-| VLESS gRPC ключ не работает | mode=multi не поддерживается | Warning в лог, использовать gun |
-| Краш при выходе из tray menu | Паника в WndProc без recover | `defer recover()` (F-028) |
+```txt
+window/window.go -> setAppIcon(hwnd)
+```
 
 ---
 
-## 14. Полная рабочая память
+## 12. Audit files
 
-Подробнее: `docs/ARCHITECTURE.md`, `docs/BUGFIX_PROCESS_RULES.md`.
+### 12.1 — BUGS_FIXED_AUDIT.md
 
-Историческая миграция (что было раньше): `docs/BUGS_FIXED.md` — старый формат до текущего аудита.
+Use sequential `F-NNN`.
+
+Format:
+
+```md
+### [F-NNN] <title>
+- **Severity:** Critical | High | Medium | Low
+- **Category:** <category>
+- **File(s):** path:LINE
+- **Commit:** <hash>
+- **Symptom:** what was observed
+- **Root cause:** why it happened
+- **Fix:** what changed
+- **Test:** test name
+- **Verified:** build/test commands
+```
+
+### 12.2 — BUG_REVIEW_NEEDED.md
+
+Use sequential `R-NNN`.
+
+Format:
+
+```md
+## R-NNN: <title>
+- **Coordinates:** file:line
+- **Hypothesis:** what looks wrong
+- **Why not fixed:** why not changed
+- **Suggested fix:** proposed fix
+- **Confidence:** Confirmed | Likely | Suspect
+```
+
+### 12.3 — .audit
+
+For big passes:
+
+```txt
+.audit/<topic>/
+  baseline_tests.txt
+  final_tests.txt
+  tool_versions.md
+  staticcheck.txt
+  gosec.txt
+  govulncheck.txt
+  coderabbit.txt
+```
+
+---
+
+## 13. CodeRabbit
+
+If available and authenticated:
+
+```bash
+coderabbit review --plain
+```
+
+If not available:
+- do not block the pass;
+- document in review-needed;
+- continue with local tests/static analysis.
+
+Triage:
+- actionable → fix in separate commit;
+- discussable → `CODERABBIT_DISCUSSION.md`;
+- false positive → `CODERABBIT_IGNORED.md` with reason.
+
+---
+
+## 14. Current known state
+
+Already fixed historically:
+- strict JSON decoding for many handlers;
+- concurrency bugs in anomalylog/proxy/xray/netwatch;
+- Win32 DLL loading and callback recover issues;
+- bind address hardening;
+- backup path traversal;
+- secret key zeroing;
+- geoip hardening;
+- document.write removal;
+- fetchWithTimeout introduction;
+- CI/security/lint improvements;
+- VLESS transports support.
+
+Known open product decision:
+- kill switch policy requires product-level decision.
+
+Before changing these areas, check:
+- `BUGS_FIXED_AUDIT.md`;
+- `BUG_REVIEW_NEEDED.md`;
+- `docs/ARCHITECTURE.md`.
+
+---
+
+## 15. Frequent mistakes
+
+| Mistake | Cause | Fix |
+|---|---|---|
+| Tray icon disappeared | `buildIconHandle` returned 0 | Check 3-tier icon loading and goversioninfo |
+| Flags not visible | WebView2 emoji flags issue | Use local flag assets or image fallback |
+| Geosite update loads too few bases | Rules not included | Read `/api/tun/rules` |
+| Polling logs noisy | Missing silent path | `s.addSilentPath("/api/...")` |
+| Tests fail on Linux | Win32 code without stub | Add `//go:build windows` + `_other.go` |
+| `uint32` passed to `.Call` | Win32 proc expects uintptr | Convert to `uintptr` |
+| sing-box fails after config change | schema drift | Run `sing-box check` |
+| VLESS gRPC fails | unsupported mode | warn and fallback to supported mode |
+| Crash in tray/menu | panic in callback | recover in callback |
+| UI shows browser prompt | native `prompt()` used | replace with styled app modal |
+| Content hidden under nav | missing bottom safe padding | add page scroll padding |
+| Logs filled with polling | route not silent | add silent path |
+| Secrets in logs | struct logged directly | log only safe fields / mask |

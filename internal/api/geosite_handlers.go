@@ -46,8 +46,6 @@ var knownGeosites = []KnownGeosite{
 	{Name: "geolocation-!cn", Description: "Не-Китайские сайты"},
 	{Name: "category-ads-all", Description: "Реклама (все)"},
 	{Name: "telegram", Description: "Telegram"},
-	{Name: "openai", Description: "OpenAI / ChatGPT / Codex"},
-	{Name: "anthropic", Description: "Anthropic / Claude API"},
 	{Name: "pinterest", Description: "Pinterest"},
 }
 

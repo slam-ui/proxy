@@ -13,12 +13,11 @@ func TestWindowsOnlyFilesHaveBuildTagsAndOtherStubs(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".claude", "dist":
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "dist" {
 				return filepath.SkipDir
-			default:
-				return nil
 			}
+			return nil
 		}
 
 		if !strings.HasSuffix(path, ".go") {

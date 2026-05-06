@@ -41,8 +41,8 @@ func TestGeositeList_UsesSRSHeaderInsteadOfSize(t *testing.T) {
 	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
 		t.Fatalf("MkdirAll data: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(config.DataDir, "geosite-openai.bin"), validTestSRS(159), 0644); err != nil {
-		t.Fatalf("WriteFile openai: %v", err)
+	if err := os.WriteFile(filepath.Join(config.DataDir, "geosite-customsmall.bin"), validTestSRS(159), 0644); err != nil {
+		t.Fatalf("WriteFile customsmall: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(config.DataDir, "geosite-localbad.bin"), []byte("<!doctype html>"), 0644); err != nil {
 		t.Fatalf("WriteFile localbad: %v", err)
@@ -70,8 +70,8 @@ func TestGeositeList_UsesSRSHeaderInsteadOfSize(t *testing.T) {
 	for _, item := range resp.Items {
 		items[item.Name] = item
 	}
-	if item := items["openai"]; !item.Available || item.FileSize != 159 {
-		t.Fatalf("openai item = %+v, want available small SRS", item)
+	if item := items["customsmall"]; !item.Available || item.FileSize != 159 {
+		t.Fatalf("customsmall item = %+v, want available small SRS", item)
 	}
 	if item := items["localbad"]; item.Available {
 		t.Fatalf("localbad item = %+v, want unavailable HTML", item)

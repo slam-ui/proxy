@@ -464,11 +464,11 @@ func buildTUN(serverAddr string) SBInbound {
 		//   может утекать мимо TUN даже при strict_route=true (Windows-специфичное поведение
 		//   с binding сокетов к физическому интерфейсу). Итог: QUIC-трафик идёт напрямую
 		//   с реального IP пользователя → Cloudflare видит российский IP → 403 Forbidden
-		//   для chatgpt.com, api.openai.com (GPT, Codex), github.com (Copilot в VS Code).
+		//   для selected public HTTPS services.
 		//
 		// С mixed stack: gVisor перехватывает ALL UDP пакеты на уровне TUN-интерфейса,
-		//   forwarding через VLESS → сервер → destination. QUIC (HTTP/3) к AI-сервисам
-		//   корректно проксируется, VS Code Copilot / Codex / ChatGPT работают без 403.
+		//   forwarding через VLESS → сервер → destination. QUIC (HTTP/3) к selected services
+		//   корректно проксируется без 403.
 		Stack: "mixed",
 		// RouteExcludeAddress: IP прокси-сервера + loopback.
 		// TUN подсеть (172.20.0.0/30) НЕ исключаем — иначе Windows DNS Client (svchost)
@@ -480,7 +480,7 @@ func buildTUN(serverAddr string) SBInbound {
 		//
 		// 127.0.0.0/8 и ::1/128 исключаются на уровне ОС (не только route-правила):
 		// strict_route=true + WFP иногда перехватывает loopback трафик на Windows 11,
-		// что ломает OAuth callback для Claude Code, Codex и других CLI-инструментов
+		// что ломает OAuth callback для локальных CLI-инструментов
 		// (они стартуют HTTP-сервер на localhost:PORT для редиректа после авторизации).
 		// RouteExcludeAddress гарантирует что loopback никогда не попадёт в TUN pipe.
 		RouteExcludeAddress: func() []string {
@@ -617,31 +617,23 @@ func buildRoute(routingCfg *RoutingConfig, serverAddr string) SBRoute {
 
 	if routingCfg.BlockQUIC {
 		rules = append(rules,
-			// QUIC (UDP/443) для AI-сервисов: явно пропускаем через прокси ДО blanket reject.
-			// VS Code Codex, GitHub Copilot, ChatGPT используют HTTP/3 (QUIC) для API-вызовов.
+			// QUIC (UDP/443) для selected desktop services: явно пропускаем через прокси ДО blanket reject.
+			// Некоторые desktop-инструменты используют HTTP/3 (QUIC) для API-вызовов.
 			// С mixed stack + gVisor gVisor перехватывает UDP и форвардит через VLESS туннель.
 			// DomainSuffix матчится по SNI (sniff выше извлекает его из QUIC Initial packet).
-			// Приватные IP уже обработаны выше — сюда доходит только публичный трафик AI-сервисов.
+			// Приватные IP уже обработаны выше — сюда доходит только публичный трафик selected services.
 			SBRouteRule{
 				Network: "udp",
 				Port:    []uint16{443},
 				DomainSuffix: []string{
-					"openai.com",         // ChatGPT, Codex API, Whisper
-					"chatgpt.com",        // ChatGPT web
-					"oaistatic.com",      // OpenAI static assets
-					"oaiusercontent.com", // OpenAI user content
-					"github.com",         // GitHub Copilot (VS Code extension)
-					"githubcopilot.com",  // GitHub Copilot API
-					"copilot.github.com", // GitHub Copilot
-					"anthropic.com",      // Claude API
-					"claude.ai",          // Claude web
+					"github.com", // GitHub API and VS Code extensions
 				},
 				Outbound: "proxy-out",
 			},
 			// Blanket-reject остального QUIC (UDP/443): браузеры переключаются на TCP/443.
 			// Без этого браузер кэширует "Alt-Svc: h3" и пытается использовать QUIC для всех сайтов,
 			// что с некоторыми серверами даёт некорректную маршрутизацию.
-			// AI-сервисы выше уже обработаны — сюда попадают только прочие домены.
+			// Selected services выше уже обработаны — сюда попадают только прочие домены.
 			SBRouteRule{Network: "udp", Port: []uint16{443}, Action: "reject"},
 		)
 	}
