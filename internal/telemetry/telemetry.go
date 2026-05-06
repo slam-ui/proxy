@@ -188,7 +188,7 @@ func (m *Manager) Start(ctx context.Context, interval time.Duration) {
 		for {
 			select {
 			case <-ctx.Done():
-				flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				flushCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				_ = m.Flush(flushCtx)
 				cancel()
 				return
