@@ -359,8 +359,11 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: '0'
         run: |
+          # modernc.org/mathutil v1.7.1 ships a BSD-3-Clause LICENSE, but
+          # go-licenses v1.6.0 can fail to classify it on CI.
           go-licenses check ./... \
-            --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0
+            --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,MPL-2.0 \
+            --ignore=modernc.org/mathutil
 
   # ── 10. CI GATE ──────────────────────────────────────────────────────────────
   # Single required status check for branch protection rules.
