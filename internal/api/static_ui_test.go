@@ -243,6 +243,116 @@ func TestStaticIndexUsesSplitAssets(t *testing.T) {
 	}
 }
 
+func TestHomeHeroStatusRowIsHidden(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{`class="hero-status-row"`, `id="orbStage"`, `id="slbl"`} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home hero status row missing %q", required)
+		}
+	}
+
+	hiddenRule := regexp.MustCompile(`(?s)\.hero-status-row\s*\{[^}]*display\s*:\s*none\s*!important`)
+	if !hiddenRule.MatchString(css) {
+		t.Fatal("home hero status row must stay visually hidden")
+	}
+	for _, required := range []string{`min-height:118px`, `padding-top:18px`} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home hero compact spacing missing %q", required)
+		}
+	}
+}
+
+func TestHomePrimaryAndServerActionsAreSwapped(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	toggleIdx := strings.Index(html, `class="quick-action quick-primary hero-toggle-action"`)
+	if toggleIdx < 0 {
+		t.Fatal("home toggle action must be rendered in the hero")
+	}
+	serverIdx := strings.Index(html, `class="srv-pill quick-action server-pill-action wide"`)
+	if serverIdx < 0 {
+		t.Fatal("server pill must be rendered as a quick action")
+	}
+	if serverIdx < toggleIdx {
+		t.Fatal("server pill must appear below the hero toggle action")
+	}
+	if strings.Contains(html, `class="quick-action quick-primary wide"`) {
+		t.Fatal("old quick-action primary placement must not remain")
+	}
+
+	for _, required := range []string{
+		`.hero-toggle-action`,
+		`.server-pill-action`,
+		`grid-column:1/-1`,
+		`.server-pill-action .srv-flag`,
+		`.server-pill-action .srv-meta`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("swapped home action styling missing %q", required)
+		}
+	}
+}
+
+func TestHomeToggleContainsStartupTimer(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js", "js/70-runtime-polling.js")
+
+	for _, required := range []string{
+		`id="qaTimer"`,
+		`id="qaTimerLabel"`,
+		`id="qaTimerTime"`,
+		`id="qaTimerBar"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home startup timer markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.hero-toggle-action.timer-active`,
+		`.qa-timer.vis`,
+		`.qa-timer.indeterminate #qaTimerBar`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home startup timer style missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`ready_at_ms`,
+		`curTimer === 'toggle'`,
+		`OpTimer.start('warming', label, estMs)`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("warming timer logic missing %q", required)
+		}
+	}
+	if strings.Contains(js, `readyAt * 1000 - Date.now()) : 30000`) {
+		t.Fatal("warming timer must not use the old fixed 30s fallback")
+	}
+}
+
+func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js")
+
+	for _, required := range []string{
+		`function _isHomeActionVisible()`,
+		`op === 'apply' || op === 'connect'`,
+		`function _syncPlacement(kind)`,
+		`refreshPlacement`,
+		`OpTimer.refreshPlacement()`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("home operation timer docking missing %q", required)
+		}
+	}
+	if strings.Contains(js, `return op === 'toggle' || op === 'warming';`) {
+		t.Fatal("home timer docking must not be limited to toggle/warming operations")
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{

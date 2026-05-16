@@ -46,6 +46,7 @@ function navTo(i) {
   if (i === 2) loadProcs();
   if (i === 3 && !logStreaming) startLogStream();
   if (i === 4) loadSettingsPage();
+  if (typeof OpTimer !== 'undefined' && OpTimer.refreshPlacement) OpTimer.refreshPlacement();
   updateChromeScrollState();
 }
 

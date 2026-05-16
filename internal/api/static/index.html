@@ -146,31 +146,40 @@
         </button>
         <div class="status-lbl off" id="slbl">ОТКЛЮЧЁН</div>
       </div>
-      <div class="srv-pill" onclick="toggleSrv()">
-        <span class="srv-flag" id="sflag">—</span>
-        <div class="srv-inf">
-          <div class="srv-nm" id="snm">Нет сервера</div>
-          <div class="srv-dt" id="sdt">—</div>
-        </div>
-        <span class="srv-ping col-dim" id="sping">—</span>
-        <span class="srv-chev">▾</span>
-      </div>
-      <div class="srv-meta" id="srvMeta">
-        <span class="srv-meta-item"><span id="srvMetaPing">—</span></span>
-        <span class="srv-meta-item" id="srvMetaMode">—</span>
-        <span class="srv-meta-item" id="srvMetaLocation">—</span>
-      </div>
+      <button class="quick-action quick-primary hero-toggle-action" type="button" onclick="toggle()">
+        <span class="quick-icon">
+          <svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a8 8 0 1 1-12.8 0"/></svg>
+        </span>
+        <span class="quick-copy">
+          <span id="qaToggleLabel">Подключить туннель</span>
+          <small id="qaState">защита выключена</small>
+        </span>
+        <span class="qa-timer" id="qaTimer" aria-live="polite">
+          <span class="qa-timer-head">
+            <span id="qaTimerLabel">Запуск</span>
+            <b id="qaTimerTime">...</b>
+          </span>
+          <span class="qa-timer-track">
+            <span id="qaTimerBar"></span>
+          </span>
+        </span>
+      </button>
     </div>
   </div>
 
   <div class="quick-actions layer">
-    <button class="quick-action quick-primary wide" onclick="toggle()">
-      <span class="quick-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a8 8 0 1 1-12.8 0"/></svg>
+    <button class="srv-pill quick-action server-pill-action wide" type="button" onclick="toggleSrv()">
+      <span class="srv-flag" id="sflag">—</span>
+      <span class="srv-inf">
+        <span class="srv-nm" id="snm">Нет сервера</span>
+        <span class="srv-dt" id="sdt">—</span>
       </span>
-      <span class="quick-copy">
-        <span id="qaToggleLabel">Подключить туннель</span>
-        <small id="qaState">защита выключена</small>
+      <span class="srv-ping col-dim" id="sping">—</span>
+      <span class="srv-chev">▾</span>
+      <span class="srv-meta" id="srvMeta">
+        <span class="srv-meta-item"><span id="srvMetaPing">—</span></span>
+        <span class="srv-meta-item" id="srvMetaMode">—</span>
+        <span class="srv-meta-item" id="srvMetaLocation">—</span>
       </span>
     </button>
     <button class="quick-action" onclick="toggleSrv()">
