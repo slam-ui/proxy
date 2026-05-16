@@ -49,6 +49,10 @@ const toast    = $id('toast');
 const srvPanel = $id('srvPanel');
 const srvOverlay = $id('srvOverlay');
 const warmDot  = $id('warmDot');
+const qaTimer  = $id('qaTimer');
+const qaTimerLabel = $id('qaTimerLabel');
+const qaTimerTime  = $id('qaTimerTime');
+const qaTimerBar   = $id('qaTimerBar');
 
 function isSupportedServerURI(url) {
   return /^\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard|vmess):\/\//i.test(url || '');
@@ -69,12 +73,22 @@ const OpTimer = (() => {
   let _hideTimer = null;
   let _curOp     = null;    // текущая операция (string id)
 
+  function _isHeroTimerOp(op) {
+    return op === 'toggle' || op === 'warming';
+  }
+
   function _fmtTime(ms) {
     if (ms < 0) ms = 0;
     const s = Math.ceil(ms / 1000);   // ceil: "5с" пока не пройдёт полная секунда
     const m = Math.floor(s / 60);
     const ss = s % 60;
     return m > 0 ? m + ':' + String(ss).padStart(2, '0') : s + 'с';
+  }
+
+  function _plainLabel(html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html || '');
+    return (tpl.content.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   function _setVisible(kind) {
@@ -109,6 +123,27 @@ const OpTimer = (() => {
     elText.replaceChildren(frag);
   }
 
+  function _setHeroTimerVisible(visible, kind) {
+    if (!qaTimer) return;
+    const btn = qaTimer.closest('.hero-toggle-action');
+    btn?.classList.toggle('timer-active', visible);
+    qaTimer.classList.toggle('vis', visible);
+    qaTimer.classList.remove('running', 'success', 'error', 'indeterminate');
+    if (visible) qaTimer.classList.add(kind || 'running');
+  }
+
+  function _setHeroTimerLabel(label) {
+    if (!qaTimerLabel) return;
+    qaTimerLabel.textContent = _plainLabel(label) || 'Запуск';
+  }
+
+  function _renderHeroTimer(timeText, pct, indeterminate) {
+    if (!_isHeroTimerOp(_curOp) || !qaTimer) return;
+    if (qaTimerTime) qaTimerTime.textContent = timeText;
+    if (qaTimerBar) qaTimerBar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+    qaTimer.classList.toggle('indeterminate', !!indeterminate);
+  }
+
   function _tick() {
     const elapsed = Date.now() - _startMs;
     if (_estMs > 0) {
@@ -119,15 +154,18 @@ const OpTimer = (() => {
         const pct = Math.min(100, (elapsed / _estMs) * 100);
         elBar.style.width = pct + '%';
         elBar.classList.remove('indeterminate');
+        _renderHeroTimer(_fmtTime(remain), pct, false);
       } else {
         // Оценка истекла но операция ещё идёт — показываем '...' вместо count-up.
         elTime.textContent = '...';
         elBar.classList.add('indeterminate');
+        _renderHeroTimer('...', 100, true);
       }
     } else {
       // Неизвестная длительность — показываем '...' вместо count-up
       elTime.textContent = '...';
       elBar.classList.add('indeterminate');
+      _renderHeroTimer('...', 0, true);
     }
   }
 
@@ -141,8 +179,16 @@ const OpTimer = (() => {
     _curOp = op;
     _startMs = Date.now();
     _estMs = estMs || 0;
-    el.className = 'op-timer vis';
-    _setVisible('running');
+    const heroTimer = _isHeroTimerOp(op);
+    el.className = heroTimer ? 'op-timer' : 'op-timer vis';
+    if (heroTimer) {
+      _clearVisible();
+      _setHeroTimerVisible(true, 'running');
+      _setHeroTimerLabel(label);
+    } else {
+      _setHeroTimerVisible(false);
+      _setVisible('running');
+    }
     _setLabel(label);
     elTime.textContent = _estMs > 0 ? _fmtTime(_estMs) : '...';
     elBar.style.width = '0%';
@@ -157,7 +203,10 @@ const OpTimer = (() => {
    */
   function update(op, label, estMs) {
     if (_curOp !== op) return; // другая операция уже показана
-    if (label) _setLabel(label);
+    if (label) {
+      _setLabel(label);
+      if (_isHeroTimerOp(op)) _setHeroTimerLabel(label);
+    }
     // FIX: только положительное значение обновляет оценку — 0 не затирает рабочий обратный отсчёт
     if (estMs > 0) _estMs = estMs;
     _tick();
@@ -169,8 +218,17 @@ const OpTimer = (() => {
     clearInterval(_interval);
     _interval = null;
     const elapsed = Date.now() - _startMs;
-    el.className = 'op-timer vis success';
-    _setVisible('success');
+    const heroTimer = _isHeroTimerOp(op);
+    el.className = heroTimer ? 'op-timer' : 'op-timer vis success';
+    if (heroTimer) {
+      _clearVisible();
+      _setHeroTimerVisible(true, 'success');
+      _setHeroTimerLabel(msg || 'Готово');
+      _renderHeroTimer(_fmtTime(elapsed), 100, false);
+    } else {
+      _setHeroTimerVisible(false);
+      _setVisible('success');
+    }
     _setLabel(msg || 'Готово');
     elTime.textContent = _fmtTime(elapsed);
     elBar.style.width = '100%';
@@ -178,6 +236,7 @@ const OpTimer = (() => {
     _hideTimer = setTimeout(() => {
       el.className = 'op-timer';
       _curOp = null;
+      _setHeroTimerVisible(false);
       _clearVisible();
     }, hideDelay || 2500);
   }
@@ -188,8 +247,17 @@ const OpTimer = (() => {
     clearInterval(_interval);
     _interval = null;
     const elapsed = Date.now() - _startMs;
-    el.className = 'op-timer vis error';
-    _setVisible('error');
+    const heroTimer = _isHeroTimerOp(op);
+    el.className = heroTimer ? 'op-timer' : 'op-timer vis error';
+    if (heroTimer) {
+      _clearVisible();
+      _setHeroTimerVisible(true, 'error');
+      _setHeroTimerLabel(msg || 'Ошибка');
+      _renderHeroTimer(_fmtTime(elapsed), 100, false);
+    } else {
+      _setHeroTimerVisible(false);
+      _setVisible('error');
+    }
     _setLabel(msg || 'Ошибка');
     elTime.textContent = _fmtTime(elapsed);
     elBar.style.width = '100%';
@@ -197,6 +265,7 @@ const OpTimer = (() => {
     _hideTimer = setTimeout(() => {
       el.className = 'op-timer';
       _curOp = null;
+      _setHeroTimerVisible(false);
       _clearVisible();
     }, hideDelay || 4000);
   }
@@ -214,6 +283,7 @@ const OpTimer = (() => {
     _curOp = null;
     _startMs = 0;
     _estMs = 0;
+    _setHeroTimerVisible(false);
     _clearVisible();
   }
 
@@ -306,7 +376,7 @@ async function toggle() {
   const turnOn = !state.enabled;
   state.pending = true;
   renderState();
-  OpTimer.start('toggle', turnOn ? 'Подключение...' : 'Отключение...', 3000);
+  OpTimer.start('toggle', turnOn ? 'Подключение...' : 'Отключение...', 0);
 
   try {
     const ep = turnOn ? '/proxy/enable' : '/proxy/disable';

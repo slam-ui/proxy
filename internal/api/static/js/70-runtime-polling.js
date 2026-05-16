@@ -5,6 +5,18 @@ let _pollStatusFails = 0;
 let _backendWasOffline = false;
 let _pollStatusPromise = null;
 
+function _xrayReadyAtMs(xray) {
+  const readyAtMs = Number(xray?.ready_at_ms || 0);
+  if (readyAtMs > 0) return readyAtMs;
+  const readyAt = Number(xray?.ready_at || 0);
+  return readyAt > 0 ? readyAt * 1000 : 0;
+}
+
+function _etaTotalMsFromTimerStart(readyAtMs) {
+  if (readyAtMs <= Date.now()) return undefined;
+  return Math.max(1000, readyAtMs - OpTimer.getStartMs());
+}
+
 async function pollStatus() {
   if (_pollStatusRunning) return _pollStatusPromise;
   _pollStatusRunning = true;
@@ -29,13 +41,14 @@ async function pollStatus() {
 
     // OpTimer: warming / restarting — показываем обратный отсчёт
     const healthStatus = d.xray?.health_status || '';
-    const readyAt = d.xray?.ready_at || 0; // unix timestamp
-    if (state.warming && !OpTimer.current()) {
+    const readyAtMs = _xrayReadyAtMs(d.xray);
+    const curTimer = OpTimer.current();
+    const canOwnTimer = !curTimer || curTimer === 'toggle' || curTimer === 'warming';
+    if (state.warming && canOwnTimer && curTimer !== 'warming') {
       const label = healthStatus === 'restarting'
         ? 'Перезапуск sing-box (восстановление TUN)...'
         : 'Запуск sing-box...';
-      // Дефолт 30с если сервер ещё не вернул ETA — бар двигается по времени, не вслепую.
-      const estMs = readyAt > 0 ? Math.max(1000, readyAt * 1000 - Date.now()) : 30000;
+      const estMs = readyAtMs > Date.now() ? Math.max(1000, readyAtMs - Date.now()) : 0;
       OpTimer.start('warming', label, estMs);
     } else if (state.warming && OpTimer.current() === 'warming') {
       // Обновляем label с деталями (попытки TUN recovery)
@@ -45,9 +58,7 @@ async function pollStatus() {
       const label = healthStatus === 'restarting'
         ? 'Перезапуск sing-box' + attemptInfo
         : 'Запуск sing-box...';
-      // FIX: пересчитываем общую длительность из ready_at для корректного обратного отсчёта.
-      // _estMs = readyAt*1000 - startMs (полная длительность от старта таймера до ETA).
-      const updEstMs = readyAt > 0 ? Math.max(1000, readyAt * 1000 - OpTimer.getStartMs()) : undefined;
+      const updEstMs = _etaTotalMsFromTimerStart(readyAtMs);
       OpTimer.update('warming', label, updEstMs);
     } else if (!state.warming && prevWarming && OpTimer.current() === 'warming') {
       // Warming закончился

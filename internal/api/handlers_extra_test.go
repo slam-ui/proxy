@@ -454,15 +454,9 @@ func TestHandleStatus_Restarting_ShowsWarmingTrue(t *testing.T) {
 	}, context.Background())
 	srv.FinalizeRoutes()
 
-	// Симулируем restarting state
-	srv.restartMu.Lock()
-	srv.restarting = true
-	srv.restartMu.Unlock()
-	defer func() {
-		srv.restartMu.Lock()
-		srv.restarting = false
-		srv.restartMu.Unlock()
-	}()
+	readyAt := time.Now().Add(10 * time.Second).Round(time.Millisecond)
+	srv.SetRestarting(readyAt)
+	defer srv.ClearRestarting()
 
 	w := getJSON(t, srv.router, "/api/status")
 	if w.Code != http.StatusOK {
@@ -474,6 +468,12 @@ func TestHandleStatus_Restarting_ShowsWarmingTrue(t *testing.T) {
 	}
 	if !resp.XRay.Warming {
 		t.Error("warming должен быть true при restarting=true")
+	}
+	if resp.XRay.ReadyAt != readyAt.Unix() {
+		t.Errorf("ready_at = %d, want %d", resp.XRay.ReadyAt, readyAt.Unix())
+	}
+	if resp.XRay.ReadyAtMs != readyAt.UnixMilli() {
+		t.Errorf("ready_at_ms = %d, want %d", resp.XRay.ReadyAtMs, readyAt.UnixMilli())
 	}
 }
 

@@ -296,6 +296,44 @@ func TestHomePrimaryAndServerActionsAreSwapped(t *testing.T) {
 	}
 }
 
+func TestHomeToggleContainsStartupTimer(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticBundle(t, "js/00-core.js", "js/70-runtime-polling.js")
+
+	for _, required := range []string{
+		`id="qaTimer"`,
+		`id="qaTimerLabel"`,
+		`id="qaTimerTime"`,
+		`id="qaTimerBar"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home startup timer markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.hero-toggle-action.timer-active`,
+		`.qa-timer.vis`,
+		`.qa-timer.indeterminate #qaTimerBar`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home startup timer style missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`ready_at_ms`,
+		`curTimer === 'toggle'`,
+		`OpTimer.start('warming', label, estMs)`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("warming timer logic missing %q", required)
+		}
+	}
+	if strings.Contains(js, `readyAt * 1000 - Date.now()) : 30000`) {
+		t.Fatal("warming timer must not use the old fixed 30s fallback")
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{
