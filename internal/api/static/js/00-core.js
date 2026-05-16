@@ -72,9 +72,24 @@ const OpTimer = (() => {
   let _estMs     = 0;      // estimated total duration ms (0 = unknown)
   let _hideTimer = null;
   let _curOp     = null;    // текущая операция (string id)
+  let _curLabel  = '';
+  let _curKind   = '';
 
-  function _isHeroTimerOp(op) {
-    return op === 'toggle' || op === 'warming';
+  function _isHomeActionVisible() {
+    if (!qaTimer) return false;
+    const page = $id('page0');
+    const btn = qaTimer.closest('.hero-toggle-action');
+    if (!page || !btn) return false;
+    if (typeof currentPage === 'number' && currentPage !== 0) return false;
+    return page.style.display !== 'none';
+  }
+
+  function _canDockHeroTimer(op) {
+    return op === 'toggle' || op === 'warming' || op === 'apply' || op === 'connect';
+  }
+
+  function _shouldUseHeroTimer(op) {
+    return _canDockHeroTimer(op) && _isHomeActionVisible();
   }
 
   function _fmtTime(ms) {
@@ -138,13 +153,39 @@ const OpTimer = (() => {
   }
 
   function _renderHeroTimer(timeText, pct, indeterminate) {
-    if (!_isHeroTimerOp(_curOp) || !qaTimer) return;
+    if (!_shouldUseHeroTimer(_curOp) || !qaTimer) return;
     if (qaTimerTime) qaTimerTime.textContent = timeText;
     if (qaTimerBar) qaTimerBar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
     qaTimer.classList.toggle('indeterminate', !!indeterminate);
   }
 
+  function _syncPlacement(kind) {
+    if (!_curOp) {
+      el.className = 'op-timer';
+      _setHeroTimerVisible(false);
+      _clearVisible();
+      return false;
+    }
+    const heroTimer = _shouldUseHeroTimer(_curOp);
+    if (heroTimer) {
+      el.className = 'op-timer';
+      _clearVisible();
+      _setHeroTimerVisible(true, kind || 'running');
+      _setHeroTimerLabel(_curLabel);
+    } else {
+      _setHeroTimerVisible(false);
+      const cls = kind === 'success' ? 'op-timer vis success'
+        : kind === 'error' ? 'op-timer vis error'
+        : 'op-timer vis';
+      el.className = cls;
+      _setVisible(kind || 'running');
+    }
+    return heroTimer;
+  }
+
   function _tick() {
+    if (!_curOp) return;
+    _syncPlacement(_curKind || 'running');
     const elapsed = Date.now() - _startMs;
     if (_estMs > 0) {
       const remain = Math.max(0, _estMs - elapsed);
@@ -177,19 +218,12 @@ const OpTimer = (() => {
   function start(op, label, estMs) {
     if (_hideTimer) { clearTimeout(_hideTimer); _hideTimer = null; }
     _curOp = op;
+    _curLabel = label || '';
+    _curKind = 'running';
     _startMs = Date.now();
     _estMs = estMs || 0;
-    const heroTimer = _isHeroTimerOp(op);
-    el.className = heroTimer ? 'op-timer' : 'op-timer vis';
-    if (heroTimer) {
-      _clearVisible();
-      _setHeroTimerVisible(true, 'running');
-      _setHeroTimerLabel(label);
-    } else {
-      _setHeroTimerVisible(false);
-      _setVisible('running');
-    }
     _setLabel(label);
+    _syncPlacement('running');
     elTime.textContent = _estMs > 0 ? _fmtTime(_estMs) : '...';
     elBar.style.width = '0%';
     elBar.classList.toggle('indeterminate', !_estMs);
@@ -204,11 +238,13 @@ const OpTimer = (() => {
   function update(op, label, estMs) {
     if (_curOp !== op) return; // другая операция уже показана
     if (label) {
+      _curLabel = label;
       _setLabel(label);
-      if (_isHeroTimerOp(op)) _setHeroTimerLabel(label);
+      if (_shouldUseHeroTimer(op)) _setHeroTimerLabel(label);
     }
     // FIX: только положительное значение обновляет оценку — 0 не затирает рабочий обратный отсчёт
     if (estMs > 0) _estMs = estMs;
+    _curKind = 'running';
     _tick();
   }
 
@@ -217,17 +253,13 @@ const OpTimer = (() => {
     if (_curOp !== op) return;
     clearInterval(_interval);
     _interval = null;
+    _curLabel = msg || 'Готово';
+    _curKind = 'success';
     const elapsed = Date.now() - _startMs;
-    const heroTimer = _isHeroTimerOp(op);
-    el.className = heroTimer ? 'op-timer' : 'op-timer vis success';
+    const heroTimer = _syncPlacement('success');
     if (heroTimer) {
-      _clearVisible();
-      _setHeroTimerVisible(true, 'success');
       _setHeroTimerLabel(msg || 'Готово');
       _renderHeroTimer(_fmtTime(elapsed), 100, false);
-    } else {
-      _setHeroTimerVisible(false);
-      _setVisible('success');
     }
     _setLabel(msg || 'Готово');
     elTime.textContent = _fmtTime(elapsed);
@@ -236,6 +268,8 @@ const OpTimer = (() => {
     _hideTimer = setTimeout(() => {
       el.className = 'op-timer';
       _curOp = null;
+      _curLabel = '';
+      _curKind = '';
       _setHeroTimerVisible(false);
       _clearVisible();
     }, hideDelay || 2500);
@@ -246,17 +280,13 @@ const OpTimer = (() => {
     if (_curOp !== op) return;
     clearInterval(_interval);
     _interval = null;
+    _curLabel = msg || 'Ошибка';
+    _curKind = 'error';
     const elapsed = Date.now() - _startMs;
-    const heroTimer = _isHeroTimerOp(op);
-    el.className = heroTimer ? 'op-timer' : 'op-timer vis error';
+    const heroTimer = _syncPlacement('error');
     if (heroTimer) {
-      _clearVisible();
-      _setHeroTimerVisible(true, 'error');
       _setHeroTimerLabel(msg || 'Ошибка');
       _renderHeroTimer(_fmtTime(elapsed), 100, false);
-    } else {
-      _setHeroTimerVisible(false);
-      _setVisible('error');
     }
     _setLabel(msg || 'Ошибка');
     elTime.textContent = _fmtTime(elapsed);
@@ -265,6 +295,8 @@ const OpTimer = (() => {
     _hideTimer = setTimeout(() => {
       el.className = 'op-timer';
       _curOp = null;
+      _curLabel = '';
+      _curKind = '';
       _setHeroTimerVisible(false);
       _clearVisible();
     }, hideDelay || 4000);
@@ -281,17 +313,29 @@ const OpTimer = (() => {
     elText.textContent = '';
     elTime.textContent = '';
     _curOp = null;
+    _curLabel = '';
+    _curKind = '';
     _startMs = 0;
     _estMs = 0;
     _setHeroTimerVisible(false);
     _clearVisible();
   }
 
+  function refreshPlacement() {
+    if (!_curOp) return;
+    const heroTimer = _syncPlacement(_curKind || 'running');
+    if (_curKind === 'running') {
+      _tick();
+      return;
+    }
+    if (heroTimer) _renderHeroTimer(elTime.textContent || '', 100, false);
+  }
+
   function current() { return _curOp; }
   /** Время старта текущего таймера (Date.now() ms). Для расчёта нового estMs при update. */
   function getStartMs() { return _startMs; }
 
-  return { start, update, done, fail, hide, current, getStartMs };
+  return { start, update, done, fail, hide, refreshPlacement, current, getStartMs };
 })();
 
 // ═══════════════════════════════════════════════════

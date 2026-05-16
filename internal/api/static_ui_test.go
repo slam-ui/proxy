@@ -299,7 +299,7 @@ func TestHomePrimaryAndServerActionsAreSwapped(t *testing.T) {
 func TestHomeToggleContainsStartupTimer(t *testing.T) {
 	html := readStaticText(t, "static/index.html")
 	css := readStaticText(t, "static/css/80-ui-polish.css")
-	js := readStaticBundle(t, "js/00-core.js", "js/70-runtime-polling.js")
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js", "js/70-runtime-polling.js")
 
 	for _, required := range []string{
 		`id="qaTimer"`,
@@ -331,6 +331,25 @@ func TestHomeToggleContainsStartupTimer(t *testing.T) {
 	}
 	if strings.Contains(js, `readyAt * 1000 - Date.now()) : 30000`) {
 		t.Fatal("warming timer must not use the old fixed 30s fallback")
+	}
+}
+
+func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js")
+
+	for _, required := range []string{
+		`function _isHomeActionVisible()`,
+		`op === 'apply' || op === 'connect'`,
+		`function _syncPlacement(kind)`,
+		`refreshPlacement`,
+		`OpTimer.refreshPlacement()`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("home operation timer docking missing %q", required)
+		}
+	}
+	if strings.Contains(js, `return op === 'toggle' || op === 'warming';`) {
+		t.Fatal("home timer docking must not be limited to toggle/warming operations")
 	}
 }
 
