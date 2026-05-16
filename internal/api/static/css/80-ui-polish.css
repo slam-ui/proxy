@@ -593,6 +593,95 @@ html[data-theme="light"] .home-sheet{
 .hero-status-row{
   display:none!important;
 }
+.hero-toggle-action{
+  width:100%;
+}
+.server-pill-action{
+  grid-column:1/-1;
+  width:100%;
+  min-height:84px;
+  flex-wrap:wrap;
+  align-content:center;
+  gap:8px 12px;
+  padding:14px 18px!important;
+  border-radius:18px;
+  justify-content:flex-start;
+}
+.server-pill-action .srv-flag{
+  width:34px;
+  height:34px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  flex:0 0 auto;
+  border-radius:12px;
+  background:rgba(255,255,255,0.12);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.10);
+  font-size:19px;
+  line-height:1;
+}
+.server-pill-action .srv-inf{
+  flex:1 1 0;
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+.server-pill-action .srv-nm{
+  display:block;
+  font-size:14px;
+  line-height:1.15;
+  font-weight:800;
+  color:#fff;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.server-pill-action .srv-dt{
+  display:block;
+  font:600 10.5px var(--mono);
+  color:rgba(255,255,255,0.64);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.server-pill-action .srv-ping{
+  margin-left:auto;
+  min-width:54px;
+  padding:4px 8px;
+  border-radius:999px;
+  text-align:center;
+  background:rgba(255,255,255,0.12);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.10);
+  font-size:11px;
+}
+.server-pill-action .srv-chev{
+  margin-left:0;
+  color:rgba(255,255,255,0.62);
+}
+.server-pill-action .srv-meta{
+  flex:0 0 calc(100% - 46px);
+  min-width:0;
+  margin:0 0 0 46px;
+  gap:8px;
+  color:rgba(255,255,255,0.58);
+}
+.server-pill-action .srv-meta.vis{
+  display:flex;
+}
+html[data-theme="light"] .server-pill-action .srv-flag,
+html[data-theme="light"] .server-pill-action .srv-ping{
+  background:rgba(15,23,42,0.055);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.70);
+}
+html[data-theme="light"] .server-pill-action .srv-nm{
+  color:#0f172a;
+}
+html[data-theme="light"] .server-pill-action .srv-dt,
+html[data-theme="light"] .server-pill-action .srv-chev,
+html[data-theme="light"] .server-pill-action .srv-meta{
+  color:rgba(15,23,42,0.58);
+}
 .chart-ttl::after{
   content:none!important;
   display:none!important;

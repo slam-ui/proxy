@@ -264,6 +264,38 @@ func TestHomeHeroStatusRowIsHidden(t *testing.T) {
 	}
 }
 
+func TestHomePrimaryAndServerActionsAreSwapped(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	toggleIdx := strings.Index(html, `class="quick-action quick-primary hero-toggle-action"`)
+	if toggleIdx < 0 {
+		t.Fatal("home toggle action must be rendered in the hero")
+	}
+	serverIdx := strings.Index(html, `class="srv-pill quick-action server-pill-action wide"`)
+	if serverIdx < 0 {
+		t.Fatal("server pill must be rendered as a quick action")
+	}
+	if serverIdx < toggleIdx {
+		t.Fatal("server pill must appear below the hero toggle action")
+	}
+	if strings.Contains(html, `class="quick-action quick-primary wide"`) {
+		t.Fatal("old quick-action primary placement must not remain")
+	}
+
+	for _, required := range []string{
+		`.hero-toggle-action`,
+		`.server-pill-action`,
+		`grid-column:1/-1`,
+		`.server-pill-action .srv-flag`,
+		`.server-pill-action .srv-meta`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("swapped home action styling missing %q", required)
+		}
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{
