@@ -114,10 +114,10 @@ function processRuleText(matchedRule, nm, fullPath) {
 }
 
 function processFallbackIcon(name) {
-  return name.match(/chrome|chromium|edge/i) ? '🌐' : name.match(/firefox/i) ? '🦊' :
-         name.match(/telegram/i) ? '✈️' : name.match(/discord/i) ? '💬' :
-         name.match(/code\.exe|cursor/i) ? '▣' : name.match(/steam/i) ? '▶' :
-         name.match(/spotify/i) ? '♪' : '⚙';
+  const icon = name.match(/chrome|chromium|edge|firefox/i) ? 'globe' :
+               name.match(/telegram|discord|code\.exe|cursor|steam|spotify/i) ? 'process' :
+               'fallback-image';
+  return iconSvg(icon, 'proc-fallback ssk-icon');
 }
 
 function groupProcessRows(rows) {
@@ -225,7 +225,7 @@ async function loadProcs() {
         : 'Статус получен от монитора процессов';
       const fallbackIco = processFallbackIcon(nm || '');
       const ico = fullPath
-        ? `<img src="${API}/procicon?path=${encodeURIComponent(fullPath)}" width="20" height="20" style="border-radius:4px;object-fit:contain" alt="${esc(nm)}" onerror="this.outerHTML='${fallbackIco}'">`
+        ? `<span class="proc-icon-stack">${fallbackIco}<img class="proc-real-icon" src="${API}/procicon?path=${encodeURIComponent(fullPath)}" alt="${esc(nm)}" onerror="this.remove()"></span>`
         : fallbackIco;
       const delay = pidx < 15 ? `style="animation-delay:${pidx * 0.03}s"` : '';
       const titleAttr = fullPath ? `title="${esc(fullPath)}"` : '';
