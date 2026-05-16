@@ -586,6 +586,13 @@ html[data-theme="light"] .page-hero-stats span{
 html[data-theme="light"] .home-sheet{
   background:#f1f5f9;
 }
+.hero{
+  min-height:118px;
+  padding-top:18px;
+}
+.hero-status-row{
+  display:none!important;
+}
 .chart-ttl::after{
   content:none!important;
   display:none!important;

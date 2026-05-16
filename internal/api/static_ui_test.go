@@ -243,6 +243,27 @@ func TestStaticIndexUsesSplitAssets(t *testing.T) {
 	}
 }
 
+func TestHomeHeroStatusRowIsHidden(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{`class="hero-status-row"`, `id="orbStage"`, `id="slbl"`} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home hero status row missing %q", required)
+		}
+	}
+
+	hiddenRule := regexp.MustCompile(`(?s)\.hero-status-row\s*\{[^}]*display\s*:\s*none\s*!important`)
+	if !hiddenRule.MatchString(css) {
+		t.Fatal("home hero status row must stay visually hidden")
+	}
+	for _, required := range []string{`min-height:118px`, `padding-top:18px`} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home hero compact spacing missing %q", required)
+		}
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{
