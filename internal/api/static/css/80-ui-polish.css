@@ -28,6 +28,9 @@ html[data-theme="light"] body{
   height:100%;
   filter:drop-shadow(0 2px 5px rgba(20,31,92,0.24));
 }
+.brand-mark{
+  padding:3px;
+}
 .hbtn .ssk-icon{
   width:25px!important;
   height:25px!important;
@@ -103,8 +106,12 @@ html[data-theme="light"] body{
   z-index:1;
 }
 .security-icon{
-  width:24px;
-  height:24px;
+  width:18px;
+  height:18px;
+}
+.security-mark.warn .security-icon{
+  width:15px;
+  height:15px;
 }
 .toast-icon{
   width:20px;
@@ -2357,10 +2364,11 @@ html[data-theme="light"] .proc-title-note{
   align-items:center;
   justify-content:center;
   flex:0 0 auto;
-  border-radius:8px;
+  border-radius:999px;
   font-size:12px;
   font-weight:900;
   background:rgba(255,255,255,0.075);
+  overflow:hidden;
 }
 .security-mark.ok{color:var(--on);background:rgba(45,232,154,0.12)}
 .security-mark.warn{color:var(--warn);background:rgba(255,190,80,0.12)}

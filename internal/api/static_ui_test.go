@@ -366,6 +366,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	sprite := readStaticText(t, "static/assets/icons/safesky-icons.svg")
 
 	for _, required := range []string{
+		`id="brand"`,
 		`id="safe"`,
 		`id="server"`,
 		`id="rules"`,
@@ -377,6 +378,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
+		`assets/icons/safesky-icons.svg#brand`,
 		`assets/icons/safesky-icons.svg#safe`,
 		`assets/icons/safesky-icons.svg#server`,
 		`assets/icons/safesky-icons.svg#rules`,
@@ -400,9 +402,11 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	}
 	for _, required := range []string{
 		`.ssk-icon`,
+		`.brand-mark`,
 		`.rule-inline-icon`,
 		`.proc-icon-stack`,
 		`.security-icon`,
+		`.security-mark.warn .security-icon`,
 		`.toast-icon`,
 	} {
 		if !strings.Contains(css, required) {
