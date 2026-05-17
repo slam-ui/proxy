@@ -437,10 +437,16 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 		"js/80-chart-utils-init.js",
 	)
 	sprite := readStaticText(t, "static/assets/icons/safesky-icons.svg")
+	helmetPng, err := staticFiles.ReadFile("static/assets/icons/helmet.png")
+	if err != nil {
+		t.Fatalf("read embedded helmet icon: %v", err)
+	}
+	if len(helmetPng) < 1000 {
+		t.Fatal("embedded helmet icon looks too small or missing")
+	}
 
 	for _, required := range []string{
 		`id="brand"`,
-		`id="helmet"`,
 		`id="safe"`,
 		`id="server"`,
 		`id="rules"`,
@@ -453,7 +459,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	}
 	for _, required := range []string{
 		`assets/icons/safesky-icons.svg#brand`,
-		`assets/icons/safesky-icons.svg#helmet`,
+		`src="assets/icons/helmet.png"`,
 		`assets/icons/safesky-icons.svg#safe`,
 		`assets/icons/safesky-icons.svg#server`,
 		`assets/icons/safesky-icons.svg#rules`,
@@ -479,6 +485,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 		`.ssk-icon`,
 		`.brand-mark`,
 		`.logo-gem.app-logo`,
+		`.logo-gem.app-logo img.app-mark`,
 		`background:transparent!important`,
 		`.hbtn.busy .ssk-icon`,
 		`.rule-inline-icon`,

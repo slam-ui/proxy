@@ -3,12 +3,6 @@
     <path d="M17 21h21l6-6h8M17 21l-7 7v7h27l-6 7H10M48 28H30l-6 7h18l6-7ZM18 49h21l7-7h8" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="butt" stroke-linejoin="miter"/>
     <path d="M17 21h21l6-6h8M17 21l-7 7v7h27l-6 7H10M48 28H30l-6 7h18l6-7ZM18 49h21l7-7h8" fill="none" stroke="#0a61e8" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter"/>
   </symbol>
-  <symbol id="helmet" viewBox="0 0 64 64">
-    <path d="M13 46c5 8 15 12 29 9" fill="none" stroke="#36d7ee" stroke-width="5" stroke-linecap="round"/>
-    <path d="M47 9c-7 1-14 4-20 9-8 1-14 6-17 14-4 10 0 20 8 25 2-9 7-17 15-23l17 3c-7 6-10 12-11 21 9-4 15-11 17-21 2-10-1-21-9-28Z" fill="#f4efff" stroke="#763cff" stroke-width="5" stroke-linejoin="round"/>
-    <path d="M28 18c5 3 12 5 22 5M22 42c2-8 7-14 15-18M36 36l14 3" fill="none" stroke="#9b6cff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M17 32c3-5 8-8 15-9" fill="none" stroke="#5f2ce8" stroke-width="4" stroke-linecap="round"/>
-  </symbol>
   <symbol id="safe" viewBox="0 0 64 64">
     <path d="M18 32l10 10 20-23" fill="none" stroke="#443f8e" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M18 32l10 10 20-23" fill="none" stroke="#39d9ee" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
