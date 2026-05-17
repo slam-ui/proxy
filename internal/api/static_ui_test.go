@@ -403,10 +403,13 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	for _, required := range []string{
 		`.ssk-icon`,
 		`.brand-mark`,
+		`.logo-gem.app-logo`,
+		`background:transparent!important`,
 		`.rule-inline-icon`,
 		`.proc-icon-stack`,
 		`.security-icon`,
 		`.security-mark.warn .security-icon`,
+		`.security-mark.warn{color:var(--warn);background:transparent!important}`,
 		`.toast-icon`,
 	} {
 		if !strings.Contains(css, required) {
