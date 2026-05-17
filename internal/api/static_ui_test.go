@@ -359,17 +359,15 @@ func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
 
 	for _, required := range []string{
 		`const CHART_WINDOW_MS = 60_000;`,
-		`const CHART_POINT_PX_STEP = 4;`,
+		`const CHART_LEFT_EDGE_SPEED_PER_SEC = 1.35;`,
 		`let trafficSamples = [];`,
-		`let chartTargetMax = 1024;`,
 		`function interpolateChartSample(prev, next, t)`,
 		`function visibleChartSamples(now)`,
 		`samples.push(interpolateChartSample(trafficSamples[firstVisible - 1], trafficSamples[firstVisible], start));`,
-		`const pointCount = Math.max(2, Math.min(360, Math.ceil(plot.w / CHART_POINT_PX_STEP)));`,
-		`for (let i = 0; i <= pointCount; i++)`,
-		`const sample = sampleAtChartTime(samples, start + ratio * CHART_WINDOW_MS);`,
-		`function updateChartScale()`,
-		`chartMax += (targetMax - chartMax) * ease;`,
+		`const leftEdgeState = {`,
+		`const points = samples.map(sample => {`,
+		`function smoothLeftEdgePoint(points, key, plot, now)`,
+		`plot.h * CHART_LEFT_EDGE_SPEED_PER_SEC * dt`,
 		`function sampleAtChartTime(samples, targetT)`,
 		`ctx.bezierCurveTo(`,
 		`requestAnimationFrame(frame)`,
@@ -383,7 +381,8 @@ func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
 		`new Array(N)`,
 		`plot.w / (N - 1)`,
 		`trafficSamples.slice(firstVisible - 1)`,
-		`const points = samples.map(sample =>`,
+		`CHART_POINT_PX_STEP`,
+		`sampleAtChartTime(samples, start + ratio * CHART_WINDOW_MS)`,
 	} {
 		if strings.Contains(js, forbidden) {
 			t.Fatalf("traffic chart must not use fixed slot rendering: %q", forbidden)
@@ -429,6 +428,37 @@ func TestSessionSummaryUsesPillStats(t *testing.T) {
 	} {
 		if !strings.Contains(css, required) {
 			t.Fatalf("session summary pill styling missing %q", required)
+		}
+	}
+}
+
+func TestSecurityPanelTypographyMatchesHomeStats(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{
+		`class="security-card layer"`,
+		`class="security-row"`,
+		`class="security-copy"`,
+		`id="secTunnelTitle"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("security panel markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.security-title{`,
+		`font-size:14px;`,
+		`.security-row{`,
+		`min-height:66px;`,
+		`padding:13px 14px;`,
+		`.security-copy b{`,
+		`font-size:13px;`,
+		`.security-copy small{`,
+		`font-size:10.5px;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("security panel typography missing %q", required)
 		}
 	}
 }

@@ -2,10 +2,9 @@
 // ═══════════════════════════════════════════════════
 const CHART_WINDOW_MS = 60_000;
 const CHART_SAMPLE_TTL_MS = CHART_WINDOW_MS + 10_000;
-const CHART_POINT_PX_STEP = 4;
+const CHART_LEFT_EDGE_SPEED_PER_SEC = 1.35;
 let trafficSamples = [];
 let chartMax = 1; // динамический максимум для нормализации
-let chartTargetMax = 1024;
 let chartPeakBps = 0;
 
 function cleanBps(value) {
@@ -68,7 +67,11 @@ function pushChartData(upBps, dnBps) {
   // Обновляем динамический максимум с небольшим запасом, чтобы пики не упирались в край.
   chartPeakBps = samples.reduce((peak, sample) => Math.max(peak, cleanBps(sample.up), cleanBps(sample.dn)), 0);
   const localMax = Math.max(chartPeakBps, 1024);
-  chartTargetMax = localMax * 1.12;
+  const targetMax = localMax * 1.12;
+  if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
+  chartMax = targetMax > chartMax
+    ? targetMax
+    : chartMax * 0.97 + targetMax * 0.03;
   updateChartPeak(chartPeakBps);
 
   // Обновляем числовые лейблы
@@ -121,6 +124,10 @@ function pushChartData(upBps, dnBps) {
   let mouseX = -1;
   let mouseY = -1;
   const tooltip = $id('chartTooltip');
+  const leftEdgeState = {
+    up: { y: null, ts: 0 },
+    dn: { y: null, ts: 0 }
+  };
 
   function themeName() {
     return document.documentElement.getAttribute('data-theme')
@@ -130,14 +137,6 @@ function pushChartData(upBps, dnBps) {
   function normValue(value) {
     const max = Math.max(chartMax || 1, 1024);
     return Math.max(0, Math.min(1, cleanBps(value) / max));
-  }
-
-  function updateChartScale() {
-    const targetMax = Math.max(cleanBps(chartTargetMax), 1024);
-    if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
-    const ease = targetMax > chartMax ? 0.14 : 0.035;
-    chartMax += (targetMax - chartMax) * ease;
-    if (Math.abs(chartMax - targetMax) < 1) chartMax = targetMax;
   }
 
   function smoothPath(points) {
@@ -159,19 +158,50 @@ function pushChartData(upBps, dnBps) {
   }
 
   function samplePoints(samples, key, plot, now) {
-    if (!samples.length) return [];
     const start = now - CHART_WINDOW_MS;
-    const pointCount = Math.max(2, Math.min(360, Math.ceil(plot.w / CHART_POINT_PX_STEP)));
-    const points = [];
-    for (let i = 0; i <= pointCount; i++) {
-      const ratio = i / pointCount;
-      const sample = sampleAtChartTime(samples, start + ratio * CHART_WINDOW_MS);
-      points.push({
-        x: plot.left + ratio * plot.w,
+    const points = samples.map(sample => {
+      const t = Math.max(start, Math.min(now, sample.t));
+      return {
+        x: plot.left + ((t - start) / CHART_WINDOW_MS) * plot.w,
         y: plot.bottom - normValue(sample[key]) * plot.h
-      });
+      };
+    });
+    const compact = [];
+    for (const point of points) {
+      const prev = compact[compact.length - 1];
+      if (!prev || Math.abs(prev.x - point.x) > 0.15 || Math.abs(prev.y - point.y) > 0.15) {
+        compact.push(point);
+      }
     }
-    return points;
+    if (compact.length === 1) {
+      const y = compact[0].y;
+      const flat = [{ x: plot.left, y }, { x: plot.right, y }];
+      smoothLeftEdgePoint(flat, key, plot, now);
+      return flat;
+    }
+    smoothLeftEdgePoint(compact, key, plot, now);
+    return compact;
+  }
+
+  function smoothLeftEdgePoint(points, key, plot, now) {
+    const state = leftEdgeState[key];
+    if (!points.length || points[0].x > plot.left + 0.5) {
+      state.y = null;
+      state.ts = now;
+      return;
+    }
+    const targetY = points[0].y;
+    if (!Number.isFinite(state.y)) {
+      state.y = targetY;
+    }
+    const dt = Math.min(0.25, Math.max(0, (now - state.ts) / 1000));
+    const maxDelta = Math.max(0.5, plot.h * CHART_LEFT_EDGE_SPEED_PER_SEC * dt);
+    const delta = targetY - state.y;
+    state.y = Math.abs(delta) <= maxDelta
+      ? targetY
+      : state.y + Math.sign(delta) * maxDelta;
+    points[0] = { x: points[0].x, y: state.y };
+    state.ts = now;
   }
 
   function drawSeries(points, cfg, plot) {
@@ -257,7 +287,6 @@ function pushChartData(upBps, dnBps) {
     plot.h = Math.max(1, plot.bottom - plot.top);
 
     const samples = visibleChartSamples(now);
-    updateChartScale();
     const upPoints = samplePoints(samples, 'up', plot, now);
     const dnPoints = samplePoints(samples, 'dn', plot, now);
     const upColor = isLight ? '#2f6f9f' : '#a8c8dc';

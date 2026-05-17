@@ -2420,7 +2420,7 @@ html[data-theme="light"] .proc-title-note{
 }
 .security-card{
   margin:12px clamp(10px,2vw,20px) 8px;
-  padding:14px;
+  padding:16px;
   border-radius:20px;
   border:1px solid rgba(255,255,255,0.12);
   background:linear-gradient(180deg,rgba(255,255,255,0.08),rgba(255,255,255,0.035));
@@ -2434,8 +2434,9 @@ html[data-theme="light"] .proc-title-note{
   margin-bottom:10px;
 }
 .security-title{
-  font-size:12px;
-  font-weight:800;
+  font-size:14px;
+  line-height:1.15;
+  font-weight:850;
   color:var(--text);
 }
 .security-refresh{
@@ -2446,15 +2447,15 @@ html[data-theme="light"] .proc-title-note{
 .security-list{
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:8px;
+  gap:10px;
 }
 .security-row{
   display:flex;
   align-items:flex-start;
-  gap:9px;
+  gap:12px;
   min-width:0;
-  min-height:54px;
-  padding:10px;
+  min-height:66px;
+  padding:13px 14px;
   border:1px solid rgba(255,255,255,0.10);
   border-radius:14px;
   background:rgba(255,255,255,0.045);
@@ -2467,8 +2468,8 @@ html[data-theme="light"] .proc-title-note{
   border-color:rgba(56,200,255,0.26);
 }
 .security-mark{
-  width:20px;
-  height:20px;
+  width:24px;
+  height:24px;
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -2487,16 +2488,18 @@ html[data-theme="light"] .proc-title-note{
   min-width:0;
   display:flex;
   flex-direction:column;
-  gap:3px;
+  gap:4px;
 }
 .security-copy b{
-  font-size:10.5px;
-  line-height:1.2;
+  font-size:13px;
+  line-height:1.16;
+  font-weight:800;
   color:var(--text);
 }
 .security-copy small{
-  font-size:9px;
-  line-height:1.25;
+  font-size:10.5px;
+  line-height:1.22;
+  font-weight:600;
   color:var(--muted);
 }
 .chart-nums{
