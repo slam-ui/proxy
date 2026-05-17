@@ -440,6 +440,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 
 	for _, required := range []string{
 		`id="brand"`,
+		`id="helmet"`,
 		`id="safe"`,
 		`id="server"`,
 		`id="rules"`,
@@ -452,6 +453,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	}
 	for _, required := range []string{
 		`assets/icons/safesky-icons.svg#brand`,
+		`assets/icons/safesky-icons.svg#helmet`,
 		`assets/icons/safesky-icons.svg#safe`,
 		`assets/icons/safesky-icons.svg#server`,
 		`assets/icons/safesky-icons.svg#rules`,
