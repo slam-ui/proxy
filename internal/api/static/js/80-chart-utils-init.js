@@ -2,8 +2,10 @@
 // ═══════════════════════════════════════════════════
 const CHART_WINDOW_MS = 60_000;
 const CHART_SAMPLE_TTL_MS = CHART_WINDOW_MS + 10_000;
+const CHART_POINT_PX_STEP = 4;
 let trafficSamples = [];
 let chartMax = 1; // динамический максимум для нормализации
+let chartTargetMax = 1024;
 let chartPeakBps = 0;
 
 function cleanBps(value) {
@@ -66,11 +68,7 @@ function pushChartData(upBps, dnBps) {
   // Обновляем динамический максимум с небольшим запасом, чтобы пики не упирались в край.
   chartPeakBps = samples.reduce((peak, sample) => Math.max(peak, cleanBps(sample.up), cleanBps(sample.dn)), 0);
   const localMax = Math.max(chartPeakBps, 1024);
-  const targetMax = localMax * 1.12;
-  if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
-  chartMax = targetMax > chartMax
-    ? targetMax
-    : chartMax * 0.97 + targetMax * 0.03;
+  chartTargetMax = localMax * 1.12;
   updateChartPeak(chartPeakBps);
 
   // Обновляем числовые лейблы
@@ -134,6 +132,14 @@ function pushChartData(upBps, dnBps) {
     return Math.max(0, Math.min(1, cleanBps(value) / max));
   }
 
+  function updateChartScale() {
+    const targetMax = Math.max(cleanBps(chartTargetMax), 1024);
+    if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
+    const ease = targetMax > chartMax ? 0.14 : 0.035;
+    chartMax += (targetMax - chartMax) * ease;
+    if (Math.abs(chartMax - targetMax) < 1) chartMax = targetMax;
+  }
+
   function smoothPath(points) {
     ctx.beginPath();
     if (!points.length) return;
@@ -153,26 +159,19 @@ function pushChartData(upBps, dnBps) {
   }
 
   function samplePoints(samples, key, plot, now) {
+    if (!samples.length) return [];
     const start = now - CHART_WINDOW_MS;
-    const points = samples.map(sample => {
-      const t = Math.max(start, Math.min(now, sample.t));
-      return {
-        x: plot.left + ((t - start) / CHART_WINDOW_MS) * plot.w,
+    const pointCount = Math.max(2, Math.min(360, Math.ceil(plot.w / CHART_POINT_PX_STEP)));
+    const points = [];
+    for (let i = 0; i <= pointCount; i++) {
+      const ratio = i / pointCount;
+      const sample = sampleAtChartTime(samples, start + ratio * CHART_WINDOW_MS);
+      points.push({
+        x: plot.left + ratio * plot.w,
         y: plot.bottom - normValue(sample[key]) * plot.h
-      };
-    });
-    const compact = [];
-    for (const point of points) {
-      const prev = compact[compact.length - 1];
-      if (!prev || Math.abs(prev.x - point.x) > 0.15 || Math.abs(prev.y - point.y) > 0.15) {
-        compact.push(point);
-      }
+      });
     }
-    if (compact.length === 1) {
-      const y = compact[0].y;
-      return [{ x: plot.left, y }, { x: plot.right, y }];
-    }
-    return compact;
+    return points;
   }
 
   function drawSeries(points, cfg, plot) {
@@ -258,6 +257,7 @@ function pushChartData(upBps, dnBps) {
     plot.h = Math.max(1, plot.bottom - plot.top);
 
     const samples = visibleChartSamples(now);
+    updateChartScale();
     const upPoints = samplePoints(samples, 'up', plot, now);
     const dnPoints = samplePoints(samples, 'dn', plot, now);
     const upColor = isLight ? '#2f6f9f' : '#a8c8dc';
