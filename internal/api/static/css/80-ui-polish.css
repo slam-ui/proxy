@@ -43,6 +43,14 @@ html[data-theme="light"] body{
   stroke:none!important;
   fill:initial!important;
 }
+.hbtn.busy .ssk-icon{
+  opacity:0.72;
+  animation:iconBusyPulse 0.9s ease-in-out infinite;
+}
+@keyframes iconBusyPulse{
+  0%,100%{transform:scale(1);filter:saturate(1)}
+  50%{transform:scale(0.92);filter:saturate(1.25)}
+}
 .quick-icon .ssk-icon{
   width:34px;
   height:34px;

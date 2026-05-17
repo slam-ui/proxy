@@ -356,6 +356,7 @@ func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
 func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	html := readStaticText(t, "static/index.html")
 	css := readStaticText(t, "static/css/80-ui-polish.css")
+	serversJS := readStaticText(t, "static/js/10-servers.js")
 	js := readStaticBundle(t,
 		"js/00-core.js",
 		"js/30-rules.js",
@@ -405,6 +406,7 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 		`.brand-mark`,
 		`.logo-gem.app-logo`,
 		`background:transparent!important`,
+		`.hbtn.busy .ssk-icon`,
 		`.rule-inline-icon`,
 		`.proc-icon-stack`,
 		`.security-icon`,
@@ -418,6 +420,12 @@ func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	}
 	if strings.Contains(js, `this.outerHTML='${fallbackIco}'`) {
 		t.Fatal("process icon fallback must not use inline emoji replacement")
+	}
+	if !strings.Contains(serversJS, `btn.classList.add('busy')`) {
+		t.Fatal("diagnostics button must keep icon markup and use busy class while running")
+	}
+	if strings.Contains(serversJS, `btn.textContent = '...'`) || strings.Contains(serversJS, `btn.textContent = '···'`) {
+		t.Fatal("diagnostics button must not replace its icon markup while running")
 	}
 }
 
