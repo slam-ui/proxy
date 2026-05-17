@@ -353,6 +353,44 @@ func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
 	}
 }
 
+func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticText(t, "static/js/80-chart-utils-init.js")
+
+	for _, required := range []string{
+		`const CHART_WINDOW_MS = 60_000;`,
+		`let trafficSamples = [];`,
+		`function visibleChartSamples(now)`,
+		`function sampleAtChartTime(samples, targetT)`,
+		`ctx.bezierCurveTo(`,
+		`requestAnimationFrame(frame)`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("fluid chart rendering missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`const N =`,
+		`new Array(N)`,
+		`plot.w / (N - 1)`,
+	} {
+		if strings.Contains(js, forbidden) {
+			t.Fatalf("traffic chart must not use fixed slot rendering: %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		`canvas#sc{`,
+		`inset:0;`,
+		`height:100%!important;`,
+		`z-index:1;`,
+		`overflow:hidden;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("full-card traffic chart CSS missing %q", required)
+		}
+	}
+}
+
 func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	html := readStaticText(t, "static/index.html")
 	css := readStaticText(t, "static/css/80-ui-polish.css")

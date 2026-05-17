@@ -939,13 +939,11 @@ html[data-theme="light"] .qa-timer-track{
 }
 canvas#sc{
   position:absolute;
-  left:0;
-  right:0;
-  bottom:0;
+  inset:0;
   width:100%!important;
-  height:136px!important;
+  height:100%!important;
   margin:0!important;
-  z-index:2;
+  z-index:1;
 }
 #chartTooltip{
   z-index:6;
