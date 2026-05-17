@@ -360,7 +360,9 @@ func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
 	for _, required := range []string{
 		`const CHART_WINDOW_MS = 60_000;`,
 		`let trafficSamples = [];`,
+		`function interpolateChartSample(prev, next, t)`,
 		`function visibleChartSamples(now)`,
+		`samples.push(interpolateChartSample(trafficSamples[firstVisible - 1], trafficSamples[firstVisible], start));`,
 		`function sampleAtChartTime(samples, targetT)`,
 		`ctx.bezierCurveTo(`,
 		`requestAnimationFrame(frame)`,
@@ -373,6 +375,7 @@ func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
 		`const N =`,
 		`new Array(N)`,
 		`plot.w / (N - 1)`,
+		`trafficSamples.slice(firstVisible - 1)`,
 	} {
 		if strings.Contains(js, forbidden) {
 			t.Fatalf("traffic chart must not use fixed slot rendering: %q", forbidden)

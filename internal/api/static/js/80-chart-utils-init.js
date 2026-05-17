@@ -25,14 +25,26 @@ function pruneChartSamples(now) {
   }
 }
 
+function interpolateChartSample(prev, next, t) {
+  const span = Math.max(1, next.t - prev.t);
+  const k = Math.max(0, Math.min(1, (t - prev.t) / span));
+  return {
+    t,
+    up: prev.up + (next.up - prev.up) * k,
+    dn: prev.dn + (next.dn - prev.dn) * k
+  };
+}
+
 function visibleChartSamples(now) {
   pruneChartSamples(now);
   const start = now - CHART_WINDOW_MS;
   const firstVisible = trafficSamples.findIndex(s => s.t >= start);
   if (firstVisible < 0) return [];
-  const samples = firstVisible > 0
-    ? trafficSamples.slice(firstVisible - 1)
-    : trafficSamples.slice(firstVisible);
+  const samples = [];
+  if (firstVisible > 0) {
+    samples.push(interpolateChartSample(trafficSamples[firstVisible - 1], trafficSamples[firstVisible], start));
+  }
+  samples.push(...trafficSamples.slice(firstVisible));
   const last = samples[samples.length - 1];
   if (last && last.t < now) {
     samples.push({ t: now, up: last.up, dn: last.dn });
