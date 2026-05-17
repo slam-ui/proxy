@@ -391,6 +391,37 @@ func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
 	}
 }
 
+func TestSessionSummaryUsesPillStats(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{
+		`<div class="stats layer">`,
+		`id="stup"`,
+		`id="stdn"`,
+		`id="stconn"`,
+		`id="stconnSub"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("session summary markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.home-sheet .stat{`,
+		`grid-template-columns:auto minmax(0,1fr);`,
+		`border-radius:18px;`,
+		`.home-sheet .stat-val{`,
+		`height:auto!important;`,
+		`border-radius:14px;`,
+		`.home-sheet .stat-sub{`,
+		`display:block;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("session summary pill styling missing %q", required)
+		}
+	}
+}
+
 func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
 	html := readStaticText(t, "static/index.html")
 	css := readStaticText(t, "static/css/80-ui-polish.css")
