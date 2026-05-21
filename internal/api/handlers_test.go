@@ -39,12 +39,26 @@ func (s *stubXray) MemoryMB() uint64                      { return 0 }
 
 // ─── mock proxy.Manager ───────────────────────────────────────────────────
 
-type stubProxy struct{ enabled bool }
+type stubProxy struct {
+	enabled      bool
+	config       proxy.Config
+	enableCalls  int
+	disableCalls int
+}
 
-func (p *stubProxy) Enable(cfg proxy.Config) error                                { p.enabled = true; return nil }
-func (p *stubProxy) Disable() error                                               { p.enabled = false; return nil }
+func (p *stubProxy) Enable(cfg proxy.Config) error {
+	p.enabled = true
+	p.config = cfg
+	p.enableCalls++
+	return nil
+}
+func (p *stubProxy) Disable() error {
+	p.enabled = false
+	p.disableCalls++
+	return nil
+}
 func (p *stubProxy) IsEnabled() bool                                              { return p.enabled }
-func (p *stubProxy) GetConfig() proxy.Config                                      { return proxy.Config{} }
+func (p *stubProxy) GetConfig() proxy.Config                                      { return p.config }
 func (p *stubProxy) StartGuard(ctx context.Context, interval time.Duration) error { return nil } // B-2
 func (p *stubProxy) StopGuard()                                                   {}             // B-2
 func (p *stubProxy) PauseGuard(d time.Duration)                                   {}             // БАГ 14

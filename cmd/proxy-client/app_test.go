@@ -13,8 +13,57 @@ import (
 	"testing"
 	"time"
 
+	"proxyclient/internal/api"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/proxy"
 )
+
+type shutdownProxyStub struct {
+	enabled        bool
+	config         proxy.Config
+	stopGuardCalls int
+	disableCalls   int
+}
+
+func (p *shutdownProxyStub) Enable(cfg proxy.Config) error {
+	p.enabled = true
+	p.config = cfg
+	return nil
+}
+
+func (p *shutdownProxyStub) Disable() error {
+	p.enabled = false
+	p.disableCalls++
+	return nil
+}
+
+func (p *shutdownProxyStub) IsEnabled() bool { return p.enabled }
+
+func (p *shutdownProxyStub) GetConfig() proxy.Config { return p.config }
+
+func (p *shutdownProxyStub) StartGuard(ctx context.Context, interval time.Duration) error { return nil }
+
+func (p *shutdownProxyStub) StopGuard() { p.stopGuardCalls++ }
+
+func (p *shutdownProxyStub) PauseGuard(d time.Duration) {}
+
+func (p *shutdownProxyStub) ResumeGuard() {}
+
+type shutdownXrayStub struct {
+	stopCalls int
+}
+
+func (s *shutdownXrayStub) Start() error                          { return nil }
+func (s *shutdownXrayStub) StartAfterManualCleanup() error        { return nil }
+func (s *shutdownXrayStub) Stop() error                           { s.stopCalls++; return nil }
+func (s *shutdownXrayStub) IsRunning() bool                       { return false }
+func (s *shutdownXrayStub) GetPID() int                           { return 0 }
+func (s *shutdownXrayStub) Wait() error                           { return nil }
+func (s *shutdownXrayStub) LastOutput() string                    { return "" }
+func (s *shutdownXrayStub) Uptime() time.Duration                 { return 0 }
+func (s *shutdownXrayStub) GetHealthStatus() (int, float64, bool) { return 0, 0, false }
+func (s *shutdownXrayStub) SetHealthAlertFn(fn func())            {}
+func (s *shutdownXrayStub) MemoryMB() uint64                      { return 0 }
 
 // ── DefaultAppConfig Tests ────────────────────────────────────────────────────────
 
@@ -260,6 +309,41 @@ func TestShutdown_CanBeCalledWithNilMonitor(t *testing.T) {
 	defer cancel()
 
 	app.Shutdown(ctx, nil)
+}
+
+func TestShutdown_DisablesProxyAndStopsGuard(t *testing.T) {
+	cfg := DefaultAppConfig()
+	app := NewApp(cfg, &bytes.Buffer{})
+
+	proxyStub := &shutdownProxyStub{
+		enabled: true,
+		config:  proxy.Config{Address: "127.0.0.1:8080", Override: "<local>"},
+	}
+	xrayStub := &shutdownXrayStub{}
+	app.proxyManager = proxyStub
+	app.apiServer = api.NewServer(api.Config{
+		XRayManager:  xrayStub,
+		ProxyManager: proxyStub,
+		Logger:       &logger.NoOpLogger{},
+	}, app.lifecycleCtx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	app.Shutdown(ctx, nil)
+
+	if proxyStub.stopGuardCalls == 0 {
+		t.Fatal("StopGuard was not called during Shutdown")
+	}
+	if proxyStub.disableCalls == 0 {
+		t.Fatal("Disable was not called during Shutdown")
+	}
+	if proxyStub.enabled {
+		t.Fatal("proxy remained enabled after Shutdown")
+	}
+	if xrayStub.stopCalls == 0 {
+		t.Fatal("XRay Stop was not called during Shutdown")
+	}
 }
 
 // ── buildXRayCfg Tests ────────────────────────────────────────────────────────────

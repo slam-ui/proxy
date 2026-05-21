@@ -141,12 +141,14 @@ func (m *manager) Disable() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.enabled {
+	backend := m.currentBackend()
+	systemEnabled, _ := backend.state()
+	if !m.enabled && !systemEnabled {
 		m.logger.Debug("Системный прокси уже отключён")
 		return nil
 	}
 
-	if err := m.currentBackend().disable(); err != nil {
+	if err := backend.disable(); err != nil {
 		return fmt.Errorf("не удалось отключить системный прокси: %w", err)
 	}
 

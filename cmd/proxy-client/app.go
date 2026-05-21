@@ -1109,6 +1109,14 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	}
 
 	if a.apiServer != nil {
+		a.apiServer.StopProxyGuard()
+	}
+	killswitch.Disable(a.mainLogger)
+	if err := a.proxyManager.Disable(); err != nil {
+		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
+	}
+
+	if a.apiServer != nil {
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
 			a.mainLogger.Error("Ошибка при остановке API сервера: %v", err)
 		}
@@ -1139,10 +1147,6 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	wintun.ResetAdaptiveGap()
 	a.mainLogger.Info("Очистка TUN адаптера при выходе...")
 	wintun.Shutdown(a.mainLogger)
-
-	if err := a.proxyManager.Disable(); err != nil {
-		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
-	}
 	if err := trafficstats.SaveToFile(); err != nil {
 		a.mainLogger.Warn("Не удалось сохранить счётчик трафика: %v", err)
 	}
