@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+
+	"proxyclient/internal/winexec"
 )
 
 // LaunchInstaller starts proxy-updater.exe next to the current executable.
@@ -36,6 +38,7 @@ func (u *Updater) LaunchInstaller(ctx context.Context, downloadedPath string, re
 	}
 	cmd := exec.CommandContext(ctx, helper, args...)
 	cmd.Dir = filepath.Dir(exe)
+	winexec.HideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start proxy-updater.exe: %w", err)
 	}

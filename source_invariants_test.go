@@ -54,6 +54,65 @@ func TestWindowsOnlyFilesHaveBuildTagsAndOtherStubs(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecCommandsHideWindows(t *testing.T) {
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", ".audit", "dist":
+				return filepath.SkipDir
+			}
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		lines := strings.Split(string(data), "\n")
+		for i, line := range lines {
+			if !strings.Contains(line, "exec.Command") || execCommandHiddenWindowExempt(path, line) {
+				continue
+			}
+			end := i + 14
+			if end > len(lines) {
+				end = len(lines)
+			}
+			snippet := strings.Join(lines[i:end], "\n")
+			if !hasHiddenWindowMarker(snippet) {
+				t.Errorf("%s:%d: runtime exec.Command must hide console windows on Windows", path, i+1)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func execCommandHiddenWindowExempt(path, line string) bool {
+	slashPath := filepath.ToSlash(path)
+	if strings.HasPrefix(slashPath, "tools/") {
+		return true
+	}
+	// Non-Windows branch in proxy-updater. hiddenCommand still covers Windows paths.
+	return strings.Contains(line, `exec.Command("kill"`)
+}
+
+func hasHiddenWindowMarker(snippet string) bool {
+	return strings.Contains(snippet, ".SysProcAttr =") ||
+		strings.Contains(snippet, "winexec.HideWindow(") ||
+		strings.Contains(snippet, "hideConsole(")
+}
+
 func findOtherStub(path string) (string, bool) {
 	candidates := []string{}
 	switch {
