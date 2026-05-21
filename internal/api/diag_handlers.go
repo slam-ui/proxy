@@ -25,6 +25,7 @@ import (
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/singbox"
 	"proxyclient/internal/trafficstats"
+	"proxyclient/internal/winexec"
 )
 
 // DiagHandlers управляет сбором статистики трафика и соединений.
@@ -719,10 +720,13 @@ func (s *Server) handleOpenLogFolder(w http.ResponseWriter, _ *http.Request) {
 	dir := filepath.Join(filepath.Dir(exe), "logs")
 	if runtime.GOOS == "windows" {
 		_ = os.MkdirAll(dir, 0755)
-		if err := exec.Command("cmd", "/c", "start", "", dir).Start(); err != nil {
+		cmd := exec.Command("explorer.exe", dir)
+		winexec.HideWindow(cmd)
+		if err := cmd.Start(); err != nil {
 			s.respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		go func() { _ = cmd.Wait() }()
 		s.respondJSON(w, http.StatusOK, map[string]bool{"opened": true})
 		return
 	}

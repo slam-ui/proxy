@@ -472,8 +472,10 @@ function pingInfo(ms) {
 // ═══════════════════════════════════════════════════
 async function runDiag() {
   const btn = $id('diagBtn');
-  btn.disabled = true;
-  btn.textContent = '...';
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('busy');
+  }
   showToast('Тест соединения...', 'info');
   try {
     const r = await fetch(API + '/diagnostics/test');
@@ -486,8 +488,10 @@ async function runDiag() {
   } catch (e) {
     showToast('Диагностика недоступна', 'off');
   } finally {
-    btn.disabled = false;
-    btn.textContent = '···';
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('busy');
+    }
   }
 }
 

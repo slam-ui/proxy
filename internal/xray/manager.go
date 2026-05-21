@@ -55,6 +55,7 @@ func ValidateSingBoxConfig(ctx context.Context, execPath, configPath string) err
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		cmd := exec.CommandContext(checkCtx, execPath, "check", "-c", configPath)
+		hideConsole(cmd)
 		output, err := cmd.CombinedOutput()
 		cancel()
 

@@ -4,6 +4,8 @@
 package killswitch
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -178,6 +180,59 @@ func TestCleanupOnStart_SafeWhenNotEnabled(t *testing.T) {
 func TestCleanupOnStart_WithNilLogger(t *testing.T) {
 	// Should not panic with nil logger
 	CleanupOnStart(nil)
+}
+
+func TestDisable_CleansUpWhenStateStillActive(t *testing.T) {
+	oldCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "data"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(oldCwd) }()
+
+	if err := saveState(State{Active: true, ExpectedCleanShutdown: false}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	if err := os.WriteFile(ksLegacyFile, []byte("1"), 0644); err != nil {
+		t.Fatalf("write legacy marker: %v", err)
+	}
+
+	mu.Lock()
+	enabled = false
+	mu.Unlock()
+
+	oldRunNetsh := runNetsh
+	var calls []string
+	runNetsh = func(args ...string) bool {
+		calls = append(calls, strings.Join(args, " "))
+		return true
+	}
+	defer func() { runNetsh = oldRunNetsh }()
+
+	Disable(nil)
+
+	if IsEnabled() {
+		t.Fatal("Kill Switch should be disabled after cleanup")
+	}
+	if len(calls) != 3 {
+		t.Fatalf("runNetsh calls=%d, want 3", len(calls))
+	}
+	if _, err := os.Stat(ksLegacyFile); !os.IsNotExist(err) {
+		t.Fatalf("legacy marker still exists: %v", err)
+	}
+	st, err := LoadState()
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if st.Active {
+		t.Fatal("state remained active after Disable")
+	}
 }
 
 // ── Rule Name Tests ───────────────────────────────────────────────────────────────

@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"proxyclient/internal/anomalylog"
@@ -48,6 +47,7 @@ import (
 	"proxyclient/internal/trafficstats"
 	"proxyclient/internal/tray"
 	"proxyclient/internal/window"
+	"proxyclient/internal/winexec"
 	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 )
@@ -308,7 +308,7 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 		// Шаг 1: убиваем ВСЕ процессы sing-box чтобы освободить lock на dns_cache.db.
 		// taskkill /F /IM — по имени образа, убивает все экземпляры включая orphaned.
 		killCmd := exec.CommandContext(a.lifecycleCtx, "taskkill", "/F", "/IM", "sing-box.exe")
-		killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		winexec.HideWindow(killCmd)
 		if killOut, killErr := killCmd.CombinedOutput(); killErr != nil {
 			// Ошибка ожидаема если нет запущенных sing-box (уже все умерли)
 			a.mainLogger.Info("taskkill sing-box: %v (%s)", killErr, strings.TrimSpace(string(killOut)))
@@ -485,7 +485,7 @@ func addDefenderExclusion(path string, log logger.Logger) {
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Add-MpPreference -ExclusionPath $env:SAFESKY_DEFENDER_EXCLUSION")
 	cmd.Env = append(os.Environ(), "SAFESKY_DEFENDER_EXCLUSION="+absPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	winexec.HideWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		if log != nil {
 			log.Debug("не удалось добавить исключение Windows Defender: %v", err)
@@ -1109,6 +1109,14 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	}
 
 	if a.apiServer != nil {
+		a.apiServer.StopProxyGuard()
+	}
+	killswitch.Disable(a.mainLogger)
+	if err := a.proxyManager.Disable(); err != nil {
+		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
+	}
+
+	if a.apiServer != nil {
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
 			a.mainLogger.Error("Ошибка при остановке API сервера: %v", err)
 		}
@@ -1139,10 +1147,6 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	wintun.ResetAdaptiveGap()
 	a.mainLogger.Info("Очистка TUN адаптера при выходе...")
 	wintun.Shutdown(a.mainLogger)
-
-	if err := a.proxyManager.Disable(); err != nil {
-		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
-	}
 	if err := trafficstats.SaveToFile(); err != nil {
 		a.mainLogger.Warn("Не удалось сохранить счётчик трафика: %v", err)
 	}

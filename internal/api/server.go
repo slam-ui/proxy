@@ -151,6 +151,7 @@ type StatusResponse struct {
 		PID           int     `json:"pid"`
 		Warming       bool    `json:"warming"`
 		ReadyAt       int64   `json:"ready_at"`
+		ReadyAtMs     int64   `json:"ready_at_ms"`
 		TunAttempt    int     `json:"tun_attempt"`
 		TunMaxAttempt int     `json:"tun_max_attempt"`
 		HealthStatus  string  `json:"health_status"`  // "healthy", "degraded", "unavailable"
@@ -632,19 +633,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	tunMaxAttempt := s.tunMaxAttempt
 	s.restartMu.RUnlock()
 
+	now := time.Now()
 	if xrayMgr == nil {
 		response.XRay.Running = false
 		response.XRay.Warming = true
 		response.XRay.HealthStatus = "warming"
-		if eta := wintun.EstimateReadyAt(); eta.After(time.Now()) {
+		if eta := wintun.EstimateReadyAt(); eta.After(now) {
 			response.XRay.ReadyAt = eta.Unix()
+			response.XRay.ReadyAtMs = eta.UnixMilli()
 		}
 	} else if restarting {
 		response.XRay.Running = false
 		response.XRay.Warming = true
 		response.XRay.HealthStatus = "restarting"
-		if restartReadyAt.After(time.Now()) {
+		if restartReadyAt.After(now) {
 			response.XRay.ReadyAt = restartReadyAt.Unix()
+			response.XRay.ReadyAtMs = restartReadyAt.UnixMilli()
 		}
 		response.XRay.TunAttempt = tunAttempt
 		response.XRay.TunMaxAttempt = tunMaxAttempt

@@ -39,6 +39,23 @@ var (
 	enabled bool
 )
 
+var runNetsh = func(args ...string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "netsh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		HideWindow:    true,
+	}
+	cmd.WaitDelay = 1 * time.Second
+	out, err := cmd.CombinedOutput()
+	// "No rules match" при delete — это нормально
+	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no rules match") {
+		return false
+	}
+	return true
+}
+
 type RuleState struct {
 	Name string `json:"name"`
 	ID   string `json:"id,omitempty"`
@@ -135,9 +152,21 @@ func Enable(serverIP string, log logger.Logger) {
 func Disable(log logger.Logger) {
 	mu.Lock()
 	defer mu.Unlock()
-	if !enabled {
+
+	st, err := LoadState()
+	if err != nil && log != nil {
+		log.Warn("Kill Switch: не удалось прочитать state: %v", err)
+	}
+	legacyExists := false
+	if _, statErr := os.Stat(ksLegacyFile); statErr == nil {
+		legacyExists = true
+	} else if !os.IsNotExist(statErr) && log != nil {
+		log.Warn("Kill Switch: не удалось проверить legacy marker: %v", statErr)
+	}
+	if !enabled && !st.Active && !legacyExists {
 		return
 	}
+
 	deleteRules()
 	enabled = false
 	_ = saveState(State{Active: false, ExpectedCleanShutdown: true})
@@ -230,25 +259,4 @@ func deleteRules() bool {
 	r2 := runNetsh("advfirewall", "firewall", "delete", "rule", "name="+ruleNameBlock)
 	r3 := runNetsh("advfirewall", "firewall", "delete", "rule", "name="+ruleNameBlockV6)
 	return r1 || r2 || r3
-}
-
-// runNetsh запускает netsh скрытно. Возвращает true при успехе.
-// BUG FIX: используем CommandContext с таймаутом 10 секунд и WaitDelay 1 секунду.
-// Без таймаута netsh может заблокировать на WaitForSingleObject(INFINITE) если
-// процесс не реагирует (нет прав администратора или системная проблема).
-func runNetsh(args ...string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "netsh", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: 0x08000000, // CREATE_NO_WINDOW
-		HideWindow:    true,
-	}
-	cmd.WaitDelay = 1 * time.Second
-	out, err := cmd.CombinedOutput()
-	// "No rules match" при delete — это нормально
-	if err != nil && !strings.Contains(strings.ToLower(string(out)), "no rules match") {
-		return false
-	}
-	return true
 }

@@ -1240,6 +1240,9 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	// или он уже будет восстановлен через sing-box.
 	skipProxyRestore := false
 	defer func() {
+		if h.server.lifecycleCtx.Err() != nil {
+			return
+		}
 		if !skipProxyRestore && proxyWasEnabled {
 			if err := h.proxyManager.Enable(proxyConfig); err != nil {
 				h.server.logger.Error("Не удалось восстановить прокси после рестарта: %v", err)
@@ -1255,6 +1258,12 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 		if err := currentManager.Stop(); err != nil {
 			h.server.logger.Warn("Ошибка при остановке: %v", err)
 		}
+	}
+
+	if h.server.lifecycleCtx.Err() != nil {
+		h.server.logger.Info("doApply: lifecycle cancelled после остановки — пропускаем restart")
+		setErr("")
+		return
 	}
 
 	// BUG FIX #4: сообщаем UI что идёт перезапуск (wintun cleanup ≈ 30с).
@@ -1277,16 +1286,24 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	// api пакет больше не зависит от wintun напрямую.
 	if h.xrayConfig.BeforeRestart != nil {
 		if err := h.xrayConfig.BeforeRestart(h.server.lifecycleCtx, h.server.logger); err != nil {
-			// FIX 23: прерываем apply если ошибка не связана с отменой контекста.
-			// Context cancellation (app shutdown) — штатная ситуация, логируем и выходим.
-			// Реальные ошибки (wintun timeout, OS error) — sing-box запускать нельзя.
-			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				h.server.logger.Error("BeforeRestart вернул ошибку, отменяем apply: %v", err)
-				setErr("BeforeRestart: " + err.Error())
+			// FIX 23: контекстная отмена при shutdown завершает apply без restart.
+			// Если продолжить после cancel, defer restore может вернуть системный
+			// proxy в состояние, несовместимое с уже закрывающимся приложением.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				h.server.logger.Info("BeforeRestart прерван контекстом: %v", err)
+				setErr("")
 				return
 			}
-			h.server.logger.Warn("BeforeRestart прерван контекстом: %v", err)
+			h.server.logger.Error("BeforeRestart вернул ошибку, отменяем apply: %v", err)
+			setErr("BeforeRestart: " + err.Error())
+			return
 		}
+	}
+
+	if h.server.lifecycleCtx.Err() != nil {
+		h.server.logger.Info("doApply: lifecycle cancelled перед применением конфига — пропускаем restart")
+		setErr("")
+		return
 	}
 
 	// Применяем предварительно сгенерированный конфиг (или оставляем существующий).
@@ -1329,6 +1346,12 @@ func (h *TunHandlers) doApply(snapshot *config.RoutingConfig, tmpConfigPath stri
 	// от предыдущего экземпляра (BeforeRestart делает taskkill без graceful stop).
 	if removeErr := os.Remove(config.DNSCacheFile); removeErr == nil {
 		h.server.logger.Info("dns_cache.db удалён (превентивная очистка перед apply)")
+	}
+
+	if h.server.lifecycleCtx.Err() != nil {
+		h.server.logger.Info("doApply: lifecycle cancelled перед запуском sing-box — пропускаем restart")
+		setErr("")
+		return
 	}
 
 	newManager, err := startManager(patchedCfg, h.server.lifecycleCtx)

@@ -15,10 +15,10 @@ function _ruleTypeTag(t) {
   return `<span class="rule-type-tag">domain</span>`;
 }
 function _ruleTypeIco(t) {
-  if (t === 'geosite') return '🌍';
-  if (t === 'process') return '⚙️';
-  if (t === 'ip')      return '🔢';
-  return '🔗';
+  if (t === 'geosite') return iconSvg('geosite', 'rule-inline-icon ssk-icon');
+  if (t === 'process') return iconSvg('process', 'rule-inline-icon ssk-icon');
+  if (t === 'ip')      return iconSvg('ip', 'rule-inline-icon ssk-icon');
+  return iconSvg('link', 'rule-inline-icon ssk-icon');
 }
 
 function setRuleAction(targetId, action) {

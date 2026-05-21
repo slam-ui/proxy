@@ -243,6 +243,311 @@ func TestStaticIndexUsesSplitAssets(t *testing.T) {
 	}
 }
 
+func TestHomeHeroStatusRowIsHidden(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{`class="hero-status-row"`, `id="orbStage"`, `id="slbl"`} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home hero status row missing %q", required)
+		}
+	}
+
+	hiddenRule := regexp.MustCompile(`(?s)\.hero-status-row\s*\{[^}]*display\s*:\s*none\s*!important`)
+	if !hiddenRule.MatchString(css) {
+		t.Fatal("home hero status row must stay visually hidden")
+	}
+	for _, required := range []string{`min-height:118px`, `padding-top:18px`} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home hero compact spacing missing %q", required)
+		}
+	}
+}
+
+func TestHomePrimaryAndServerActionsAreSwapped(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	toggleIdx := strings.Index(html, `class="quick-action quick-primary hero-toggle-action"`)
+	if toggleIdx < 0 {
+		t.Fatal("home toggle action must be rendered in the hero")
+	}
+	serverIdx := strings.Index(html, `class="srv-pill quick-action server-pill-action wide"`)
+	if serverIdx < 0 {
+		t.Fatal("server pill must be rendered as a quick action")
+	}
+	if serverIdx < toggleIdx {
+		t.Fatal("server pill must appear below the hero toggle action")
+	}
+	if strings.Contains(html, `class="quick-action quick-primary wide"`) {
+		t.Fatal("old quick-action primary placement must not remain")
+	}
+
+	for _, required := range []string{
+		`.hero-toggle-action`,
+		`.server-pill-action`,
+		`grid-column:1/-1`,
+		`.server-pill-action .srv-flag`,
+		`.server-pill-action .srv-meta`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("swapped home action styling missing %q", required)
+		}
+	}
+}
+
+func TestHomeToggleContainsStartupTimer(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js", "js/70-runtime-polling.js")
+
+	for _, required := range []string{
+		`id="qaTimer"`,
+		`id="qaTimerLabel"`,
+		`id="qaTimerTime"`,
+		`id="qaTimerBar"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("home startup timer markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.hero-toggle-action.timer-active`,
+		`.qa-timer.vis`,
+		`.qa-timer.indeterminate #qaTimerBar`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("home startup timer style missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`ready_at_ms`,
+		`curTimer === 'toggle'`,
+		`OpTimer.start('warming', label, estMs)`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("warming timer logic missing %q", required)
+		}
+	}
+	if strings.Contains(js, `readyAt * 1000 - Date.now()) : 30000`) {
+		t.Fatal("warming timer must not use the old fixed 30s fallback")
+	}
+}
+
+func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
+	js := readStaticBundle(t, "js/00-core.js", "js/20-navigation.js")
+
+	for _, required := range []string{
+		`function _isHomeActionVisible()`,
+		`op === 'apply' || op === 'connect'`,
+		`function _syncPlacement(kind)`,
+		`refreshPlacement`,
+		`OpTimer.refreshPlacement()`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("home operation timer docking missing %q", required)
+		}
+	}
+	if strings.Contains(js, `return op === 'toggle' || op === 'warming';`) {
+		t.Fatal("home timer docking must not be limited to toggle/warming operations")
+	}
+}
+
+func TestTrafficChartUsesFluidTimelineRendering(t *testing.T) {
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticText(t, "static/js/80-chart-utils-init.js")
+
+	for _, required := range []string{
+		`const CHART_WINDOW_MS = 60_000;`,
+		`const CHART_LEFT_EDGE_SPEED_PER_SEC = 1.35;`,
+		`let trafficSamples = [];`,
+		`function interpolateChartSample(prev, next, t)`,
+		`function visibleChartSamples(now)`,
+		`samples.push(interpolateChartSample(trafficSamples[firstVisible - 1], trafficSamples[firstVisible], start));`,
+		`const leftEdgeState = {`,
+		`const points = samples.map(sample => {`,
+		`function smoothLeftEdgePoint(points, key, plot, now)`,
+		`plot.h * CHART_LEFT_EDGE_SPEED_PER_SEC * dt`,
+		`function sampleAtChartTime(samples, targetT)`,
+		`ctx.bezierCurveTo(`,
+		`requestAnimationFrame(frame)`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("fluid chart rendering missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`const N =`,
+		`new Array(N)`,
+		`plot.w / (N - 1)`,
+		`trafficSamples.slice(firstVisible - 1)`,
+		`CHART_POINT_PX_STEP`,
+		`sampleAtChartTime(samples, start + ratio * CHART_WINDOW_MS)`,
+	} {
+		if strings.Contains(js, forbidden) {
+			t.Fatalf("traffic chart must not use fixed slot rendering: %q", forbidden)
+		}
+	}
+	for _, required := range []string{
+		`canvas#sc{`,
+		`inset:0;`,
+		`height:100%!important;`,
+		`z-index:1;`,
+		`overflow:hidden;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("full-card traffic chart CSS missing %q", required)
+		}
+	}
+}
+
+func TestSessionSummaryUsesPillStats(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{
+		`<div class="stats layer">`,
+		`id="stup"`,
+		`id="stdn"`,
+		`id="stconn"`,
+		`id="stconnSub"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("session summary markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.home-sheet .stat{`,
+		`grid-template-columns:auto minmax(0,1fr);`,
+		`border-radius:18px;`,
+		`.home-sheet .stat-val{`,
+		`height:auto!important;`,
+		`border-radius:14px;`,
+		`.home-sheet .stat-sub{`,
+		`display:block;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("session summary pill styling missing %q", required)
+		}
+	}
+}
+
+func TestSecurityPanelTypographyMatchesHomeStats(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+
+	for _, required := range []string{
+		`class="security-card layer"`,
+		`class="security-row"`,
+		`class="security-copy"`,
+		`id="secTunnelTitle"`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("security panel markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.security-title{`,
+		`font-size:14px;`,
+		`.security-row{`,
+		`min-height:66px;`,
+		`padding:13px 14px;`,
+		`.security-copy b{`,
+		`font-size:13px;`,
+		`.security-copy small{`,
+		`font-size:10.5px;`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("security panel typography missing %q", required)
+		}
+	}
+}
+
+func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	serversJS := readStaticText(t, "static/js/10-servers.js")
+	js := readStaticBundle(t,
+		"js/00-core.js",
+		"js/30-rules.js",
+		"js/35-processes.js",
+		"js/70-runtime-polling.js",
+		"js/80-chart-utils-init.js",
+	)
+	sprite := readStaticText(t, "static/assets/icons/safesky-icons.svg")
+	helmetPng, err := staticFiles.ReadFile("static/assets/icons/helmet.png")
+	if err != nil {
+		t.Fatalf("read embedded helmet icon: %v", err)
+	}
+	if len(helmetPng) < 1000 {
+		t.Fatal("embedded helmet icon looks too small or missing")
+	}
+
+	for _, required := range []string{
+		`id="brand"`,
+		`id="safe"`,
+		`id="server"`,
+		`id="rules"`,
+		`id="diagnostics"`,
+		`id="fallback-image"`,
+	} {
+		if !strings.Contains(sprite, required) {
+			t.Fatalf("icon sprite missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`assets/icons/safesky-icons.svg#brand`,
+		`src="assets/icons/helmet.png"`,
+		`assets/icons/safesky-icons.svg#safe`,
+		`assets/icons/safesky-icons.svg#server`,
+		`assets/icons/safesky-icons.svg#rules`,
+		`assets/icons/safesky-icons.svg#diagnostics`,
+		`assets/icons/safesky-icons.svg#settings`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("static icon markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`function iconSvg(name, className)`,
+		`markEl.replaceChildren(iconElement(iconName, 'security-icon ssk-icon'))`,
+		`iconSvg('process', 'rule-inline-icon ssk-icon')`,
+		`iconSvg(icon, 'proc-fallback ssk-icon')`,
+		`iconSvg('globe', 'flag-icon ssk-icon')`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("dynamic icon rendering missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.ssk-icon`,
+		`.brand-mark`,
+		`.logo-gem.app-logo`,
+		`.logo-gem.app-logo img.app-mark`,
+		`background:transparent!important`,
+		`.hbtn.busy .ssk-icon`,
+		`.rule-inline-icon`,
+		`.proc-icon-stack`,
+		`.security-icon`,
+		`.security-mark.warn .security-icon`,
+		`.security-mark.warn{color:var(--warn);background:transparent!important}`,
+		`.toast-icon`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("icon styling missing %q", required)
+		}
+	}
+	if strings.Contains(js, `this.outerHTML='${fallbackIco}'`) {
+		t.Fatal("process icon fallback must not use inline emoji replacement")
+	}
+	if !strings.Contains(serversJS, `btn.classList.add('busy')`) {
+		t.Fatal("diagnostics button must keep icon markup and use busy class while running")
+	}
+	if strings.Contains(serversJS, `btn.textContent = '...'`) || strings.Contains(serversJS, `btn.textContent = '···'`) {
+		t.Fatal("diagnostics button must not replace its icon markup while running")
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{
