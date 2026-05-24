@@ -755,7 +755,6 @@ internal/
   netwatch/
   speedtest/
   notification/
-  killswitch/
   apprules/
   dpapi/
   anomalylog/
@@ -975,9 +974,6 @@ Already fixed historically:
 - fetchWithTimeout introduction;
 - CI/security/lint improvements;
 - VLESS transports support.
-
-Known open product decision:
-- kill switch policy requires product-level decision.
 
 Before changing these areas, check:
 - `BUGS_FIXED_AUDIT.md`;

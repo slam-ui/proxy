@@ -45,8 +45,7 @@ Config changes should be validated through:
 ## Recovery Model
 
 `internal/xray` reports process crashes to the app lifecycle. The app decides
-whether to restart, clean Wintun state, save crash reports, or leave kill switch
-rules enforced.
+whether to restart, clean Wintun state, or save crash reports.
 
 ## Concurrency Rules
 

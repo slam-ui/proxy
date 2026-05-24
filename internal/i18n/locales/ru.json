@@ -123,6 +123,5 @@
   "tray.tooltip.off": "SafeSky — туннель выключен",
   "tray.tooltip.on": "SafeSky — туннель включён",
   "tray.tooltip.starting": "SafeSky — туннель запускается",
-  "killswitch.crash_recovery_banner": "Kill switch активен из прошлой сессии",
   "empty.servers.title": "У вас пока нет серверов"
 }

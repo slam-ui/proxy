@@ -21,7 +21,6 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/connhistory"
-	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netwatch"
 	"proxyclient/internal/trafficstats"
 
@@ -476,15 +475,11 @@ func (s *Server) handleDNSGuardCheck(w http.ResponseWriter, r *http.Request) {
 	directIP := fetchIP(ctx, directClient)
 	leaked := directIP != "" && proxyIP != "" && directIP == proxyIP
 	settings, _ := config.LoadAppSettings(config.AppSettingsFile)
-	if settings.DNSGuard.Enabled && settings.DNSGuard.Mode == "strict" && leaked {
-		killswitch.Enable("", s.logger)
-	}
 	s.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"proxy_ip":           proxyIP,
 		"direct_ip":          directIP,
 		"leaked":             leaked,
 		"strict":             settings.DNSGuard.Enabled && settings.DNSGuard.Mode == "strict",
-		"killswitch_enabled": killswitch.IsEnabled(),
 	})
 }
 
@@ -510,9 +505,6 @@ func (s *Server) startNetworkProtection(ctx context.Context) {
 			}
 			connhistory.Global.Add(connhistory.Event{Time: time.Now(), Kind: connhistory.EventNetChange, Reason: "network fingerprint changed"})
 			s.logger.Info("Network protection: сетевой интерфейс изменился")
-			if settings.NetworkProtection.StrictOnChange {
-				killswitch.Enable("", s.logger)
-			}
 			if s.serversHandlers != nil && settings.SmartFailover.Enabled {
 				go s.serversHandlers.AutoConnect()
 			}
@@ -590,11 +582,6 @@ func (s *Server) handleTrafficBudgetGet(w http.ResponseWriter, _ *http.Request) 
 		"total_bytes":   totalBytes,
 		"session_pct":   budgetPct(sessionBytes, settings.TrafficBudget.SessionLimitMB),
 		"total_pct":     budgetPct(totalBytes, settings.TrafficBudget.TotalLimitMB),
-	}
-	if settings.TrafficBudget.Enabled && settings.TrafficBudget.BlockWhenExceeded {
-		if budgetExceeded(sessionBytes, settings.TrafficBudget.SessionLimitMB) || budgetExceeded(totalBytes, settings.TrafficBudget.TotalLimitMB) {
-			killswitch.Enable("", s.logger)
-		}
 	}
 	s.respondJSON(w, http.StatusOK, status)
 }

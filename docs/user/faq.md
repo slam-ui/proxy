@@ -17,8 +17,8 @@ process/routing behavior depend on the `sing-box` configuration and TUN support.
 
 ## Why does the app need administrator rights?
 
-Administrator rights are required for Wintun cleanup, TUN startup, kill switch
-rules, and some Windows proxy/firewall operations.
+Administrator rights are required for Wintun cleanup, TUN startup, and some
+Windows proxy/firewall operations.
 
 ## Why does startup sometimes take longer?
 

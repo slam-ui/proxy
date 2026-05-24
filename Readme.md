@@ -217,7 +217,6 @@ proxy/
 │   ├── engine/             # Оркестратор компонентов
 │   ├── eventlog/           # Ring buffer для событий (O(1) insert, binary search)
 │   ├── fileutil/           # Атомарная запись файлов (MoveFileExW)
-│   ├── killswitch/         # Kill switch (Windows firewall)
 │   ├── logger/
 │   ├── netutil/            # WaitForPort с экспоненциальным backoff
 │   ├── process/            # Монитор процессов (Windows)

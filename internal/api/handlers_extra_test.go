@@ -760,43 +760,6 @@ func TestTunSetDefault_InvalidBody_Returns400(t *testing.T) {
 	}
 }
 
-// ─── settings: killswitch ─────────────────────────────────────────────────────
-
-func TestSetKillSwitch_Returns200(t *testing.T) {
-	srv := NewServer(Config{
-		XRayManager:  &stubXray{},
-		ProxyManager: &stubProxy{},
-		Logger:       &logger.NoOpLogger{},
-	}, context.Background())
-	SetupSettingsRoutes(srv)
-	srv.FinalizeRoutes()
-
-	// Disable (true → включить, false → снять)
-	w := postJSON(t, srv.router, "/api/settings/killswitch", map[string]bool{"enabled": false})
-	if w.Code != http.StatusOK {
-		t.Errorf("POST /api/settings/killswitch = %d (body: %s), want 200", w.Code, w.Body)
-	}
-}
-
-func TestSetKillSwitch_InvalidBody_Returns400(t *testing.T) {
-	srv := NewServer(Config{
-		XRayManager:  &stubXray{},
-		ProxyManager: &stubProxy{},
-		Logger:       &logger.NoOpLogger{},
-	}, context.Background())
-	SetupSettingsRoutes(srv)
-	srv.FinalizeRoutes()
-
-	req := httptest.NewRequest(http.MethodPost, "/api/settings/killswitch", strings.NewReader(`{bad`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	srv.router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("killswitch с битым JSON = %d, want 400", w.Code)
-	}
-}
-
 // ─── recovery middleware: паника не роняет сервер ────────────────────────────
 
 func TestRecoveryMiddleware_PanicsRecovered(t *testing.T) {

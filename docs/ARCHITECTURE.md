@@ -26,7 +26,6 @@ flowchart LR
     App --> Xray
     App --> Proxy["Windows system proxy\ninternal/proxy"]
     App --> Wintun["Wintun cleanup\ninternal/wintun"]
-    App --> Kill["Kill switch\ninternal/killswitch"]
     App --> Engine["Engine downloader\ninternal/engine"]
 ```
 
@@ -61,7 +60,6 @@ is normally the repository root; in packaged builds it is the install directory.
 | `data/mtu_cache.json` | `internal/mtu` | Per-server MTU probe results. |
 | `data/telemetry_id` | `internal/telemetry` | Anonymous telemetry id, created only after opt-in. |
 | `data/crash-*.json` | `internal/crashreport` | Sanitized local crash reports pending upload. |
-| `data/killswitch_state.json` | `internal/killswitch` | Kill switch recovery state. |
 
 ## Connect Flow
 
@@ -135,34 +133,16 @@ sequenceDiagram
     participant SB as sing-box.exe
     participant X as internal/xray manager
     participant APP as App lifecycle
-    participant KS as Kill switch
     participant TUN as Wintun
     participant CR as Crash report
 
     SB-->>X: process exits unexpectedly
     X->>APP: OnCrash(error, manager)
     APP->>CR: save sanitized local report
-    APP->>KS: keep fail-close rules if enabled
     APP->>TUN: cleanup / poll adapter release
     APP->>X: restart after cleanup when allowed
     X-->>APP: ready or terminal failure
 ```
-
-## Kill Switch State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> Disabled
-    Disabled --> Armed: user enables
-    Armed --> Enforced: tunnel/proxy failure
-    Enforced --> Armed: successful reconnect
-    Enforced --> Disabled: explicit user disable
-    Armed --> Disabled: user disables
-    Enforced --> Enforced: app crash / restart
-```
-
-Kill switch policy is intentionally fail-close. See
-[KILLSWITCH_POLICY.md](KILLSWITCH_POLICY.md) for the product decisions.
 
 ## Module Boundaries
 
@@ -175,7 +155,6 @@ Kill switch policy is intentionally fail-close. See
 | `internal/engine` | Downloads and verifies the `sing-box.exe` runtime. |
 | `internal/update` | Checks, downloads, verifies, and stages SafeSky app updates. |
 | `internal/subscription` | Fetches subscription URLs, parses supported server entries, stores encrypted metadata. |
-| `internal/killswitch` | Windows firewall/WFP kill switch state and recovery. |
 | `internal/wintun` | Wintun adapter cleanup, startup probes, and adaptive wait timing. |
 | `internal/telemetry` | Opt-in event upload, privacy export/delete, sanitized crash report upload. |
 | `internal/mtu` | Binary MTU probing support and per-server MTU cache. |

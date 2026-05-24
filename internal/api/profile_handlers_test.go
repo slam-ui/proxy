@@ -89,7 +89,6 @@ func TestProfilesSaveFullModelRoundTrip(t *testing.T) {
 			"remote_dns": "https://1.1.1.1/dns-query",
 			"direct_dns": "udp://8.8.8.8",
 		},
-		"kill_switch":  "always",
 		"split_tunnel": []string{"10.0.0.0/8"},
 		"auto_connect": true,
 		"hotkey":       "Ctrl+Alt+W",
@@ -116,8 +115,8 @@ func TestProfilesSaveFullModelRoundTrip(t *testing.T) {
 	if len(p.RoutingRules) != 1 || p.RoutingRules[0].Value != "example.com" {
 		t.Fatalf("routing rules not normalized/preserved: %+v", p.RoutingRules)
 	}
-	if p.DNSConfig == nil || p.DNSConfig.DirectDNS != "udp://8.8.8.8" || p.KillSwitch != KillSwitchAlways {
-		t.Fatalf("dns/kill switch not preserved: dns=%+v kill=%s", p.DNSConfig, p.KillSwitch)
+	if p.DNSConfig == nil || p.DNSConfig.DirectDNS != "udp://8.8.8.8" {
+		t.Fatalf("dns config not preserved: dns=%+v", p.DNSConfig)
 	}
 }
 
@@ -158,7 +157,6 @@ func TestProfilesImportExportRoundTrip(t *testing.T) {
 		ServerSelector: ServerSelector{Mode: "auto"},
 		Routing:        config.RoutingConfig{DefaultAction: config.ActionProxy, Rules: []config.RoutingRule{{Value: "youtube.com", Type: config.RuleTypeDomain, Action: config.ActionProxy}}},
 		RoutingRules:   []config.RoutingRule{{Value: "youtube.com", Type: config.RuleTypeDomain, Action: config.ActionProxy}},
-		KillSwitch:     KillSwitchConnected,
 		AutoConnect:    true,
 	}
 	body, _ := json.Marshal(profile)

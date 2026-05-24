@@ -6,7 +6,6 @@ The app listens only on `127.0.0.1` and controls the Windows system proxy.
 ## Requirements
 
 - Windows 10/11 x64.
-- Administrator rights for TUN/Wintun mode and kill switch cleanup.
 - `sing-box.exe` and `wintun.dll` next to `proxy-client.exe`. If `sing-box.exe`
   is missing, SafeSky downloads and verifies it automatically.
 
@@ -40,5 +39,4 @@ If the first connection fails:
 
 - Use the tray menu for fast connect/disconnect and profile switching.
 - Use profiles when you need separate work, gaming, or strict privacy setups.
-- Keep kill switch enabled only when you accept fail-close behavior.
 - Keep telemetry disabled unless you intentionally opt in.

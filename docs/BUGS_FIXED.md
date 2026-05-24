@@ -257,36 +257,6 @@ OnQuit: func() {
 ## БАГ #NEW-4 — UX/ЛОГИКА 🟡
 **handleCrash: Kill Switch включается и немедленно отключается при non-TUN краше**
 
-**Файл:** `cmd/proxy-client/app.go` → `handleCrash()`
-
-**Суть:**
-Для non-TUN краша (например разрыв соединения с сервером):
-```go
-if a.cfg.KillSwitch {
-    killswitch.Enable(...)   // 2× netsh → добавляет правила брандмауэра
-}
-proxyManager.Disable()
-killswitch.Disable(...)      // 2× netsh → удаляет правила сразу же
-```
-4 лишних `netsh` вызова (~400-1200мс задержки). Краткое (~50мс) реальное блокирование
-трафика между Enable и Disable. Kill Switch не несёт смысла при non-TUN краше т.к.
-перезапуска не будет — прокси отключён до ручного рестарта.
-
-**Фикс:** Убрать блок `killswitch.Enable` для non-TUN краша.
-Оставить только `killswitch.Disable` (на случай если KS остался от предыдущей TUN-попытки):
-```go
-// Убрать:
-// if a.cfg.KillSwitch {
-//     serverIP := extractServerIP(a.cfg.SecretFile)
-//     killswitch.Enable(serverIP, a.mainLogger)
-// }
-
-// Добавить в конец non-TUN блока:
-killswitch.Disable(a.mainLogger)
-```
-
----
-
 ## Итог
 
 | # | Файл | Тип | Критичность | Статус |
@@ -301,7 +271,6 @@ killswitch.Disable(a.mainLogger)
 | NEW-1 | `api/tun_handlers.go` | handleBulkReplaceRules не lowercase | 🟠 Важный | ✅ Исправлен |
 | NEW-2 | `api/engine_handlers.go` | EnsureEngine с context.Background() | 🟠 Важный | ✅ Исправлен |
 | NEW-3 | `cmd/proxy-client/main.go` | OnQuit без sync.Once | 🟡 Race | ✅ Исправлен |
-| NEW-4 | `cmd/proxy-client/app.go` | KillSwitch Enable+Disable non-TUN | 🟡 UX/Logic | ✅ Исправлен |
 
 **Изменённые файлы (v3):**
 - `cmd/proxy-client/app.go`

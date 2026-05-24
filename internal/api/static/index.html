@@ -240,10 +240,6 @@
         <span class="security-mark wait" id="secDNSMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secDNSTitle">Проверяем DNS защиту</b><small id="secDNSSub">—</small></span>
       </button>
-      <button class="security-row" onclick="openSecurityTarget('kill')" id="secKillRow">
-        <span class="security-mark wait" id="secKillMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
-        <span class="security-copy"><b id="secKillTitle">Проверяем kill switch</b><small id="secKillSub">—</small></span>
-      </button>
       <button class="security-row" onclick="openSecurityTarget('backup')" id="secBackupRow">
         <span class="security-mark wait" id="secBackupMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secBackupTitle">Проверяем резервный сервер</b><small id="secBackupSub">—</small></span>
@@ -680,10 +676,6 @@
       <div class="pg-row">
         <div><div class="pg-lbl">Подключение при запуске</div><div class="pg-sub">Включать туннель сразу или ждать ручного запуска</div></div>
         <div class="rule-toggle" id="startupProxyToggle" onclick="toggleStartupProxy()" title="Включать прокси при запуске клиента"></div>
-      </div>
-      <div class="pg-row" id="killSwitchRecoveryRow" style="display:none">
-        <div><div class="pg-lbl">Kill switch активен</div><div class="pg-sub">Трафик заблокирован после прошлой сессии</div></div>
-        <button class="pg-btn danger" onclick="unlockKillSwitch()">Снять блокировку</button>
       </div>
       <div class="pg-row">
         <div><div class="pg-lbl">Автопереключение</div><div class="pg-sub" id="failoverResult">Переключение при деградации сервера</div></div>

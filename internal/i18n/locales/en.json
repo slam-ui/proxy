@@ -123,6 +123,5 @@
   "tray.tooltip.off": "SafeSky — tunnel disconnected",
   "tray.tooltip.on": "SafeSky — tunnel connected",
   "tray.tooltip.starting": "SafeSky — tunnel is starting",
-  "killswitch.crash_recovery_banner": "Kill switch is active from the previous session",
   "empty.servers.title": "You do not have any servers yet"
 }

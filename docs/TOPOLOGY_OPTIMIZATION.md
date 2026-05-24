@@ -166,7 +166,6 @@ internal/support/               # Поддерживающее
 ├─ netutil/
 ├─ fileutil/
 ├─ autorun/
-└─ killswitch/
 ```
 
 **Выигрыш:** Логическая группировка, проще навигировать новичкам

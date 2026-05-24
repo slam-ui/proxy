@@ -183,7 +183,7 @@
 - **Symptom:** Settings POST handlers accepted oversized, unknown-field, or multi-value JSON bodies.
 - **Root cause:** Handlers decoded `r.Body` directly without per-handler request caps or strict decoder settings.
 - **Fix:** Added 64 KiB caps for full settings/DNS payloads, 4 KiB caps for toggles, `DisallowUnknownFields`, and trailing-value rejection through a shared settings decoder.
-- **Test:** `TestHandleSetSettingsRejectsUnknownFields`, `TestHandleSetSettingsRejectsOversizedBody`, `TestHandleSetProxyGuardRejectsUnknownFields`, `TestHandleSetProxyGuardRejectsOversizedBody`, `TestHandleSetAutorunRejectsUnknownFields`, `TestHandleSetAutorunRejectsOversizedBody`, `TestHandleSetStartupProxyRejectsUnknownFields`, `TestHandleSetStartupProxyRejectsOversizedBody`, `TestHandleSetKillSwitchRejectsUnknownFields`, `TestHandleSetKillSwitchRejectsOversizedBody`, `TestHandleSetDNSRejectsUnknownFields`, `TestHandleSetDNSRejectsOversizedBody`, `TestHandleSetGeositeUpdateRejectsUnknownFields`, `TestHandleSetGeositeUpdateRejectsOversizedBody`, `TestSettingsHandlersRejectTrailingData`
+- **Test:** `TestHandleSetSettingsRejectsUnknownFields`, `TestHandleSetSettingsRejectsOversizedBody`, `TestHandleSetProxyGuardRejectsUnknownFields`, `TestHandleSetProxyGuardRejectsOversizedBody`, `TestHandleSetAutorunRejectsUnknownFields`, `TestHandleSetAutorunRejectsOversizedBody`, `TestHandleSetStartupProxyRejectsUnknownFields`, `TestHandleSetStartupProxyRejectsOversizedBody`, `TestHandleSetDNSRejectsUnknownFields`, `TestHandleSetDNSRejectsOversizedBody`, `TestHandleSetGeositeUpdateRejectsUnknownFields`, `TestHandleSetGeositeUpdateRejectsOversizedBody`, `TestSettingsHandlersRejectTrailingData`
 - **Verified:** targeted strict decoder tests ok
 
 ### [F-017] Strict TUN request bodies
@@ -628,10 +628,10 @@ Summary:
 ### [F-054] Clean network hooks on shutdown
 - **Severity:** High
 - **Category:** B
-- **File(s):** cmd/proxy-client/app.go:1108, internal/api/tun_handlers.go:1240, internal/api/tun_handlers_test.go:100, internal/killswitch/killswitch_windows.go:39, internal/killswitch/killswitch_test.go:182, internal/proxy/manager.go:141, internal/proxy/manager_backend_test.go:67, internal/proxy/manager_regression_test.go:68, cmd/proxy-client/app_test.go:311, internal/api/handlers_test.go:39
+- **File(s):** cmd/proxy-client/app.go:1108, internal/api/tun_handlers.go:1240, internal/api/tun_handlers_test.go:100, internal/proxy/manager.go:141, internal/proxy/manager_backend_test.go:67, internal/proxy/manager_regression_test.go:68, cmd/proxy-client/app_test.go:311, internal/api/handlers_test.go:39
 - **Commit:** f0283eb
 - **Symptom:** Closing the app could leave system internet down until the client was launched again.
-- **Root cause:** Shutdown cancelled lifecycle work before cleanup paths finished, while proxy restore and kill-switch teardown could skip when state looked stale in memory.
-- **Fix:** Stop Proxy Guard and disable Kill Switch/system proxy early during shutdown, suppress proxy restore during shutdown-cancelled apply, and make proxy/killswitch disable paths clean stale backend/state markers.
+- **Root cause:** Shutdown cancelled lifecycle work before cleanup paths finished, while proxy restore and firewall teardown could skip when state looked stale in memory.
+- **Fix:** Stop Proxy Guard and disable the system proxy early during shutdown, suppress proxy restore during shutdown-cancelled apply, and make proxy disable paths clean stale backend/state markers.
 - **Test:** `TestShutdown_DisablesProxyAndStopsGuard`, `TestDoApply_ShutdownCancellationDoesNotRestoreProxy`, `TestDisable_CleansUpWhenStateStillActive`, `TestManager_Disable_CleansUpWhenBackendStillEnabled`
-- **Verified:** `go test ./internal/api ./internal/proxy ./internal/killswitch ./cmd/proxy-client -count=1`
+- **Verified:** `go test ./internal/api ./internal/proxy ./cmd/proxy-client -count=1`
