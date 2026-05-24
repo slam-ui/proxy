@@ -65,7 +65,6 @@
     ],
     "block_quic": true
   },
-  "kill_switch": "connected",
   "auto_connect": true,
   "created_at": "2026-05-03T18:20:05.8658322+03:00",
   "updated_at": "2026-05-03T18:20:05.8658322+03:00"

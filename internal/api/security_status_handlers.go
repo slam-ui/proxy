@@ -4,13 +4,11 @@ import (
 	"net/http"
 
 	"proxyclient/internal/config"
-	"proxyclient/internal/killswitch"
 )
 
 type securityStatusResponse struct {
 	Tunnel       securityTunnelStatus `json:"tunnel"`
 	DNSGuard     securityDNSStatus    `json:"dns_guard"`
-	KillSwitch   securityToggleStatus `json:"kill_switch"`
 	BackupServer securityBackupStatus `json:"backup_server"`
 }
 
@@ -21,10 +19,6 @@ type securityTunnelStatus struct {
 type securityDNSStatus struct {
 	Enabled bool   `json:"enabled"`
 	Mode    string `json:"mode"`
-}
-
-type securityToggleStatus struct {
-	Enabled bool `json:"enabled"`
 }
 
 type securityBackupStatus struct {
@@ -47,9 +41,6 @@ func (s *Server) handleSecurityStatus(w http.ResponseWriter, _ *http.Request) {
 		DNSGuard: securityDNSStatus{
 			Enabled: settings.DNSGuard.Enabled,
 			Mode:    settings.DNSGuard.Mode,
-		},
-		KillSwitch: securityToggleStatus{
-			Enabled: killswitch.IsEnabled(),
 		},
 		BackupServer: securityBackupStatus{
 			Available: serverCount > 1,

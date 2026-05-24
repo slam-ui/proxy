@@ -35,7 +35,6 @@ import (
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/i18n"
-	"proxyclient/internal/killswitch"
 	"proxyclient/internal/netutil"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/power"
@@ -376,11 +375,6 @@ func run(output io.Writer) error {
 		killed := killOrphanSingBox(app.mainLogger)
 		orphanCh <- orphanResult{killed}
 	}()
-
-	// Kill Switch: удаляем правила брандмауэра от предыдущего сеанса.
-	// Если приложение упало с активным Kill Switch, правила netsh остаются в системе.
-	// CleanupOnStart применяет fail-close: оставляет блокировку до явного действия.
-	killswitch.CleanupOnStart(app.mainLogger)
 
 	// Загружаем app rules параллельно (I/O, не зависит от wintun).
 	type appRulesResult struct {

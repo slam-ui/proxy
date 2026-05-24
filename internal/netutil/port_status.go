@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"proxyclient/internal/winexec"
 )
 
 // PortStats contains statistics about available ephemeral ports on the system.
@@ -99,6 +101,7 @@ func countPortState(state string) (int, error) {
 	// Run: netstat -ano | findstr /C:"STATE"
 	// Output format: "  TCP    0.0.0.0:49152         0.0.0.0:0              TIME_WAIT       12345"
 	cmd := exec.Command("netstat", "-ano")
+	winexec.HideWindow(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return 0, fmt.Errorf("netstat failed: %w", err)

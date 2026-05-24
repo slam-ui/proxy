@@ -1,8 +1,9 @@
 // CANVAS SPEED CHART
 // ═══════════════════════════════════════════════════
-const N = 90;
-let upBuf = new Array(N).fill(0);
-let dnBuf = new Array(N).fill(0);
+const CHART_WINDOW_MS = 60_000;
+const CHART_SAMPLE_TTL_MS = CHART_WINDOW_MS + 10_000;
+const CHART_LEFT_EDGE_SPEED_PER_SEC = 1.35;
+let trafficSamples = [];
 let chartMax = 1; // динамический максимум для нормализации
 let chartPeakBps = 0;
 
@@ -18,20 +19,53 @@ function updateChartPeak(bps) {
   el.textContent = 'пик ' + peak.val + ' ' + peak.unit;
 }
 
+function pruneChartSamples(now) {
+  const cutoff = now - CHART_SAMPLE_TTL_MS;
+  while (trafficSamples.length && trafficSamples[0].t < cutoff) {
+    trafficSamples.shift();
+  }
+}
+
+function interpolateChartSample(prev, next, t) {
+  const span = Math.max(1, next.t - prev.t);
+  const k = Math.max(0, Math.min(1, (t - prev.t) / span));
+  return {
+    t,
+    up: prev.up + (next.up - prev.up) * k,
+    dn: prev.dn + (next.dn - prev.dn) * k
+  };
+}
+
+function visibleChartSamples(now) {
+  pruneChartSamples(now);
+  const start = now - CHART_WINDOW_MS;
+  const firstVisible = trafficSamples.findIndex(s => s.t >= start);
+  if (firstVisible < 0) return [];
+  const samples = [];
+  if (firstVisible > 0) {
+    samples.push(interpolateChartSample(trafficSamples[firstVisible - 1], trafficSamples[firstVisible], start));
+  }
+  samples.push(...trafficSamples.slice(firstVisible));
+  const last = samples[samples.length - 1];
+  if (last && last.t < now) {
+    samples.push({ t: now, up: last.up, dn: last.dn });
+  }
+  return samples;
+}
+
 function pushChartData(upBps, dnBps) {
   // FIX #2: данные из API, а не рандом
   // FIX #2: если proxy выключен — показываем 0
   const isOn = state.running && state.enabled;
   const up = isOn ? cleanBps(upBps) : 0;
   const dn = isOn ? cleanBps(dnBps) : 0;
+  const now = Date.now();
 
-  upBuf.push(up); upBuf.shift();
-  dnBuf.push(dn); dnBuf.shift();
+  trafficSamples.push({ t: now, up, dn });
+  const samples = visibleChartSamples(now);
 
   // Обновляем динамический максимум с небольшим запасом, чтобы пики не упирались в край.
-  const cleanUp = upBuf.map(cleanBps);
-  const cleanDn = dnBuf.map(cleanBps);
-  chartPeakBps = Math.max(...cleanUp, ...cleanDn, 0);
+  chartPeakBps = samples.reduce((peak, sample) => Math.max(peak, cleanBps(sample.up), cleanBps(sample.dn)), 0);
   const localMax = Math.max(chartPeakBps, 1024);
   const targetMax = localMax * 1.12;
   if (!Number.isFinite(chartMax) || chartMax < 1024) chartMax = 1024;
@@ -90,37 +124,104 @@ function pushChartData(upBps, dnBps) {
   let mouseX = -1;
   let mouseY = -1;
   const tooltip = $id('chartTooltip');
+  const leftEdgeState = {
+    up: { y: null, ts: 0 },
+    dn: { y: null, ts: 0 }
+  };
 
   function themeName() {
     return document.documentElement.getAttribute('data-theme')
       || (typeof currentTheme === 'string' ? currentTheme : 'dark');
   }
 
-  function normArr(buf) {
+  function normValue(value) {
     const max = Math.max(chartMax || 1, 1024);
-    return buf.map(v => Math.max(0, Math.min(1, cleanBps(v) / max)));
+    return Math.max(0, Math.min(1, cleanBps(value) / max));
   }
 
-  function drawPath(points) {
+  function smoothPath(points) {
     ctx.beginPath();
     if (!points.length) return;
     ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
+    if (points.length === 1) return;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[Math.max(0, i - 1)];
+      const p1 = points[i];
+      const p2 = points[i + 1];
+      const p3 = points[Math.min(points.length - 1, i + 2)];
+      const cp1x = p1.x + (p2.x - p0.x) / 6;
+      const cp1y = p1.y + (p2.y - p0.y) / 6;
+      const cp2x = p2.x - (p3.x - p1.x) / 6;
+      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
     }
   }
 
-  function drawSeries(data, cfg, plot) {
-    const step = plot.w / (N - 1);
-    const points = data.map((v, i) => ({
-      x: plot.left + i * step,
-      y: plot.bottom - v * plot.h
-    }));
+  function samplePoints(samples, key, plot, now) {
+    const start = now - CHART_WINDOW_MS;
+    const points = samples.map(sample => {
+      const t = Math.max(start, Math.min(now, sample.t));
+      return {
+        x: plot.left + ((t - start) / CHART_WINDOW_MS) * plot.w,
+        y: plot.bottom - normValue(sample[key]) * plot.h
+      };
+    });
+    const compact = [];
+    for (const point of points) {
+      const prev = compact[compact.length - 1];
+      if (!prev || Math.abs(prev.x - point.x) > 0.15 || Math.abs(prev.y - point.y) > 0.15) {
+        compact.push(point);
+      }
+    }
+    if (compact.length === 1) {
+      const y = compact[0].y;
+      const flat = [{ x: plot.left, y }, { x: plot.right, y }];
+      smoothLeftEdgePoint(flat, key, plot, now);
+      return flat;
+    }
+    smoothLeftEdgePoint(compact, key, plot, now);
+    return compact;
+  }
+
+  function smoothLeftEdgePoint(points, key, plot, now) {
+    const state = leftEdgeState[key];
+    if (!points.length || points[0].x > plot.left + 0.5) {
+      state.y = null;
+      state.ts = now;
+      return;
+    }
+    const targetY = points[0].y;
+    if (!Number.isFinite(state.y)) {
+      state.y = targetY;
+    }
+    const dt = Math.min(0.25, Math.max(0, (now - state.ts) / 1000));
+    const maxDelta = Math.max(0.5, plot.h * CHART_LEFT_EDGE_SPEED_PER_SEC * dt);
+    const delta = targetY - state.y;
+    state.y = Math.abs(delta) <= maxDelta
+      ? targetY
+      : state.y + Math.sign(delta) * maxDelta;
+    points[0] = { x: points[0].x, y: state.y };
+    state.ts = now;
+  }
+
+  function drawSeries(points, cfg, plot) {
+    if (points.length < 2) return;
+
+    const gradient = ctx.createLinearGradient(0, plot.top, 0, plot.bottom);
+    gradient.addColorStop(0, cfg.fillTop);
+    gradient.addColorStop(1, cfg.fillBottom);
+
+    smoothPath(points);
+    ctx.lineTo(points[points.length - 1].x, plot.bottom);
+    ctx.lineTo(points[0].x, plot.bottom);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
 
     ctx.save();
     ctx.shadowColor = cfg.glow;
     ctx.shadowBlur = cfg.glowBlur;
-    drawPath(points);
+    smoothPath(points);
     ctx.strokeStyle = cfg.strokeSoft;
     ctx.lineWidth = 3.2;
     ctx.lineJoin = 'round';
@@ -128,7 +229,7 @@ function pushChartData(upBps, dnBps) {
     ctx.stroke();
     ctx.restore();
 
-    drawPath(points);
+    smoothPath(points);
     ctx.strokeStyle = cfg.stroke;
     ctx.lineWidth = 2.35;
     ctx.lineJoin = 'round';
@@ -136,7 +237,7 @@ function pushChartData(upBps, dnBps) {
     ctx.stroke();
 
     const last = points[points.length - 1];
-    if (last && data[data.length - 1] > 0.01) {
+    if (last && last.y < plot.bottom - 1) {
       ctx.beginPath();
       ctx.arc(last.x, last.y, 3.2, 0, Math.PI * 2);
       ctx.fillStyle = cfg.dot;
@@ -147,7 +248,29 @@ function pushChartData(upBps, dnBps) {
     }
   }
 
+  function sampleAtChartTime(samples, targetT) {
+    if (!samples.length) return { up: 0, dn: 0 };
+    if (targetT <= samples[0].t) return samples[0];
+    const last = samples[samples.length - 1];
+    if (targetT >= last.t) return last;
+
+    for (let i = 1; i < samples.length; i++) {
+      const prev = samples[i - 1];
+      const next = samples[i];
+      if (targetT <= next.t) {
+        const span = Math.max(1, next.t - prev.t);
+        const k = Math.max(0, Math.min(1, (targetT - prev.t) / span));
+        return {
+          up: prev.up + (next.up - prev.up) * k,
+          dn: prev.dn + (next.dn - prev.dn) * k
+        };
+      }
+    }
+    return last;
+  }
+
   function draw() {
+    const now = Date.now();
     const W = canvasW;
     const H = canvasH;
     if (W <= 1 || H <= 1) return;
@@ -157,31 +280,36 @@ function pushChartData(upBps, dnBps) {
     const plot = {
       left: 0,
       right: W,
-      top: 14,
-      bottom: Math.max(24, H - 5)
+      top: 0,
+      bottom: Math.max(1, H - 1)
     };
     plot.w = Math.max(1, plot.right - plot.left);
     plot.h = Math.max(1, plot.bottom - plot.top);
 
-    const normUp = normArr(upBuf);
-    const normDn = normArr(dnBuf);
+    const samples = visibleChartSamples(now);
+    const upPoints = samplePoints(samples, 'up', plot, now);
+    const dnPoints = samplePoints(samples, 'dn', plot, now);
     const upColor = isLight ? '#2f6f9f' : '#a8c8dc';
     const upSoft = isLight ? 'rgba(47,111,159,0.30)' : 'rgba(168,200,220,0.30)';
     const dnColor = isLight ? '#8a6a2f' : '#e1bd7d';
     const dnSoft = isLight ? 'rgba(138,106,47,0.28)' : 'rgba(225,189,125,0.32)';
 
-    drawSeries(normDn, {
+    drawSeries(dnPoints, {
       stroke: dnColor,
       strokeSoft: dnSoft,
+      fillTop: isLight ? 'rgba(138,106,47,0.12)' : 'rgba(225,189,125,0.16)',
+      fillBottom: 'rgba(225,189,125,0)',
       glow: isLight ? 'rgba(138,106,47,0.18)' : 'rgba(225,189,125,0.22)',
       glowBlur: isLight ? 1.5 : 2.5,
       dot: dnColor,
       dotRing: 'rgba(255,255,255,0.88)'
     }, plot);
 
-    drawSeries(normUp, {
+    drawSeries(upPoints, {
       stroke: upColor,
       strokeSoft: upSoft,
+      fillTop: isLight ? 'rgba(47,111,159,0.12)' : 'rgba(168,200,220,0.14)',
+      fillBottom: 'rgba(168,200,220,0)',
       glow: isLight ? 'rgba(47,111,159,0.18)' : 'rgba(168,200,220,0.22)',
       glowBlur: isLight ? 1.5 : 2.5,
       dot: upColor,
@@ -190,18 +318,19 @@ function pushChartData(upBps, dnBps) {
 
     // Hover crosshair + tooltip
     if (mouseX >= 0) {
-      const step = plot.w / (N - 1);
-      const idx = Math.min(N - 1, Math.max(0, Math.round((mouseX - plot.left) / step)));
+      const x = Math.max(plot.left, Math.min(plot.right, mouseX));
+      const ratio = plot.w > 0 ? (x - plot.left) / plot.w : 1;
+      const targetT = now - CHART_WINDOW_MS + ratio * CHART_WINDOW_MS;
       // Vertical crosshair line
       ctx.strokeStyle = isLight ? 'rgba(255,255,255,0.34)' : 'rgba(255,255,255,0.22)';
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
-      const x = plot.left + idx * step;
       ctx.beginPath(); ctx.moveTo(x, plot.top); ctx.lineTo(x, plot.bottom); ctx.stroke();
       ctx.setLineDash([]);
       // Tooltip content
-      const up = cleanBps(upBuf[idx]), dn = cleanBps(dnBuf[idx]);
-      const secsAgo = (N - 1 - idx);
+      const sample = sampleAtChartTime(samples, targetT);
+      const up = cleanBps(sample.up), dn = cleanBps(sample.dn);
+      const secsAgo = Math.max(0, Math.round((now - targetT) / 1000));
       const timeLabel = secsAgo === 0 ? '0с назад' : secsAgo + 'с назад';
       const { val: upV, unit: upU } = fmtSpeed(up);
       const { val: dnV, unit: dnU } = fmtSpeed(dn);

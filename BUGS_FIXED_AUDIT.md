@@ -183,7 +183,7 @@
 - **Symptom:** Settings POST handlers accepted oversized, unknown-field, or multi-value JSON bodies.
 - **Root cause:** Handlers decoded `r.Body` directly without per-handler request caps or strict decoder settings.
 - **Fix:** Added 64 KiB caps for full settings/DNS payloads, 4 KiB caps for toggles, `DisallowUnknownFields`, and trailing-value rejection through a shared settings decoder.
-- **Test:** `TestHandleSetSettingsRejectsUnknownFields`, `TestHandleSetSettingsRejectsOversizedBody`, `TestHandleSetProxyGuardRejectsUnknownFields`, `TestHandleSetProxyGuardRejectsOversizedBody`, `TestHandleSetAutorunRejectsUnknownFields`, `TestHandleSetAutorunRejectsOversizedBody`, `TestHandleSetStartupProxyRejectsUnknownFields`, `TestHandleSetStartupProxyRejectsOversizedBody`, `TestHandleSetKillSwitchRejectsUnknownFields`, `TestHandleSetKillSwitchRejectsOversizedBody`, `TestHandleSetDNSRejectsUnknownFields`, `TestHandleSetDNSRejectsOversizedBody`, `TestHandleSetGeositeUpdateRejectsUnknownFields`, `TestHandleSetGeositeUpdateRejectsOversizedBody`, `TestSettingsHandlersRejectTrailingData`
+- **Test:** `TestHandleSetSettingsRejectsUnknownFields`, `TestHandleSetSettingsRejectsOversizedBody`, `TestHandleSetProxyGuardRejectsUnknownFields`, `TestHandleSetProxyGuardRejectsOversizedBody`, `TestHandleSetAutorunRejectsUnknownFields`, `TestHandleSetAutorunRejectsOversizedBody`, `TestHandleSetStartupProxyRejectsUnknownFields`, `TestHandleSetStartupProxyRejectsOversizedBody`, `TestHandleSetDNSRejectsUnknownFields`, `TestHandleSetDNSRejectsOversizedBody`, `TestHandleSetGeositeUpdateRejectsUnknownFields`, `TestHandleSetGeositeUpdateRejectsOversizedBody`, `TestSettingsHandlersRejectTrailingData`
 - **Verified:** targeted strict decoder tests ok
 
 ### [F-017] Strict TUN request bodies
@@ -613,3 +613,25 @@ Summary:
 - **Fix:** Confirmed `procicon` has paired `DestroyIcon`, `DeleteDC`, and `DeleteObject`; confirmed Wintun probe closes adapters after delete/open checks and polling paths are context-cancellable; fixed tray owned icon/GDI cleanup in F-049.
 - **Test:** existing API, Wintun, and tray tests
 - **Verified:** `go test ./internal/api/... ./internal/tray/... ./internal/wintun/... -count=1 -race -timeout=180s`
+
+### [F-053] Hide helper consoles
+- **Severity:** Medium
+- **Category:** B
+- **File(s):** cmd/proxy-client/app.go:310, cmd/proxy-updater/main.go:86, internal/api/diag_handlers.go:720, internal/engine/engine.go:697, internal/ipv6mitigation/mitigation_windows.go:45, internal/netutil/port_status.go:101, internal/update/installer.go:38, internal/xray/manager.go:55, internal/winexec/window_windows.go:1, source_invariants_test.go:54
+- **Commit:** 06e6beb
+- **Symptom:** Helper processes flashed a visible cmd window during runtime checks, updater launch, installer launch, and diagnostic actions.
+- **Root cause:** Several runtime `exec.Command` / `exec.CommandContext` calls launched console children without a shared hidden-window helper.
+- **Fix:** Added `internal/winexec.HideWindow` and applied it to helper process launches; added a source invariant to keep future runtime exec calls hidden on Windows.
+- **Test:** `TestHideWindowSetsWindowsFlags`, `TestHideWindowPreservesExistingCreationFlags`, `TestRuntimeExecCommandsHideWindows`
+- **Verified:** `go test ./internal/winexec ./internal/netutil ./internal/engine ./internal/xray ./internal/ipv6mitigation ./internal/update ./cmd/proxy-updater ./cmd/proxy-client . -count=1`
+
+### [F-054] Clean network hooks on shutdown
+- **Severity:** High
+- **Category:** B
+- **File(s):** cmd/proxy-client/app.go:1108, internal/api/tun_handlers.go:1240, internal/api/tun_handlers_test.go:100, internal/proxy/manager.go:141, internal/proxy/manager_backend_test.go:67, internal/proxy/manager_regression_test.go:68, cmd/proxy-client/app_test.go:311, internal/api/handlers_test.go:39
+- **Commit:** f0283eb
+- **Symptom:** Closing the app could leave system internet down until the client was launched again.
+- **Root cause:** Shutdown cancelled lifecycle work before cleanup paths finished, while proxy restore and firewall teardown could skip when state looked stale in memory.
+- **Fix:** Stop Proxy Guard and disable the system proxy early during shutdown, suppress proxy restore during shutdown-cancelled apply, and make proxy disable paths clean stale backend/state markers.
+- **Test:** `TestShutdown_DisablesProxyAndStopsGuard`, `TestDoApply_ShutdownCancellationDoesNotRestoreProxy`, `TestDisable_CleansUpWhenStateStillActive`, `TestManager_Disable_CleansUpWhenBackendStillEnabled`
+- **Verified:** `go test ./internal/api ./internal/proxy ./cmd/proxy-client -count=1`

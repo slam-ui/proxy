@@ -404,9 +404,6 @@ function applyLifecycleControls(d) {
   renderHotkeySettings(_appSettingsCache.hotkeys || {});
   renderHotkeyConflicts(_appSettingsCache.hotkey_conflicts || []);
   applyTelemetryControls(_appSettingsCache.telemetry || {});
-  const ks = _appSettingsCache.kill_switch_state || {};
-  const recovery = !!(ks.active && ks.expected_clean_shutdown === false);
-  if ($id('killSwitchRecoveryRow')) $id('killSwitchRecoveryRow').style.display = recovery ? 'flex' : 'none';
 }
 
 function applyUpdateControls(upd) {
@@ -790,23 +787,6 @@ function toggleLifecycleOption(key) {
   if (key === 'traffic_budget') $id('trafficBudgetToggle')?.classList.toggle('on');
   if (key === 'close_to_tray') $id('closeToTrayToggle')?.classList.toggle('on');
   saveLifecycleSettings();
-}
-
-async function unlockKillSwitch() {
-  if (!confirm('Вы выходите в незащищённую сеть. Снять блокировку Kill switch?')) return;
-  try {
-    const r = await fetch(API + '/settings/killswitch', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({enabled:false})
-    });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
-    showToast('Kill switch снят', 'warn');
-    loadSettingsPage();
-  } catch(e) {
-    showToast('Kill switch: ' + e.message, 'off');
-  }
 }
 
 function renderSingboxConfigStatus(d) {

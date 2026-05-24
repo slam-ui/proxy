@@ -155,9 +155,6 @@
 | | manager.go | Включение / отключение прокси |
 | | windows_proxy.go | Low-level операции с реестром |
 | | proxy_guard_test.go | Guard recovery (каждые 5s) |
-| **killswitch/** | ⚠ Блокировка трафика при сбое |
-| | killswitch_windows.go | Windows Firewall rule |
-| | killswitch_other.go | Stub для non-Windows |
 | **notification/** | 🔔 Toast уведомления |
 | | notification_windows.go | Windows-специфика |
 | | notification_other.go | Stub для других ОС |

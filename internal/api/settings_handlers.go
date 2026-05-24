@@ -13,8 +13,6 @@ import (
 	"proxyclient/internal/config"
 	"proxyclient/internal/hotkeys"
 	"proxyclient/internal/i18n"
-	"proxyclient/internal/killswitch"
-	"proxyclient/internal/logger"
 	"proxyclient/internal/notification"
 	"proxyclient/internal/tray"
 )
@@ -63,7 +61,6 @@ func SetupSettingsRoutes(s *Server) {
 	s.router.HandleFunc("/api/settings", h.handleSetSettings).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/autorun", h.handleSetAutorun).Methods("POST", "OPTIONS")
 	s.router.HandleFunc("/api/settings/startup-proxy", h.handleSetStartupProxy).Methods("POST", "OPTIONS")
-	s.router.HandleFunc("/api/settings/killswitch", h.handleSetKillSwitch).Methods("POST", "OPTIONS")
 	// B-2: Proxy Guard endpoints
 	s.router.HandleFunc("/api/settings/proxy-guard", h.handleGetProxyGuard).Methods("GET", "OPTIONS")
 	s.router.HandleFunc("/api/settings/proxy-guard", h.handleSetProxyGuard).Methods("POST", "OPTIONS")
@@ -213,8 +210,6 @@ type settingsResponseWithHotkeyConflicts struct {
 // SettingsResponse — состояние всех настроек приложения.
 type SettingsResponse struct {
 	Autorun              bool                             `json:"autorun"`               // включён ли автозапуск при входе в Windows
-	KillSwitch           bool                             `json:"kill_switch"`           // активен ли Kill Switch прямо сейчас
-	KillSwitchState      killswitch.State                 `json:"kill_switch_state"`     // persisted fail-close state
 	ProxyGuard           bool                             `json:"proxy_guard"`           // B-2: активна ли Proxy Guard для восстановления
 	StartProxyOnLaunch   bool                             `json:"start_proxy_on_launch"` // включать прокси сразу после запуска клиента
 	CloseToTray          bool                             `json:"close_to_tray"`         // закрытие окна сворачивает в трей вместо выхода
@@ -246,8 +241,6 @@ func (h *SettingsHandlers) handleGetSettings(w http.ResponseWriter, _ *http.Requ
 	}
 	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
 		Autorun:              autorun.IsEnabled(),
-		KillSwitch:           killswitch.IsEnabled(),
-		KillSwitchState:      loadKillSwitchStateForResponse(h.server.logger),
 		ProxyGuard:           h.server.IsProxyGuardEnabled(),
 		StartProxyOnLaunch:   appSettings.StartProxyOnLaunch,
 		CloseToTray:          appSettings.CloseToTray,
@@ -305,14 +298,6 @@ func normalizeHotkeySettings(settings config.HotkeySettings) (config.HotkeySetti
 		})
 	}
 	return out, nil
-}
-
-func loadKillSwitchStateForResponse(log logger.Logger) killswitch.State {
-	st, err := killswitch.LoadState()
-	if err != nil && log != nil {
-		log.Warn("handleGetSettings: killswitch state: %v", err)
-	}
-	return st
 }
 
 // handleGetProxyGuard GET /api/settings/proxy-guard — получить статус Proxy Guard
@@ -399,30 +384,6 @@ func (h *SettingsHandlers) handleSetStartupProxy(w http.ResponseWriter, r *http.
 	h.server.respondJSON(w, http.StatusOK, map[string]interface{}{
 		"enabled": body.Enabled,
 		"message": "настройка запуска прокси обновлена",
-	})
-}
-
-// handleSetKillSwitch POST /api/settings/killswitch
-// Body: {"enabled": true|false}
-// Примечание: настройка сохраняется в памяти и читается при старте приложения.
-// При enabled=false — только снимает текущую блокировку.
-// Постоянное включение KS хранится в AppConfig (устанавливается через main.go флаг).
-func (h *SettingsHandlers) handleSetKillSwitch(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Enabled bool `json:"enabled"`
-	}
-	if !h.decodeRequest(w, r, &body, maxSettingsSmallRequestBytes, "invalid body", false) {
-		return
-	}
-	if body.Enabled {
-		// Активируем немедленно с пустым allowIP — пользователь сам управляет
-		killswitch.Enable("", h.server.logger)
-	} else {
-		killswitch.Disable(h.server.logger)
-	}
-	h.server.respondJSON(w, http.StatusOK, SettingsResponse{
-		Autorun:    autorun.IsEnabled(),
-		KillSwitch: killswitch.IsEnabled(),
 	})
 }
 

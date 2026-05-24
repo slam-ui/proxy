@@ -31,6 +31,7 @@ import (
 
 	"proxyclient/internal/config"
 	"proxyclient/internal/fileutil"
+	"proxyclient/internal/winexec"
 )
 
 // retryBaseDelay базовая задержка первой повторной попытки (1s → 2s → 4s).
@@ -696,7 +697,9 @@ var verifySingBoxBinaryFn = verifySingBoxBinary
 func verifySingBoxBinary(ctx context.Context, execPath string) error {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(timeoutCtx, execPath, "version").CombinedOutput()
+	cmd := exec.CommandContext(timeoutCtx, execPath, "version")
+	winexec.HideWindow(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("'%s version' завершился с ошибкой: %w (вывод: %s)", execPath, err, strings.TrimSpace(string(out)))
 	}

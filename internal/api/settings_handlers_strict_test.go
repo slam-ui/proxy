@@ -289,30 +289,6 @@ func TestHandleSetStartupProxyRejectsOversizedBody(t *testing.T) {
 	}
 }
 
-// --- handleSetKillSwitch ---
-
-func TestHandleSetKillSwitchRejectsUnknownFields(t *testing.T) {
-	h := newSettingsHandlers(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/settings/killswitch",
-		strings.NewReader(`{"enabled":true,"unexpected":true}`))
-	w := httptest.NewRecorder()
-	h.handleSetKillSwitch(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
-	}
-}
-
-func TestHandleSetKillSwitchRejectsOversizedBody(t *testing.T) {
-	h := newSettingsHandlers(t)
-	body := `{"enabled":true,"` + strings.Repeat("a", int(maxSettingsSmallRequestBytes)) + `":true}`
-	req := httptest.NewRequest(http.MethodPost, "/api/settings/killswitch", strings.NewReader(body))
-	w := httptest.NewRecorder()
-	h.handleSetKillSwitch(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400", w.Code, w.Body.String())
-	}
-}
-
 // --- handleSetDNS ---
 
 func TestHandleSetDNSRejectsUnknownFields(t *testing.T) {
@@ -373,7 +349,6 @@ func TestSettingsHandlersRejectTrailingData(t *testing.T) {
 		{"proxy_guard", "/api/settings/proxy-guard", `{"enabled":true}{}`, h.handleSetProxyGuard},
 		{"autorun", "/api/settings/autorun", `{"enabled":true}{}`, h.handleSetAutorun},
 		{"startup_proxy", "/api/settings/startup-proxy", `{"enabled":true}{}`, h.handleSetStartupProxy},
-		{"killswitch", "/api/settings/killswitch", `{"enabled":false}{}`, h.handleSetKillSwitch},
 		{"dns", "/api/settings/dns", `{"remote_dns":"https://1.1.1.1/dns-query"}{}`, h.handleSetDNS},
 		{"geosite_update", "/api/settings/geosite-update", `{"enabled":true,"interval_days":7}{}`, h.handleSetGeositeUpdate},
 	}

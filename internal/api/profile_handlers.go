@@ -32,14 +32,6 @@ type ServerSelector struct {
 	SubID    string `json:"sub_id,omitempty"`
 }
 
-type KillSwitchMode string
-
-const (
-	KillSwitchOff       KillSwitchMode = "off"
-	KillSwitchConnected KillSwitchMode = "connected"
-	KillSwitchAlways    KillSwitchMode = "always"
-)
-
 // Profile сохранённый набор правил маршрутизации с именем
 type Profile struct {
 	ID             string               `json:"id"`
@@ -52,7 +44,6 @@ type Profile struct {
 	RoutingRules   []config.RoutingRule `json:"routing_rules,omitempty"`
 	Routing        config.RoutingConfig `json:"routing"`
 	DNSConfig      *config.DNSConfig    `json:"dns_config,omitempty"`
-	KillSwitch     KillSwitchMode       `json:"kill_switch,omitempty"`
 	SplitTunnel    []string             `json:"split_tunnel,omitempty"`
 	AutoConnect    bool                 `json:"auto_connect"`
 	Hotkey         string               `json:"hotkey,omitempty"`
@@ -124,7 +115,6 @@ func ensureDefaultProfiles() error {
 			ServerSelector: ServerSelector{Mode: "auto"},
 			Routing:        *config.DefaultRoutingConfig(),
 			RoutingRules:   []config.RoutingRule{},
-			KillSwitch:     KillSwitchConnected,
 			AutoConnect:    true,
 			CreatedAt:      now,
 			UpdatedAt:      now,
@@ -141,7 +131,6 @@ func ensureDefaultProfiles() error {
 				{Value: "firefox.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
 				{Value: "msedge.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
 			}, BlockQUIC: true},
-			KillSwitch:  KillSwitchConnected,
 			AutoConnect: true,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -160,7 +149,6 @@ func ensureDefaultProfiles() error {
 				{Value: "firefox.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
 				{Value: "msedge.exe", Type: config.RuleTypeProcess, Action: config.ActionProxy},
 			}, BlockQUIC: true},
-			KillSwitch:  KillSwitchConnected,
 			AutoConnect: true,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -177,7 +165,6 @@ func ensureDefaultProfiles() error {
 				{Value: "outlook.exe", Type: config.RuleTypeProcess, Action: config.ActionDirect},
 				{Value: "zoom.exe", Type: config.RuleTypeProcess, Action: config.ActionDirect},
 			}, BlockQUIC: true},
-			KillSwitch:  KillSwitchConnected,
 			AutoConnect: true,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -200,8 +187,11 @@ func (h *ProfileHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxProfileSaveRequestBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	var p Profile
-	if err := dec.Decode(&p); err != nil {
+	type profileImportPayload struct {
+		Profile
+	}
+	var req profileImportPayload
+	if err := dec.Decode(&req); err != nil {
 		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
@@ -213,6 +203,7 @@ func (h *ProfileHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
+	p := req.Profile
 	normalizeProfile(&p)
 	if !reValidName.MatchString(p.Name) {
 		h.server.respondError(w, http.StatusBadRequest, "invalid profile name")
@@ -220,10 +211,6 @@ func (h *ProfileHandlers) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateServerSelector(p.ServerSelector); err != nil {
 		h.server.respondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if !validKillSwitchMode(p.KillSwitch) {
-		h.server.respondError(w, http.StatusBadRequest, "kill_switch: off | connected | always")
 		return
 	}
 	if p.Routing.DefaultAction == "" {
@@ -380,7 +367,6 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		RoutingRules   []config.RoutingRule `json:"routing_rules"`
 		Routing        config.RoutingConfig `json:"routing"`
 		DNSConfig      *config.DNSConfig    `json:"dns_config"`
-		KillSwitch     KillSwitchMode       `json:"kill_switch"`
 		SplitTunnel    []string             `json:"split_tunnel"`
 		AutoConnect    bool                 `json:"auto_connect"`
 		Hotkey         string               `json:"hotkey"`
@@ -431,13 +417,6 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		h.server.respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.KillSwitch == "" {
-		req.KillSwitch = KillSwitchConnected
-	}
-	if !validKillSwitchMode(req.KillSwitch) {
-		h.server.respondError(w, http.StatusBadRequest, "kill_switch: off | connected | always")
-		return
-	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -457,7 +436,6 @@ func (h *ProfileHandlers) handleSave(w http.ResponseWriter, r *http.Request) {
 		RoutingRules:   req.Routing.Rules,
 		Routing:        req.Routing,
 		DNSConfig:      req.Routing.DNS,
-		KillSwitch:     req.KillSwitch,
 		SplitTunnel:    req.SplitTunnel,
 		AutoConnect:    req.AutoConnect,
 		Hotkey:         strings.TrimSpace(req.Hotkey),
@@ -714,9 +692,6 @@ func normalizeProfile(p *Profile) {
 	if p.Routing.DNS != nil && p.DNSConfig == nil {
 		p.DNSConfig = p.Routing.DNS
 	}
-	if p.KillSwitch == "" {
-		p.KillSwitch = KillSwitchConnected
-	}
 }
 
 func profileRoutingRules(p *Profile) []config.RoutingRule {
@@ -740,15 +715,6 @@ func validateServerSelector(sel ServerSelector) error {
 		return errors.New("server_selector.mode: specific | auto | subscription_auto")
 	}
 	return nil
-}
-
-func validKillSwitchMode(mode KillSwitchMode) bool {
-	switch mode {
-	case KillSwitchOff, KillSwitchConnected, KillSwitchAlways:
-		return true
-	default:
-		return false
-	}
 }
 
 func profilePath(filename string) (string, error) {

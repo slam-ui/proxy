@@ -162,7 +162,6 @@ function renderSecurityStatus(d) {
   if (!d) {
     _setSecurityRow('Tunnel', 'wait', 'Статус защиты недоступен', 'нет ответа API');
     _setSecurityRow('DNS', 'wait', 'DNS защита', 'статус будет обновлён позже');
-    _setSecurityRow('Kill', 'wait', 'Kill switch', 'статус будет обновлён позже');
     _setSecurityRow('Backup', 'wait', 'Резервный сервер', 'статус будет обновлён позже');
     return;
   }
@@ -176,11 +175,6 @@ function renderSecurityStatus(d) {
   _setSecurityRow('DNS', dnsOn ? 'ok' : 'warn',
     dnsOn ? 'DNS защита включена' : 'DNS защита выключена',
     dnsOn ? (dnsMode === 'strict' ? 'строгий режим' : 'режим предупреждений') : 'включается в настройках');
-
-  const killOn = !!(d.kill_switch && d.kill_switch.enabled);
-  _setSecurityRow('Kill', killOn ? 'ok' : 'warn',
-    killOn ? 'Kill switch включён' : 'Kill switch выключен',
-    killOn ? 'fail-close защита активна' : 'можно включить в настройках');
 
   const count = d.backup_server && Number.isFinite(Number(d.backup_server.count)) ? Number(d.backup_server.count) : 0;
   const backup = !!(d.backup_server && d.backup_server.available);
@@ -197,11 +191,6 @@ function openSecurityTarget(target) {
       if (section) section.open = true;
       $id('leakCheckBtn')?.focus();
     }, 80);
-    return;
-  }
-  if (target === 'kill') {
-    navTo(4);
-    setTimeout(() => $id('dnsGuardToggle')?.closest('details')?.scrollIntoView({ block: 'center' }), 80);
     return;
   }
   if (target === 'backup') {

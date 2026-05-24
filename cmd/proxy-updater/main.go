@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"proxyclient/internal/winexec"
 )
 
 const (
@@ -84,22 +86,22 @@ func waitForExit(pid int, timeout time.Duration) error {
 
 func processRunning(pid int) (bool, error) {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH")
+		cmd := hiddenCommand("tasklist", "/FI", "PID eq "+strconv.Itoa(pid), "/FO", "CSV", "/NH")
 		out, err := cmd.Output()
 		if err != nil {
 			return false, fmt.Errorf("tasklist pid %d: %w", pid, err)
 		}
 		return strings.Contains(string(out), strconv.Itoa(pid)), nil
 	}
-	err := exec.Command("kill", "-0", strconv.Itoa(pid)).Run()
+	err := hiddenCommand("kill", "-0", strconv.Itoa(pid)).Run()
 	return err == nil, nil
 }
 
 func killProcess(pid int) error {
 	if runtime.GOOS == "windows" {
-		return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+		return hiddenCommand("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 	}
-	return exec.Command("kill", "-TERM", strconv.Itoa(pid)).Run()
+	return hiddenCommand("kill", "-TERM", strconv.Itoa(pid)).Run()
 }
 
 func copyWithRetry(src, dst string) error {
@@ -141,9 +143,15 @@ func copyFile(src, dst string) error {
 }
 
 func startApp(path string, args []string) error {
-	cmd := exec.Command(path, args...)
+	cmd := hiddenCommand(path, args...)
 	cmd.Dir = filepath.Dir(path)
 	return cmd.Start()
+}
+
+func hiddenCommand(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	winexec.HideWindow(cmd)
+	return cmd
 }
 
 func splitArgs(raw string) []string {

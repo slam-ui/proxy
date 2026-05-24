@@ -5,10 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"proxyclient/internal/config"
+	"proxyclient/internal/logger"
+	"proxyclient/internal/proxy"
 	"proxyclient/internal/xray"
 )
 
@@ -94,6 +97,57 @@ func TestDoApply_ProxyRestoredAfterSuccessfulRestart(t *testing.T) {
 	// REGRESSION CHECK БАГ 1: прокси должен быть включён после успешного apply.
 	if !h.proxyManager.IsEnabled() {
 		t.Error("БАГ 1 REGRESSION: прокси остался выключен после успешного полного перезапуска")
+	}
+}
+
+// TestDoApply_ShutdownCancellationDoesNotRestoreProxy checks that shutdown-cancelled
+// apply does not resurrect system proxy after it has already been disabled.
+func TestDoApply_ShutdownCancellationDoesNotRestoreProxy(t *testing.T) {
+	_, h, cleanup := buildTunServer(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	h.server.lifecycleCtx = ctx
+
+	stubPM := h.proxyManager.(*stubProxy)
+	stubPM.enabled = true
+	stubPM.config = proxy.Config{Address: "127.0.0.1:8080", Override: "<local>"}
+
+	var newManagerCalls atomic.Int32
+	h.newManagerFn = func(cfg xray.Config, ctx context.Context) (xray.Manager, error) {
+		newManagerCalls.Add(1)
+		return &stubXray{running: true}, nil
+	}
+	h.xrayConfig.BeforeRestart = func(ctx context.Context, _ logger.Logger) error {
+		return ctx.Err()
+	}
+	h.xrayConfig.ExecutablePath = ""
+	h.xrayConfig.ConfigPath = "config.singbox.json"
+
+	if err := os.WriteFile("config.singbox.json.pending", []byte("{}"), 0644); err != nil {
+		t.Fatalf("WriteFile pending: %v", err)
+	}
+
+	h.apply.mu.Lock()
+	h.apply.running = true
+	h.apply.mu.Unlock()
+
+	snapshot := &config.RoutingConfig{DefaultAction: config.ActionProxy}
+	go h.doApply(snapshot, "config.singbox.json.pending", true)
+
+	if !waitForApply(h, 5*time.Second) {
+		t.Fatal("doApply не завершился за 5 секунд")
+	}
+
+	if got := newManagerCalls.Load(); got != 0 {
+		t.Fatalf("newManagerFn was called %d times, want 0", got)
+	}
+	if h.proxyManager.IsEnabled() {
+		t.Fatal("proxy was restored after shutdown cancellation")
+	}
+	if got := stubPM.enableCalls; got != 0 {
+		t.Fatalf("proxy Enable was called %d times, want 0", got)
 	}
 }
 

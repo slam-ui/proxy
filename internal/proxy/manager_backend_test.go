@@ -67,3 +67,10 @@ func (b *fakeProxyBackend) setDisabledExternally() {
 	b.enabled = false
 	b.mu.Unlock()
 }
+
+func (b *fakeProxyBackend) setEnabledExternally(config Config) {
+	b.mu.Lock()
+	b.enabled = true
+	b.config = config
+	b.mu.Unlock()
+}

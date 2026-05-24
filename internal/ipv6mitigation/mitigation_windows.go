@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"time"
+
+	"proxyclient/internal/winexec"
 )
 
 func Disable(ctx context.Context, statePath, iface string) error {
@@ -43,6 +45,7 @@ func runNetsh(parent context.Context, args ...string) error {
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "netsh", args...)
+	winexec.HideWindow(cmd)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("netsh %v: %w: %s", args, err, out)
 	}

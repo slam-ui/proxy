@@ -13,8 +13,57 @@ import (
 	"testing"
 	"time"
 
+	"proxyclient/internal/api"
 	"proxyclient/internal/logger"
+	"proxyclient/internal/proxy"
 )
+
+type shutdownProxyStub struct {
+	enabled        bool
+	config         proxy.Config
+	stopGuardCalls int
+	disableCalls   int
+}
+
+func (p *shutdownProxyStub) Enable(cfg proxy.Config) error {
+	p.enabled = true
+	p.config = cfg
+	return nil
+}
+
+func (p *shutdownProxyStub) Disable() error {
+	p.enabled = false
+	p.disableCalls++
+	return nil
+}
+
+func (p *shutdownProxyStub) IsEnabled() bool { return p.enabled }
+
+func (p *shutdownProxyStub) GetConfig() proxy.Config { return p.config }
+
+func (p *shutdownProxyStub) StartGuard(ctx context.Context, interval time.Duration) error { return nil }
+
+func (p *shutdownProxyStub) StopGuard() { p.stopGuardCalls++ }
+
+func (p *shutdownProxyStub) PauseGuard(d time.Duration) {}
+
+func (p *shutdownProxyStub) ResumeGuard() {}
+
+type shutdownXrayStub struct {
+	stopCalls int
+}
+
+func (s *shutdownXrayStub) Start() error                          { return nil }
+func (s *shutdownXrayStub) StartAfterManualCleanup() error        { return nil }
+func (s *shutdownXrayStub) Stop() error                           { s.stopCalls++; return nil }
+func (s *shutdownXrayStub) IsRunning() bool                       { return false }
+func (s *shutdownXrayStub) GetPID() int                           { return 0 }
+func (s *shutdownXrayStub) Wait() error                           { return nil }
+func (s *shutdownXrayStub) LastOutput() string                    { return "" }
+func (s *shutdownXrayStub) Uptime() time.Duration                 { return 0 }
+func (s *shutdownXrayStub) GetHealthStatus() (int, float64, bool) { return 0, 0, false }
+func (s *shutdownXrayStub) SetHealthAlertFn(fn func())            {}
+func (s *shutdownXrayStub) MemoryMB() uint64                      { return 0 }
 
 // ── DefaultAppConfig Tests ────────────────────────────────────────────────────────
 
@@ -106,127 +155,6 @@ func TestNewApp_CreatesLifecycleContext(t *testing.T) {
 	}
 }
 
-// ── extractServerIP Tests ─────────────────────────────────────────────────────────
-
-func TestExtractServerIP_FileNotFound_ReturnsEmpty(t *testing.T) {
-	result := extractServerIP("/nonexistent/path/secret.key")
-	if result != "" {
-		t.Errorf("extractServerIP with missing file = %q, want empty string", result)
-	}
-}
-
-func TestExtractServerIP_EmptyFile_ReturnsEmpty(t *testing.T) {
-	f, err := os.CreateTemp(t.TempDir(), "secret*.key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	result := extractServerIP(f.Name())
-	if result != "" {
-		t.Errorf("extractServerIP with empty file = %q, want empty string", result)
-	}
-}
-
-func TestExtractServerIP_OnlyComments_ReturnsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	content := "# comment line\n# another comment\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "" {
-		t.Errorf("extractServerIP with only comments = %q, want empty", result)
-	}
-}
-
-func TestExtractServerIP_ValidVLESSWithIP_ReturnsIP(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	// vless://uuid@1.2.3.4:443?params
-	content := "vless://550e8400-e29b-41d4-a716-446655440000@1.2.3.4:443?security=reality&sni=example.com\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "1.2.3.4" {
-		t.Errorf("extractServerIP = %q, want 1.2.3.4", result)
-	}
-}
-
-func TestExtractServerIP_ValidVLESSWithIPv6_ReturnsIP(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	content := "vless://550e8400-e29b-41d4-a716-446655440000@[2001:db8::1]:443?security=reality\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	// Should return the IPv6 address
-	_ = result // IPv6 parsing may vary
-}
-
-func TestExtractServerIP_InvalidURL_NoAt_ReturnsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	content := "vless://noatsign\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "" {
-		t.Errorf("extractServerIP without @ = %q, want empty", result)
-	}
-}
-
-func TestExtractServerIP_SkipsCommentLines(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	content := "# this is a comment with @ email@example.com\nvless://uuid@5.6.7.8:443?params\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "5.6.7.8" {
-		t.Errorf("extractServerIP should skip comment, got %q, want 5.6.7.8", result)
-	}
-}
-
-func TestExtractServerIP_StripsBOM(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	// BOM + vless URL
-	content := "\xef\xbb\xbfvless://uuid@9.10.11.12:443?params\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "9.10.11.12" {
-		t.Errorf("extractServerIP with BOM = %q, want 9.10.11.12", result)
-	}
-}
-
-func TestExtractServerIP_WhitespaceLines_Skipped(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret.key")
-	content := "\n   \n\nvless://uuid@3.4.5.6:443?params\n"
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	result := extractServerIP(path)
-	if result != "3.4.5.6" {
-		t.Errorf("extractServerIP skipping whitespace lines = %q, want 3.4.5.6", result)
-	}
-}
-
 // ── Shutdown Tests ────────────────────────────────────────────────────────────────
 
 func TestShutdown_ClosesLifecycleCtx(t *testing.T) {
@@ -260,6 +188,41 @@ func TestShutdown_CanBeCalledWithNilMonitor(t *testing.T) {
 	defer cancel()
 
 	app.Shutdown(ctx, nil)
+}
+
+func TestShutdown_DisablesProxyAndStopsGuard(t *testing.T) {
+	cfg := DefaultAppConfig()
+	app := NewApp(cfg, &bytes.Buffer{})
+
+	proxyStub := &shutdownProxyStub{
+		enabled: true,
+		config:  proxy.Config{Address: "127.0.0.1:8080", Override: "<local>"},
+	}
+	xrayStub := &shutdownXrayStub{}
+	app.proxyManager = proxyStub
+	app.apiServer = api.NewServer(api.Config{
+		XRayManager:  xrayStub,
+		ProxyManager: proxyStub,
+		Logger:       &logger.NoOpLogger{},
+	}, app.lifecycleCtx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	app.Shutdown(ctx, nil)
+
+	if proxyStub.stopGuardCalls == 0 {
+		t.Fatal("StopGuard was not called during Shutdown")
+	}
+	if proxyStub.disableCalls == 0 {
+		t.Fatal("Disable was not called during Shutdown")
+	}
+	if proxyStub.enabled {
+		t.Fatal("proxy remained enabled after Shutdown")
+	}
+	if xrayStub.stopCalls == 0 {
+		t.Fatal("XRay Stop was not called during Shutdown")
+	}
 }
 
 // ── buildXRayCfg Tests ────────────────────────────────────────────────────────────
@@ -328,23 +291,6 @@ func TestBuildXRayCfg_ArgsContainRun(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("buildXRayCfg Args should contain 'run', got %v", xrayCfg.Args)
-	}
-}
-
-// ── AppConfig Tests ───────────────────────────────────────────────────────────────
-
-func TestAppConfig_KillSwitchDefaultFalse(t *testing.T) {
-	cfg := DefaultAppConfig()
-	if cfg.KillSwitch {
-		t.Error("KillSwitch should default to false")
-	}
-}
-
-func TestAppConfig_CanSetKillSwitch(t *testing.T) {
-	cfg := DefaultAppConfig()
-	cfg.KillSwitch = true
-	if !cfg.KillSwitch {
-		t.Error("KillSwitch should be settable to true")
 	}
 }
 
@@ -440,57 +386,6 @@ func TestNewApp_MultipleConcurrentCreations_NoRace(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("concurrent NewApp creation timed out")
 		}
-	}
-}
-
-// ── Table-driven Tests ────────────────────────────────────────────────────────────
-
-func TestExtractServerIP_Table(t *testing.T) {
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name:    "empty file",
-			content: "",
-			want:    "",
-		},
-		{
-			name:    "only comments",
-			content: "# comment\n# another\n",
-			want:    "",
-		},
-		{
-			name:    "valid IP",
-			content: "vless://uuid@192.168.1.1:443?params\n",
-			want:    "192.168.1.1",
-		},
-		{
-			name:    "comment then valid",
-			content: "# ignore\nvless://uuid@10.0.0.1:443?params\n",
-			want:    "10.0.0.1",
-		},
-		{
-			name:    "no at sign",
-			content: "vless://nohostnamehere\n",
-			want:    "",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "secret.key")
-			if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
-				t.Fatal(err)
-			}
-
-			result := extractServerIP(path)
-			if result != tc.want {
-				t.Errorf("extractServerIP = %q, want %q", result, tc.want)
-			}
-		})
 	}
 }
 
@@ -593,19 +488,3 @@ func TestPreflightCheck_RespectsContext(t *testing.T) {
 	}
 }
 
-// ── Fuzz Tests ────────────────────────────────────────────────────────────────────
-
-func FuzzExtractServerIP(f *testing.F) {
-	f.Add("")
-	f.Add("vless://uuid@1.2.3.4:443?params")
-	f.Add("# comment\nvless://uuid@1.2.3.4:443")
-	f.Add("vless://nohostnamehere")
-	f.Add("\xef\xbb\xbfvless://uuid@5.5.5.5:443")
-
-	f.Fuzz(func(t *testing.T, content string) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, "secret.key")
-		_ = os.WriteFile(path, []byte(content), 0o600)
-		_ = extractServerIP(path)
-	})
-}

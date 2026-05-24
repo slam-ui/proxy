@@ -7,7 +7,7 @@ routing rules, DNS settings, and UI preferences.
 
 | Profile | Example settings |
 | --- | --- |
-| Work | Stable server, strict routing, kill switch enabled. |
+| Work | Stable server, strict routing, no extra safety toggles. |
 | Media | Server with better throughput, streaming geosite rules. |
 | Gaming | Low-latency server, conservative keepalive, fewer background probes. |
 | Travel | Leak protection enabled, diagnostics visible, manual connect. |

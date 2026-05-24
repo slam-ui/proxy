@@ -42,7 +42,6 @@ Endpoints:
 - `/api/servers/{id}/refresh`
 - `/api/settings/dns`
 - `/api/settings/geosite-update`
-- `/api/settings/killswitch`
 - `/api/settings/proxy-guard`
 - `/api/temporary-rules`
 - `/api/temporary-rules/{value:.+}`

@@ -12,7 +12,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"proxyclient/internal/anomalylog"
@@ -37,7 +35,6 @@ import (
 	"proxyclient/internal/engine"
 	"proxyclient/internal/eventlog"
 	"proxyclient/internal/keepalive"
-	"proxyclient/internal/killswitch"
 	"proxyclient/internal/latency"
 	"proxyclient/internal/logger"
 	"proxyclient/internal/netwatch"
@@ -48,13 +45,13 @@ import (
 	"proxyclient/internal/trafficstats"
 	"proxyclient/internal/tray"
 	"proxyclient/internal/window"
+	"proxyclient/internal/winexec"
 	"proxyclient/internal/wintun"
 	"proxyclient/internal/xray"
 )
 
 // AppConfig содержит все настраиваемые параметры приложения.
 type AppConfig struct {
-	KillSwitch           bool // блокировать трафик при падении туннеля
 	ProxyGuardEnabled    bool // B-2: включить Proxy Guard для восстановления системного прокси
 	StartProxyOnLaunch   bool // включать прокси сразу после запуска клиента
 	ReconnectIntervalMin int
@@ -81,7 +78,6 @@ type AppConfig struct {
 // DefaultAppConfig возвращает production конфигурацию.
 func DefaultAppConfig() AppConfig {
 	return AppConfig{
-		KillSwitch:                false,
 		ProxyGuardEnabled:         true, // B-2: default включить
 		StartProxyOnLaunch:        true,
 		KeepaliveEnabled:          true,
@@ -127,10 +123,6 @@ type App struct {
 	// lifecycleCtx отменяется при Shutdown — прерывает PollUntilFree во всех горутинах.
 	lifecycleCtx     context.Context
 	lifecycleCancel  context.CancelFunc
-	cachedServerIPMu sync.Mutex
-	cachedServerIP   string
-	cachedForFile    string
-	cachedSecretHash [32]byte
 	engineCrashMu    sync.Mutex
 	engineCrashCount int
 	engineCrashAt    time.Time
@@ -308,7 +300,7 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 		// Шаг 1: убиваем ВСЕ процессы sing-box чтобы освободить lock на dns_cache.db.
 		// taskkill /F /IM — по имени образа, убивает все экземпляры включая orphaned.
 		killCmd := exec.CommandContext(a.lifecycleCtx, "taskkill", "/F", "/IM", "sing-box.exe")
-		killCmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000, HideWindow: true}
+		winexec.HideWindow(killCmd)
 		if killOut, killErr := killCmd.CombinedOutput(); killErr != nil {
 			// Ошибка ожидаема если нет запущенных sing-box (уже все умерли)
 			a.mainLogger.Info("taskkill sing-box: %v (%s)", killErr, strings.TrimSpace(string(killOut)))
@@ -376,14 +368,6 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 	if isTunConflict {
 		wintun.RecordStop()
 		tray.SetWarming(true)
-		// Kill Switch: блокируем трафик на время перезапуска TUN.
-		// defer гарантирует снятие правил при любом return из функции:
-		// успех, все попытки провалены, менеджер заменён, контекст отменён.
-		if a.cfg.KillSwitch {
-			serverIP := a.extractServerIP(a.cfg.SecretFile)
-			killswitch.Enable(serverIP, a.mainLogger)
-			defer killswitch.Disable(a.mainLogger)
-		}
 
 		// Retry loop: пытаемся поднять TUN несколько раз с увеличивающимся gap.
 		// Каждая попытка: IncreaseGap → RemoveAdapter → PollUntilFree → Start.
@@ -445,7 +429,6 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 
 			// Успех: sing-box запущен — ждём подтверждения что TUN поднялся
 			a.apiServer.ClearRestarting()
-			// killswitch.Disable вызывается через defer выше — не дублируем
 			wintun.ResetAdaptiveGap()
 			a.mainLogger.Info("sing-box успешно перезапущен (PID: %d, попытка %d/%d)",
 				currentMgr.GetPID(), attempt, maxTunAttempts)
@@ -461,21 +444,12 @@ func (a *App) handleCrash(crashErr error, crashedManager xray.Manager) {
 
 	a.mainLogger.Error("sing-box упал неожиданно (%v) — отключаем системный прокси", crashErr)
 	notification.Send("SafeSky — ошибка", "sing-box упал. Проверьте лог и перезапустите.")
-	// BUG FIX #NEW-4: убран блок killswitch.Enable для non-TUN краша.
-	// При не-TUN краше перезапуска sing-box не будет — прокси отключается навсегда
-	// до ручного рестарта. Включать Kill Switch (блокировать весь трафик) и сразу же
-	// отключать его бессмысленно: 4 лишних netsh вызова (~400-1200мс задержки в crash handler)
-	// + кратковременное (~50мс) реальное блокирование трафика пользователя.
-	// Kill Switch нужен только во время активного retry-цикла TUN (см. isTunConflict блок выше).
 	if disableErr := a.proxyManager.Disable(); disableErr != nil {
 		a.mainLogger.Error("Не удалось отключить прокси: %v", disableErr)
 	} else {
 		tray.SetEnabled(false)
 		a.mainLogger.Warn("Системный прокси отключён из-за краша sing-box.")
 	}
-	// Снимаем Kill Switch на случай если он остался активным от предыдущей TUN-попытки.
-	// При обычном падении (не конфликт TUN) интернет блокировать не нужно.
-	killswitch.Disable(a.mainLogger)
 }
 
 func addDefenderExclusion(path string, log logger.Logger) {
@@ -485,7 +459,7 @@ func addDefenderExclusion(path string, log logger.Logger) {
 	}
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "Add-MpPreference -ExclusionPath $env:SAFESKY_DEFENDER_EXCLUSION")
 	cmd.Env = append(os.Environ(), "SAFESKY_DEFENDER_EXCLUSION="+absPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	winexec.HideWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		if log != nil {
 			log.Debug("не удалось добавить исключение Windows Defender: %v", err)
@@ -525,7 +499,6 @@ func (a *App) finalizeStartup() {
 	}
 
 	tray.SetWarming(false)
-	killswitch.Disable(a.mainLogger)
 	wintun.ResetAdaptiveGap()
 	powerStatus, powerErr := power.Current()
 	if powerErr == nil && powerStatus.Known && powerStatus.OnBattery {
@@ -1109,6 +1082,13 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	}
 
 	if a.apiServer != nil {
+		a.apiServer.StopProxyGuard()
+	}
+	if err := a.proxyManager.Disable(); err != nil {
+		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
+	}
+
+	if a.apiServer != nil {
 		if err := a.apiServer.Shutdown(shutdownCtx); err != nil {
 			a.mainLogger.Error("Ошибка при остановке API сервера: %v", err)
 		}
@@ -1139,10 +1119,6 @@ func (a *App) Shutdown(shutdownCtx context.Context, processMonitor process.Monit
 	wintun.ResetAdaptiveGap()
 	a.mainLogger.Info("Очистка TUN адаптера при выходе...")
 	wintun.Shutdown(a.mainLogger)
-
-	if err := a.proxyManager.Disable(); err != nil {
-		a.mainLogger.Error("Ошибка при отключении прокси: %v", err)
-	}
 	if err := trafficstats.SaveToFile(); err != nil {
 		a.mainLogger.Warn("Не удалось сохранить счётчик трафика: %v", err)
 	}
@@ -1183,87 +1159,6 @@ func (a *App) waitForSecretKey() {
 			}
 		}
 	}
-}
-
-func (a *App) extractServerIP(secretFile string) string {
-	a.cachedServerIPMu.Lock()
-	defer a.cachedServerIPMu.Unlock()
-
-	content, _ := config.ReadSecretKey(secretFile)
-	currentHash := sha256.Sum256([]byte(content))
-	norm := func(p string) string {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			return strings.ToLower(r)
-		}
-		return strings.ToLower(p)
-	}
-	if a.cachedServerIP != "" && norm(a.cachedForFile) == norm(secretFile) && a.cachedSecretHash == currentHash {
-		return a.cachedServerIP
-	}
-
-	ip := resolveServerIP(a.lifecycleCtx, secretFile)
-	a.cachedServerIP = ip
-	a.cachedForFile = secretFile
-	a.cachedSecretHash = currentHash
-	return ip
-}
-
-// resolveServerIP читает IP прокси-сервера из secret.key для Kill Switch allowlist.
-// При ошибке возвращает пустую строку — Kill Switch всё равно активируется, но только loopback.
-// DNS lookup выполняется синхронно только при наличии IP — для hostname используется
-// горутина с таймаутом 3с чтобы не блокировать crash handler на десятки секунд.
-func extractServerIP(secretFile string) string {
-	return resolveServerIP(context.Background(), secretFile)
-}
-
-func resolveServerIP(ctx context.Context, secretFile string) string {
-	content, err := config.ReadSecretKey(secretFile)
-	if err != nil {
-		return ""
-	}
-	// BUG FIX #4: фильтруем комментарии и пустые строки, берём первую валидную.
-	// Раньше весь файл обрабатывался как один URL — если в комментарии был '@'
-	// (например email), парсинг давал мусорный результат.
-	vlessURL := ""
-	raw := strings.TrimPrefix(strings.TrimSpace(content), "\xef\xbb\xbf")
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			vlessURL = line
-			break
-		}
-	}
-	if vlessURL == "" {
-		return ""
-	}
-	// vless://uuid@host:port?params — извлекаем host
-	at := strings.Index(vlessURL, "@")
-	if at < 0 {
-		return ""
-	}
-	hostPort := vlessURL[at+1:]
-	if q := strings.IndexAny(hostPort, "?#/"); q >= 0 {
-		hostPort = hostPort[:q]
-	}
-	host, _, err := net.SplitHostPort(hostPort)
-	if err != nil {
-		return hostPort // возможно уже без порта
-	}
-	// Если уже IP — возвращаем сразу без DNS
-	if net.ParseIP(host) != nil {
-		return host
-	}
-	// Hostname: резолвим с таймаутом 3с чтобы не блокировать crash handler.
-	// BUG FIX #7: раньше горутина с net.LookupHost не прерывалась при Shutdown —
-	// могла висеть до 30с после завершения приложения.
-	// net.DefaultResolver.LookupHost с контекстом завершается сам по таймауту/отмене.
-	resolveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	addrs, err := net.DefaultResolver.LookupHost(resolveCtx, host)
-	if err != nil || len(addrs) == 0 {
-		return ""
-	}
-	return addrs[0]
 }
 
 func setClashMode(ctx context.Context, log logger.Logger, mode string) {

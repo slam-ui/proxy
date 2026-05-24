@@ -68,6 +68,33 @@ func TestManager_Disable_ConfigRetentionPolicy(t *testing.T) {
 	t.Logf("после Disable GetConfig.Address=%q (retain=%v)", after.Address, after.Address != "")
 }
 
+func TestManager_Disable_CleansUpWhenBackendStillEnabled(t *testing.T) {
+	mgr, backend := newFakeManager(false, Config{})
+	cfg := Config{Address: "127.0.0.1:8080", Override: "<local>"}
+
+	if err := mgr.Enable(cfg); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if err := mgr.Disable(); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+
+	backend.setEnabledExternally(cfg)
+
+	if err := mgr.Disable(); err != nil {
+		t.Fatalf("Disable after external resurrection: %v", err)
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if backend.enabled {
+		t.Fatal("backend should be disabled after cleanup")
+	}
+	if backend.disableCall < 2 {
+		t.Fatalf("disableCall=%d, want at least 2", backend.disableCall)
+	}
+}
+
 // ── BUG-РИСК #3: Enable с новым конфигом при уже включённом прокси ─────────
 //
 // Enable проверяет `m.enabled && m.config == config` — пропускает только если
