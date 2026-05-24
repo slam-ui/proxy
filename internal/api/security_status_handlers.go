@@ -21,10 +21,6 @@ type securityDNSStatus struct {
 	Mode    string `json:"mode"`
 }
 
-type securityToggleStatus struct {
-	Enabled bool `json:"enabled"`
-}
-
 type securityBackupStatus struct {
 	Available bool `json:"available"`
 	Count     int  `json:"count"`
