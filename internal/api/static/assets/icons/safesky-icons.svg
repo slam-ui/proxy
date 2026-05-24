@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="brand" viewBox="0 0 64 64">
+    <rect x="6" y="6" width="52" height="52" rx="14" fill="#fff" stroke="#0a61e8" stroke-width="3"/>
+    <path d="M17 21h21l6-6h8M17 21l-7 7v7h27l-6 7H10" fill="none" stroke="#0a61e8" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter"/>
+    <path d="M48 28H30l-6 7h18l6-7Z" fill="#0a61e8"/>
+    <path d="M18 49h21l7-7h8" fill="none" stroke="#0a61e8" stroke-width="6" stroke-linecap="butt" stroke-linejoin="miter"/>
+  </symbol>
+  <symbol id="safe" viewBox="0 0 64 64">
+    <circle cx="31" cy="31" r="24" fill="#39d9ee" stroke="#443f8e" stroke-width="4"/>
+    <path d="M20 31l7 7 16-18" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M51 14l3-3M56 21l4-1M10 47l-4 4" fill="none" stroke="#13c7d7" stroke-width="5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="warn" viewBox="0 0 64 64">
+    <path d="M32 8l25 44H7z" fill="#ffd166" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M32 24v13M32 46h.1" fill="none" stroke="#443f8e" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="wait" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="24" fill="#bcecff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M32 17v16l10 8" fill="none" stroke="#443f8e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M15 32a17 17 0 0 1 17-17" fill="none" stroke="#28d9e6" stroke-width="5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="bad" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="24" fill="#ff8aaa" stroke="#443f8e" stroke-width="4"/>
+    <path d="M23 23l18 18M41 23L23 41" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="server" viewBox="0 0 64 64">
+    <rect x="10" y="10" width="18" height="42" rx="5" fill="#5fd9ef" stroke="#443f8e" stroke-width="4"/>
+    <rect x="36" y="10" width="18" height="42" rx="5" fill="#5fd9ef" stroke="#443f8e" stroke-width="4"/>
+    <rect x="16" y="17" width="7" height="6" rx="2" fill="#ff4fd8"/>
+    <rect x="42" y="17" width="7" height="6" rx="2" fill="#ff4fd8"/>
+    <rect x="16" y="30" width="7" height="6" rx="2" fill="#443f8e"/>
+    <rect x="42" y="30" width="7" height="6" rx="2" fill="#443f8e"/>
+    <rect x="16" y="43" width="7" height="6" rx="2" fill="#ff4fd8"/>
+    <rect x="42" y="43" width="7" height="6" rx="2" fill="#ff4fd8"/>
+  </symbol>
+  <symbol id="rules" viewBox="0 0 64 64">
+    <path d="M14 8h30l8 9v32c0 5-4 8-9 8H14z" fill="#61d7ea" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M44 8v12h11" fill="#9fefff" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M23 22h18M23 32h21M23 42h14" stroke="#443f8e" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="15" cy="54" r="7" fill="#00c7d6"/>
+  </symbol>
+  <symbol id="diagnostics" viewBox="0 0 64 64">
+    <rect x="6" y="13" width="52" height="38" rx="3" fill="#8cefff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M12 44h40M14 40l4-18 6 24 5-18 5 12 4-20 7 24 5-14" fill="none" stroke="#168dd7" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M12 22h8" stroke="#ff4fd8" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="fallback-image" viewBox="0 0 64 64">
+    <path d="M13 9c13 5 25 5 38 0l4 7-3 36c-12 5-28 5-40 0L9 16z" fill="#b8e6ff" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M18 40l10-9 8 7 7-5 8 8v8H18z" fill="#75c8ef"/>
+    <circle cx="24" cy="26" r="4" fill="#443f8e"/>
+    <circle cx="42" cy="26" r="4" fill="#443f8e"/>
+    <path d="M27 45c4 3 8 3 12 0" fill="none" stroke="#443f8e" stroke-width="3" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="home" viewBox="0 0 64 64">
+    <path d="M9 30L32 12l23 18v23a4 4 0 0 1-4 4H13a4 4 0 0 1-4-4z" fill="#8cefff" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M24 57V39h16v18" fill="#dffaff" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M18 30l14-11 14 11" fill="none" stroke="#13c7d7" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="power" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="22" fill="#62d8ef" stroke="#443f8e" stroke-width="4"/>
+    <path d="M32 12v20M21 22a18 18 0 1 0 22 0" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="process" viewBox="0 0 64 64">
+    <rect x="13" y="15" width="38" height="30" rx="5" fill="#94ecff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M22 54h20M32 45v9" stroke="#443f8e" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="25" cy="30" r="4" fill="#ff4fd8"/>
+    <circle cx="39" cy="30" r="4" fill="#14c7d6"/>
+  </symbol>
+  <symbol id="logs" viewBox="0 0 64 64">
+    <path d="M18 8h23l9 9v39H18z" fill="#b5f3ff" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M41 8v12h11" fill="#77dfee" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M25 29h18M25 39h18M25 49h11" stroke="#443f8e" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="settings" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="8" fill="#fff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M32 8l5 6 8-1 3 8 7 4-3 8 3 8-7 4-3 8-8-1-5 6-5-6-8 1-3-8-7-4 3-8-3-8 7-4 3-8 8 1z" fill="#70dff0" stroke="#443f8e" stroke-width="4" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="search" viewBox="0 0 64 64">
+    <circle cx="27" cy="27" r="15" fill="#9fefff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M39 39l14 14" stroke="#443f8e" stroke-width="6" stroke-linecap="round"/>
+    <path d="M20 27h14" stroke="#ff4fd8" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="refresh" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="23" fill="#85eaff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M43 23a15 15 0 1 0 1 17M43 23h-9M43 23v-9" fill="none" stroke="#443f8e" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="close" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="23" fill="#ff8aaa" stroke="#443f8e" stroke-width="4"/>
+    <path d="M23 23l18 18M41 23L23 41" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="globe" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="23" fill="#94ecff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M10 32h44M32 9c7 7 10 14 10 23s-3 16-10 23M32 9c-7 7-10 14-10 23s3 16 10 23" fill="none" stroke="#443f8e" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="link" viewBox="0 0 64 64">
+    <path d="M26 38l12-12" stroke="#443f8e" stroke-width="5" stroke-linecap="round"/>
+    <path d="M28 20l4-4a13 13 0 0 1 18 18l-4 4M36 44l-4 4a13 13 0 0 1-18-18l4-4" fill="none" stroke="#443f8e" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="25" fill="none" stroke="#22d0df" stroke-width="4"/>
+  </symbol>
+  <symbol id="ip" viewBox="0 0 64 64">
+    <rect x="9" y="14" width="46" height="36" rx="8" fill="#93edff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M19 28h6M19 38h6M32 28h6M32 38h6M45 28h.1M45 38h.1" stroke="#443f8e" stroke-width="5" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="geosite" viewBox="0 0 64 64">
+    <circle cx="32" cy="32" r="23" fill="#94ecff" stroke="#443f8e" stroke-width="4"/>
+    <path d="M20 18c3 5 7 7 12 7s9-2 12-7M17 44c4-4 9-6 15-6s11 2 15 6" fill="none" stroke="#ff4fd8" stroke-width="4" stroke-linecap="round"/>
+    <path d="M32 10c6 8 9 15 9 22s-3 14-9 22M32 10c-6 8-9 15-9 22s3 14 9 22" fill="none" stroke="#443f8e" stroke-width="4" stroke-linecap="round"/>
+  </symbol>
+</svg>

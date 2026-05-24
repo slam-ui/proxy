@@ -16,6 +16,111 @@ body{
 html[data-theme="light"] body{
   background:#f1f5f9!important;
 }
+.ssk-icon{
+  width:24px;
+  height:24px;
+  display:block;
+  flex:0 0 auto;
+  overflow:visible;
+}
+.app-mark{
+  width:100%;
+  height:100%;
+  filter:drop-shadow(0 2px 5px rgba(20,31,92,0.24));
+}
+.brand-mark{
+  padding:3px;
+}
+.hbtn .ssk-icon{
+  width:25px!important;
+  height:25px!important;
+  stroke:none!important;
+  fill:initial!important;
+}
+.quick-icon .ssk-icon{
+  width:34px;
+  height:34px;
+  stroke:none;
+}
+.quick-action.quick-primary .quick-icon .ssk-icon{
+  width:36px;
+  height:36px;
+}
+.power-logo-svg.ssk-icon{
+  width:34px;
+  height:34px;
+}
+.ni-ico.ssk-icon{
+  width:27px;
+  height:27px;
+  stroke:none!important;
+  fill:initial!important;
+  filter:drop-shadow(0 2px 5px rgba(9,16,46,0.22));
+}
+.ni.active .ni-ico.ssk-icon{
+  filter:drop-shadow(0 2px 7px rgba(45,232,229,0.25));
+}
+.rule-nm{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.rule-inline-icon{
+  width:18px;
+  height:18px;
+}
+.flag-icon{
+  width:100%;
+  height:100%;
+}
+.proc-fallback,
+.ci-fallback{
+  width:22px;
+  height:22px;
+}
+.proc-icon-stack,
+.ci-icon-stack{
+  position:relative;
+  width:24px;
+  height:24px;
+  display:grid;
+  place-items:center;
+}
+.proc-icon-stack>*,
+.ci-icon-stack>*{
+  grid-area:1/1;
+}
+.proc-real-icon{
+  width:20px;
+  height:20px;
+  border-radius:5px;
+  object-fit:contain;
+  z-index:1;
+}
+.ci-proc-icon{
+  width:16px;
+  height:16px;
+  border-radius:4px;
+  object-fit:contain;
+  vertical-align:middle;
+  z-index:1;
+}
+.security-icon{
+  width:18px;
+  height:18px;
+}
+.security-mark.warn .security-icon{
+  width:15px;
+  height:15px;
+}
+.toast-icon{
+  width:20px;
+  height:20px;
+}
+.badge-icon{
+  width:16px;
+  height:16px;
+}
 .app{
   border-radius:var(--window-radius);
   clip-path:none;
@@ -1579,6 +1684,9 @@ html[data-theme="light"] .log-snapshot-item{
 }
 
 .toast{
+  display:flex;
+  align-items:center;
+  gap:8px;
   max-width:min(440px,calc(100vw - 36px));
   white-space:normal;
   text-align:left;
@@ -2256,10 +2364,11 @@ html[data-theme="light"] .proc-title-note{
   align-items:center;
   justify-content:center;
   flex:0 0 auto;
-  border-radius:8px;
+  border-radius:999px;
   font-size:12px;
   font-weight:900;
   background:rgba(255,255,255,0.075);
+  overflow:hidden;
 }
 .security-mark.ok{color:var(--on);background:rgba(45,232,154,0.12)}
 .security-mark.warn{color:var(--warn);background:rgba(255,190,80,0.12)}
@@ -2318,6 +2427,10 @@ html[data-theme="light"] .proc-title-note{
 .ni-ico{
   width:18px!important;
   height:18px!important;
+}
+.ni-ico.ssk-icon{
+  width:24px!important;
+  height:24px!important;
 }
 .ni-lbl{
   max-width:100%;

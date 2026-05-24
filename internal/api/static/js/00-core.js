@@ -6,6 +6,7 @@ const POLL_STATUS = 3000;   // ms
 const POLL_STATS  = 1000;   // ms  — реальная скорость
 const POLL_CONNS  = 3000;   // ms
 const FETCH_TIMEOUT_MS = 10000;
+const ICON_SPRITE = 'assets/icons/safesky-icons.svg';
 
 const _nativeFetch = window.fetch.bind(window);
 window.fetch = (resource, options = {}) => {
@@ -36,7 +37,7 @@ let state = {
 let toastTimer = null;
 const toastQueue = [];
 let toastShowing = false;
-const TOAST_ICONS = { on: '✓ ', off: '✗ ', warn: '⚠ ', info: 'ℹ ' };
+const TOAST_ICON_NAMES = { on: 'safe', off: 'bad', warn: 'warn', info: 'diagnostics' };
 
 // ═══════════════════════════════════════════════════
 // DOM refs
@@ -56,6 +57,26 @@ const qaTimerBar   = $id('qaTimerBar');
 
 function isSupportedServerURI(url) {
   return /^\s*(vless|trojan|ss|hysteria2|hy2|tuic|wireguard|vmess):\/\//i.test(url || '');
+}
+
+function iconId(name) {
+  return String(name || 'fallback-image').replace(/[^a-z0-9-]/gi, '') || 'fallback-image';
+}
+
+function iconSvg(name, className) {
+  const cls = String(className || 'ssk-icon').replace(/[^a-z0-9_ -]/gi, '').trim() || 'ssk-icon';
+  return `<svg class="${cls}" aria-hidden="true" focusable="false"><use href="${ICON_SPRITE}#${iconId(name)}"></use></svg>`;
+}
+
+function iconElement(name, className) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', String(className || 'ssk-icon'));
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `${ICON_SPRITE}#${iconId(name)}`);
+  svg.appendChild(use);
+  return svg;
 }
 
 // ═══════════════════════════════════════════════════
@@ -351,8 +372,10 @@ function _nextToast() {
   toastShowing = true;
   const { msg, type } = toastQueue.shift();
   clearTimeout(toastTimer);
-  const icon = TOAST_ICONS[type] || '';
-  toast.textContent = icon + msg;
+  toast.replaceChildren();
+  const iconName = TOAST_ICON_NAMES[type];
+  if (iconName) toast.appendChild(iconElement(iconName, 'toast-icon ssk-icon'));
+  toast.appendChild(document.createTextNode(msg));
   toast.className = 'toast ' + type + ' show';
   toastTimer = setTimeout(() => {
     toast.className = 'toast';

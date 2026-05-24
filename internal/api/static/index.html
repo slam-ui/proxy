@@ -21,11 +21,7 @@
     <div class="setup-card">
       <div class="setup-logo">
         <div class="logo-gem app-logo" style="width:36px;height:36px">
-          <svg viewBox="0 0 256 256" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <path d="M49 124C66 84 99 61 128 61s62 23 79 63" fill="none" stroke="#fff" stroke-width="34" stroke-linecap="butt"/>
-            <path d="M82 146c12-27 29-42 46-42s34 15 46 42" fill="none" stroke="#fff" stroke-width="26" stroke-linecap="butt"/>
-            <circle cx="128" cy="178" r="18" fill="#fff"/>
-          </svg>
+          <svg class="ssk-icon app-mark brand-mark" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#brand"></use></svg>
         </div>
         <div class="setup-brand">
           <span class="logo-name">SafeSky</span>
@@ -86,24 +82,20 @@
   <div class="header layer" onmousedown="if(!event.target.closest('.header-r,.wctrl'))if(window.windowDrag)windowDrag()" style="cursor:move">
     <div class="logo">
       <div class="logo-gem app-logo" style="width:32px;height:32px">
-        <svg viewBox="0 0 256 256" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-          <path d="M49 124C66 84 99 61 128 61s62 23 79 63" fill="none" stroke="#fff" stroke-width="34" stroke-linecap="butt"/>
-          <path d="M82 146c12-27 29-42 46-42s34 15 46 42" fill="none" stroke="#fff" stroke-width="26" stroke-linecap="butt"/>
-          <circle cx="128" cy="178" r="18" fill="#fff"/>
-        </svg>
+        <svg class="ssk-icon app-mark brand-mark" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#brand"></use></svg>
       </div>
       <span class="logo-name">SafeSky</span>
       <span class="logo-ver">2.4.1</span>
     </div>
     <div class="header-r">
       <div class="warm-dot" id="warmDot"></div>
-      <div class="offline-badge" id="offlineBadge">⚠ offline</div>
+      <div class="offline-badge" id="offlineBadge"><svg class="ssk-icon badge-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#warn"></use></svg> offline</div>
       <button class="hbtn" id="srvBtn" onclick="toggleSrv()" title="Выбор сервера" aria-label="Выбор сервера" data-i18n-title="servers.choose" data-i18n-aria-label="servers.choose">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="5" rx="2"/><rect x="4" y="14" width="16" height="5" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>
+        <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#server"></use></svg>
         <span data-i18n="nav.servers">Серверы</span>
       </button>
       <button class="hbtn" id="diagBtn" onclick="runDiag()" title="Диагностика соединения" aria-label="Диагностика соединения" data-i18n-title="diagnostics.connection" data-i18n-aria-label="diagnostics.connection">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 5 14 3-7h3"/><path d="M4 19h16"/></svg>
+        <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#diagnostics"></use></svg>
         <span data-i18n="nav.diagnostics">Диагностика</span>
       </button>
       <!-- Window controls — заменяют нативный titlebar (WS_CAPTION удалён в window.go) -->
@@ -137,10 +129,8 @@
       <div class="hero-status-row">
         <button class="orb-stage off" id="orbStage" type="button" onclick="toggle()" aria-label="Включить или отключить туннель">
           <div class="orb">
-            <svg class="power-logo-svg" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <path d="M49 124C66 84 99 61 128 61s62 23 79 63" fill="none" stroke="#fff" stroke-width="34" stroke-linecap="butt"/>
-              <path d="M82 146c12-27 29-42 46-42s34 15 46 42" fill="none" stroke="#fff" stroke-width="26" stroke-linecap="butt"/>
-              <circle cx="128" cy="178" r="18" fill="#fff"/>
+            <svg class="power-logo-svg ssk-icon app-mark" aria-hidden="true" focusable="false">
+              <use href="assets/icons/safesky-icons.svg#safe"></use>
             </svg>
           </div>
         </button>
@@ -148,7 +138,7 @@
       </div>
       <button class="quick-action quick-primary hero-toggle-action" type="button" onclick="toggle()">
         <span class="quick-icon">
-          <svg viewBox="0 0 24 24"><path d="M12 2v10"/><path d="M18.4 6.6a8 8 0 1 1-12.8 0"/></svg>
+          <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#power"></use></svg>
         </span>
         <span class="quick-copy">
           <span id="qaToggleLabel">Подключить туннель</span>
@@ -184,7 +174,7 @@
     </button>
     <button class="quick-action" onclick="toggleSrv()">
       <span class="quick-icon">
-        <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M8 9h8"/><path d="M8 13h5"/></svg>
+        <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#server"></use></svg>
       </span>
       <span class="quick-copy">
         <span>Серверы</span>
@@ -193,7 +183,7 @@
     </button>
     <button class="quick-action" onclick="navTo(1)">
       <span class="quick-icon">
-        <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z"/><path d="M9 12h6"/></svg>
+        <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#rules"></use></svg>
       </span>
       <span class="quick-copy">
         <span>Правила</span>
@@ -202,7 +192,7 @@
     </button>
     <button class="quick-action" onclick="runDiag()">
       <span class="quick-icon">
-        <svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.2"/><path d="m14 14 5 5"/><path d="M6.8 10h2l1.1-2.4 1.8 4.8 1-2.4h1.7"/></svg>
+        <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#diagnostics"></use></svg>
       </span>
       <span class="quick-copy">
         <span>Диагностика</span>
@@ -243,19 +233,19 @@
     </div>
     <div class="security-list">
       <button class="security-row" onclick="navTo(0)" id="secTunnelRow">
-        <span class="security-mark wait" id="secTunnelMark">⏳</span>
+        <span class="security-mark wait" id="secTunnelMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secTunnelTitle">Проверяем туннель</b><small id="secTunnelSub">—</small></span>
       </button>
       <button class="security-row" onclick="openSecurityTarget('dns')" id="secDNSRow">
-        <span class="security-mark wait" id="secDNSMark">⏳</span>
+        <span class="security-mark wait" id="secDNSMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secDNSTitle">Проверяем DNS защиту</b><small id="secDNSSub">—</small></span>
       </button>
       <button class="security-row" onclick="openSecurityTarget('kill')" id="secKillRow">
-        <span class="security-mark wait" id="secKillMark">⏳</span>
+        <span class="security-mark wait" id="secKillMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secKillTitle">Проверяем kill switch</b><small id="secKillSub">—</small></span>
       </button>
       <button class="security-row" onclick="openSecurityTarget('backup')" id="secBackupRow">
-        <span class="security-mark wait" id="secBackupMark">⏳</span>
+        <span class="security-mark wait" id="secBackupMark"><svg class="security-icon ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#wait"></use></svg></span>
         <span class="security-copy"><b id="secBackupTitle">Проверяем резервный сервер</b><small id="secBackupSub">—</small></span>
       </button>
     </div>
@@ -541,7 +531,7 @@
           <div class="log-commandbar">
             <div class="log-search-shell">
               <span class="log-search-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                <svg class="ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#search"></use></svg>
               </span>
               <input class="pg-inp log-filter" id="logFilter" placeholder="поиск по тексту, домену, IP или процессу" oninput="filterLogs()">
               <button class="log-filter-clear" onclick="clearLogFilter()" title="Очистить фильтр" aria-label="Очистить фильтр">×</button>
@@ -1036,23 +1026,23 @@
   <div class="nav-wrap layer">
   <div class="nav">
     <div class="ni active" id="ni0" onclick="navTo(0)">
-      <svg class="ni-ico" viewBox="0 0 24 24"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><polyline points="9,21 9,12 15,12 15,21"/></svg>
+      <svg class="ni-ico ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#home"></use></svg>
       <span class="ni-lbl">Главная</span>
     </div>
     <div class="ni" id="ni1" onclick="navTo(1)">
-      <svg class="ni-ico" viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      <svg class="ni-ico ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#rules"></use></svg>
       <span class="ni-lbl">Правила <span id="rulesCnt" style="display:none;font-size:8px;opacity:0.6"></span></span>
     </div>
     <div class="ni" id="ni2" onclick="navTo(2)">
-      <svg class="ni-ico" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      <svg class="ni-ico ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#process"></use></svg>
       <span class="ni-lbl">Процессы</span>
     </div>
     <div class="ni" id="ni3" onclick="navTo(3)">
-      <svg class="ni-ico" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10,9 9,9 8,9"/></svg>
+      <svg class="ni-ico ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#logs"></use></svg>
       <span class="ni-lbl">Логи</span>
     </div>
     <div class="ni" id="ni4" onclick="navTo(4)">
-      <svg class="ni-ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .55V20a2 2 0 1 1-4 0v-.06a1.7 1.7 0 0 0-1-.55 1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.55-1H4a2 2 0 1 1 0-4h.06a1.7 1.7 0 0 0 .55-1 1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 1 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6c.35-.08.7-.27 1-.55V4a2 2 0 1 1 4 0v.06c.3.28.65.47 1 .55a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9c.08.35.27.7.55 1H20a2 2 0 1 1 0 4h-.06c-.28.3-.47.65-.55 1Z"/></svg>
+      <svg class="ni-ico ssk-icon" aria-hidden="true" focusable="false"><use href="assets/icons/safesky-icons.svg#settings"></use></svg>
       <span class="ni-lbl">Настройки</span>
     </div>
   </div>

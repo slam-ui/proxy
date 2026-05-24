@@ -353,6 +353,71 @@ func TestHomeTimerDocksApplyAndConnectOnVisibleHomeAction(t *testing.T) {
 	}
 }
 
+func TestStaticUIUsesSafeSkyIconSprite(t *testing.T) {
+	html := readStaticText(t, "static/index.html")
+	css := readStaticText(t, "static/css/80-ui-polish.css")
+	js := readStaticBundle(t,
+		"js/00-core.js",
+		"js/30-rules.js",
+		"js/35-processes.js",
+		"js/70-runtime-polling.js",
+		"js/80-chart-utils-init.js",
+	)
+	sprite := readStaticText(t, "static/assets/icons/safesky-icons.svg")
+
+	for _, required := range []string{
+		`id="brand"`,
+		`id="safe"`,
+		`id="server"`,
+		`id="rules"`,
+		`id="diagnostics"`,
+		`id="fallback-image"`,
+	} {
+		if !strings.Contains(sprite, required) {
+			t.Fatalf("icon sprite missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`assets/icons/safesky-icons.svg#brand`,
+		`assets/icons/safesky-icons.svg#safe`,
+		`assets/icons/safesky-icons.svg#server`,
+		`assets/icons/safesky-icons.svg#rules`,
+		`assets/icons/safesky-icons.svg#diagnostics`,
+		`assets/icons/safesky-icons.svg#settings`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("static icon markup missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`function iconSvg(name, className)`,
+		`markEl.replaceChildren(iconElement(iconName, 'security-icon ssk-icon'))`,
+		`iconSvg('process', 'rule-inline-icon ssk-icon')`,
+		`iconSvg(icon, 'proc-fallback ssk-icon')`,
+		`iconSvg('globe', 'flag-icon ssk-icon')`,
+	} {
+		if !strings.Contains(js, required) {
+			t.Fatalf("dynamic icon rendering missing %q", required)
+		}
+	}
+	for _, required := range []string{
+		`.ssk-icon`,
+		`.brand-mark`,
+		`.rule-inline-icon`,
+		`.proc-icon-stack`,
+		`.security-icon`,
+		`.security-mark.warn .security-icon`,
+		`.toast-icon`,
+	} {
+		if !strings.Contains(css, required) {
+			t.Fatalf("icon styling missing %q", required)
+		}
+	}
+	if strings.Contains(js, `this.outerHTML='${fallbackIco}'`) {
+		t.Fatal("process icon fallback must not use inline emoji replacement")
+	}
+}
+
 func TestStaticCoreFetchesLoopbackWithTimeout(t *testing.T) {
 	js := readStaticText(t, "static/js/00-core.js")
 	for _, required := range []string{

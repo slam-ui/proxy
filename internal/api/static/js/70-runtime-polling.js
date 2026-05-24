@@ -143,7 +143,7 @@ async function pollSecurityStatus(force = false) {
   }
 }
 
-function _setSecurityRow(key, level, mark, title, sub) {
+function _setSecurityRow(key, level, title, sub) {
   const row = $id('sec' + key + 'Row');
   const markEl = $id('sec' + key + 'Mark');
   const titleEl = $id('sec' + key + 'Title');
@@ -151,7 +151,8 @@ function _setSecurityRow(key, level, mark, title, sub) {
   if (row) row.className = 'security-row ' + level;
   if (markEl) {
     markEl.className = 'security-mark ' + level;
-    markEl.textContent = mark;
+    const iconName = level === 'ok' ? 'safe' : level === 'bad' ? 'bad' : level === 'warn' ? 'warn' : 'wait';
+    markEl.replaceChildren(iconElement(iconName, 'security-icon ssk-icon'));
   }
   if (titleEl) titleEl.textContent = title;
   if (subEl) subEl.textContent = sub || '';
@@ -159,31 +160,31 @@ function _setSecurityRow(key, level, mark, title, sub) {
 
 function renderSecurityStatus(d) {
   if (!d) {
-    _setSecurityRow('Tunnel', 'wait', '⏳', 'Статус защиты недоступен', 'нет ответа API');
-    _setSecurityRow('DNS', 'wait', '⏳', 'DNS защита', 'статус будет обновлён позже');
-    _setSecurityRow('Kill', 'wait', '⏳', 'Kill switch', 'статус будет обновлён позже');
-    _setSecurityRow('Backup', 'wait', '⏳', 'Резервный сервер', 'статус будет обновлён позже');
+    _setSecurityRow('Tunnel', 'wait', 'Статус защиты недоступен', 'нет ответа API');
+    _setSecurityRow('DNS', 'wait', 'DNS защита', 'статус будет обновлён позже');
+    _setSecurityRow('Kill', 'wait', 'Kill switch', 'статус будет обновлён позже');
+    _setSecurityRow('Backup', 'wait', 'Резервный сервер', 'статус будет обновлён позже');
     return;
   }
   const tunnelOn = !!(d.tunnel && d.tunnel.active);
-  _setSecurityRow('Tunnel', tunnelOn ? 'ok' : 'bad', tunnelOn ? '✓' : '✕',
+  _setSecurityRow('Tunnel', tunnelOn ? 'ok' : 'bad',
     tunnelOn ? 'Туннель активен' : 'Туннель отключён',
     tunnelOn ? 'маршрут защищён' : 'нажмите Подключить');
 
   const dnsOn = !!(d.dns_guard && d.dns_guard.enabled);
   const dnsMode = (d.dns_guard && d.dns_guard.mode) || 'warn';
-  _setSecurityRow('DNS', dnsOn ? 'ok' : 'warn', dnsOn ? '✓' : '⚠',
+  _setSecurityRow('DNS', dnsOn ? 'ok' : 'warn',
     dnsOn ? 'DNS защита включена' : 'DNS защита выключена',
     dnsOn ? (dnsMode === 'strict' ? 'строгий режим' : 'режим предупреждений') : 'включается в настройках');
 
   const killOn = !!(d.kill_switch && d.kill_switch.enabled);
-  _setSecurityRow('Kill', killOn ? 'ok' : 'warn', killOn ? '✓' : '⚠',
+  _setSecurityRow('Kill', killOn ? 'ok' : 'warn',
     killOn ? 'Kill switch включён' : 'Kill switch выключен',
     killOn ? 'fail-close защита активна' : 'можно включить в настройках');
 
   const count = d.backup_server && Number.isFinite(Number(d.backup_server.count)) ? Number(d.backup_server.count) : 0;
   const backup = !!(d.backup_server && d.backup_server.available);
-  _setSecurityRow('Backup', backup ? 'ok' : 'warn', backup ? '✓' : '⚠',
+  _setSecurityRow('Backup', backup ? 'ok' : 'warn',
     backup ? 'Резервный сервер есть' : 'Нет резервного сервера',
     count ? `${count} сервер(а) в списке` : 'добавьте второй сервер');
 }
@@ -537,13 +538,10 @@ function renderConnections(conns) {
     const hostShort = host.length > 28 ? host.slice(0, 27) + '…' : host;
     const type  = outboundType(ob);
     const isSys = isSystemProc(proc);
-    // Иконка: реальная из .exe если есть путь, иначе emoji-фолбэк
-    const fallIco = proc.match(/chrome|chromium/i) ? '🌐' : proc.match(/firefox/i) ? '🦊' :
-                    proc.match(/telegram/i) ? '✈️' : proc.match(/discord/i) ? '💬' :
-                    isSys ? '⚙️' : '📦';
+    const fallIco = iconSvg(isSys ? 'settings' : 'fallback-image', 'ci-fallback ssk-icon');
     const exePath = (fullPath && fullPath.endsWith('.exe')) ? fullPath : '';
     const ico = exePath
-      ? `<img src="${API}/procicon?path=${encodeURIComponent(exePath)}" width="16" height="16" style="border-radius:3px;object-fit:contain;vertical-align:middle" alt="${esc(proc)}" onerror="this.outerHTML='${fallIco}'">`
+      ? `<span class="ci-icon-stack">${fallIco}<img class="ci-proc-icon" src="${API}/procicon?path=${encodeURIComponent(exePath)}" alt="${esc(proc)}" onerror="this.remove()"></span>`
       : fallIco;
 
     let speedStr = '';
